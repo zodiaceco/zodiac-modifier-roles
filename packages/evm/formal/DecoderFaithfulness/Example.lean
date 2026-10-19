@@ -1,4 +1,4 @@
-import AbiLayerA.Main
+import DecoderFaithfulness.Main
 
 /-!
 # Examples: the theorems apply to real condition trees
@@ -13,8 +13,8 @@ They show that the hypotheses are satisfiable, and what the conclusions say
 on concrete bytes.
 -/
 
-namespace AbiLayerA.Example
-open AbiLayerA Roles
+namespace DecoderFaithfulness.Example
+open DecoderFaithfulness Roles
 
 def node (e : Encoding) (o : Operator) (cs : List Condition) (lb : Nat := 0)
     (cv : Bytes := []) : Condition :=
@@ -65,7 +65,7 @@ theorem visits_memo :
 /-- The theorem applies: for `memo`, `__input` yields exactly the spec
     encoding of the described component, the window case, the ether value,
     or nothing (strict mode rules the last one out). -/
-example := layerA_input root selector args [] root_desc root_ok
+example := decoder_input root selector args [] root_desc root_ok
   (by decide +kernel) visits_memo rfl
 
 /-- On these bytes it is the first case: the full spec encoding of `memo`
@@ -146,7 +146,7 @@ theorem visits_slice_leaf : Visit data2 (annotate root2) 0 [1] leafSliced 67 := 
 
 /-- The theorem applies to the slice's child (`s = true`: `interpB` need
     not hold). -/
-example := layerA_input root2 selector args2 [] root2_desc root2_ok
+example := decoder_input root2 selector args2 [] root2_desc root2_ok
   (by decide +kernel) visits_slice_leaf rfl
 
 /-- On these bytes it is the window case: the compared value is `0x34`, the
@@ -155,4 +155,4 @@ example : input data2 67 leafSliced = .word (wordVal [0x34]) ∧
     IsWindow [0x34] (content xVal) := by
   refine ⟨by decide +kernel, 31, by decide, by decide +kernel⟩
 
-end AbiLayerA.Example
+end DecoderFaithfulness.Example

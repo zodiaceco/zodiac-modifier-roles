@@ -1,6 +1,6 @@
 /**
  * Differential test: the Lean transcription of the Roles decoder
- * (packages/evm/formal/AbiLayerA/Roles.lean) against the Solidity code.
+ * (packages/evm/formal/DecoderFaithfulness/Roles.lean) against the Solidity code.
  *
  * For random ABI signatures, condition trees and calldata (well-formed, and
  * corrupted in half of the cases), every `AbiLocation.children` and

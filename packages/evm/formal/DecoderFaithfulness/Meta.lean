@@ -1,4 +1,4 @@
-import AbiLayerA.Basic
+import DecoderFaithfulness.Basic
 
 /-!
 # Metadata: `Topology` + pack/unpack agree with the ABI spec
@@ -8,7 +8,7 @@ For a tree that describes value `u`, the evaluator's `inlined` flag is
 values).
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 open Roles
 
 /-! ## Equation lemmas for the transcription -/
@@ -254,4 +254,4 @@ theorem Win.annotate_meta {c : Condition} (h : Win c) :
     (annotate c).inlined = true ∧ (annotate c).size = 32 := by
   rw [annotate_inlined, annotate_size, (Win.meta h).1, (Win.meta h).2]; simp
 
-end AbiLayerA
+end DecoderFaithfulness

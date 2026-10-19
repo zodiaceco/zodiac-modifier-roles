@@ -1,8 +1,8 @@
-name = "abi_layer_a"
-defaultTargets = ["AbiLayerA"]
+name = "roles_formal"
+defaultTargets = ["DecoderFaithfulness"]
 
 [[lean_lib]]
-name = "AbiLayerA"
+name = "DecoderFaithfulness"
 
 # Differential-testing driver: runs the Lean transcription on queries from stdin.
 [[lean_exe]]

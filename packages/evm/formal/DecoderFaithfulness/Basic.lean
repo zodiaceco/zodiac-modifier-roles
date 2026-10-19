@@ -1,8 +1,8 @@
-import AbiLayerA.Desc
+import DecoderFaithfulness.Desc
 
 /-! # Basic lemmas: words, placement, spec encoding -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 open Roles
 
 /-! ## Rounding: `(x + 31) & ~uint256(31)` -/
@@ -156,4 +156,4 @@ theorem IsWindow.trans {a b c : Bytes} (hab : IsWindow a b) (hbc : IsWindow b c)
       congr 1
       omega
 
-end AbiLayerA
+end DecoderFaithfulness
