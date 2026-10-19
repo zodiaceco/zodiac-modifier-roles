@@ -1,7 +1,7 @@
-import AbiLayerA.Decode
+import DecoderFaithfulness.Decode
 
 /-!
-# Layer A: on correctly encoded calldata, Roles reads exactly the spec bytes
+# Decoder faithfulness: on correctly encoded calldata, Roles reads exactly the spec bytes
 
 Setting: a condition tree `root` that describes a call (`Desc s root (.call
 pre args)`, `RootOK root`), and calldata that is the spec encoding of it:
@@ -11,23 +11,23 @@ pre args)`, `RootOK root`), and calldata that is the spec encoding of it:
 Main results, for every node `d` the evaluator visits at location `l`
 (`Reached`):
 
-* `layerA_locations`: `d` sits exactly where the spec puts the encoding of
+* `decoder_locations`: `d` sits exactly where the spec puts the encoding of
   the component it describes, reached by the same index path; or `d` is
   below a `Slice` and sits exactly at a window of that component's content;
   or `d` is non-structural; or (only if `s = true`) `d` is inside a
   bytes-like interpretation that need not hold, which itself sits exactly at
   the right `bytes` value.
-* `layerA_input`: every comparison operand `__input` produces is exactly the
+* `decoder_input`: every comparison operand `__input` produces is exactly the
   spec encoding of that component (one word as is, otherwise the bytes that
   are keccak-hashed), or the selected window (right-aligned) below a
   `Slice`.
-* `layerA_custom_operand`: `Custom` conditions get exactly the spec region.
-* `layerA_children`, `layerA_slice`: no false rejections. Containers decode
+* `decoder_custom_operand`: `Custom` conditions get exactly the spec region.
+* `decoder_children`, `decoder_slice`: no false rejections. Containers decode
   without overflow, one location per component; `Slice` rejects exactly
   when the window exceeds the value's content.
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 open Roles
 
 theorem Val.sub_nil (u : Val) : u.sub [] = some u := by cases u <;> rfl
@@ -549,7 +549,7 @@ theorem root_placed : Placed (calldata pre args suffix) 0 (.call pre args) := by
     path), at a window of that component's content (below `Slice`),
     non-structural, or inside a bytes-like interpretation that need not hold
     (only with `s = true`). -/
-theorem layerA_locations {s : Bool}
+theorem decoder_locations {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
@@ -570,7 +570,7 @@ theorem InStray.strict {data : Bytes} {u : Val} {p : List Nat} {d : Condition} {
     component's content, right-aligned; or the ether value
     (`EtherValue` nodes); or the node is inside an interpretation that need
     not hold (only with `s = true`). -/
-theorem layerA_input {s : Bool}
+theorem decoder_input {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
@@ -583,7 +583,7 @@ theorem layerA_input {s : Bool}
     input (calldata pre args suffix) l d = .etherValue ∨
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
   have hlen' := hlen
-  rcases layerA_locations root pre args suffix hD hR hlen hv with
+  rcases decoder_locations root pre args suffix hD hR hlen hv with
     ⟨d0, u, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
     ⟨d0, bs, u, rfl, hw, hat, h1, h32, hsub, hiw⟩ | hst
   · left
@@ -605,7 +605,7 @@ theorem layerA_input {s : Bool}
 /-- **Custom conditions.** `Custom` receives `(location, size)`: exactly the
     position and length of the spec encoding of the described component, or
     of the window below a `Slice`. -/
-theorem layerA_custom_operand {s : Bool}
+theorem decoder_custom_operand {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
@@ -619,7 +619,7 @@ theorem layerA_custom_operand {s : Bool}
       (if d.size ≠ 0 then d.size else Roles.size (calldata pre args suffix) l d) = bs.length) ∨
     (∃ d0, d = annotate d0 ∧ NonStruct d0) ∨
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
-  rcases layerA_locations root pre args suffix hD hR hlen hv with
+  rcases decoder_locations root pre args suffix hD hR hlen hv with
     ⟨d0, u, rfl, hsub, hD0, hp, hr⟩ | hns |
     ⟨d0, bs, u, rfl, hw, hat, h1, h32, hsub, hiw⟩ | hst
   · left
@@ -680,7 +680,7 @@ theorem Desc.children_ok {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool
 
 /-- **No false rejections: containers.** Every visited container decodes its
     children without overflow, one location per component. -/
-theorem layerA_children {s : Bool}
+theorem decoder_children {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
@@ -691,7 +691,7 @@ theorem layerA_children {s : Bool}
         ((if l > 0 ∧ d.encoding = .AbiEncoded then l + 32 else l) + d.leadingBytes) d =
           some locs ∧ locs.length = u.components.length) ∨
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
-  rcases layerA_locations root pre args suffix hD hR hlen hv with
+  rcases decoder_locations root pre args suffix hD hR hlen hv with
     ⟨d0, u, rfl, hsub, hD0, hp, _⟩ | ⟨d0, rfl, hns⟩ | ⟨d0, bs, u, rfl, hw, _⟩ | hst
   · left
     refine ⟨u, hsub, hD0.children_ok hlen hp ?_⟩
@@ -755,7 +755,7 @@ theorem Desc.slice_length {data : Bytes} {s : Bool} {d0 : Condition} {l : Nat}
     the bytes the spec window is taken from: the component's content, or
     (for a nested `Slice`) the enclosing window. So a slice is rejected
     exactly when the spec window does not exist. -/
-theorem layerA_slice {s : Bool}
+theorem decoder_slice {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
@@ -767,7 +767,7 @@ theorem layerA_slice {s : Bool}
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       At (calldata pre args suffix) l bs ∧ d.inlined = true ∧ d.size = bs.length) ∨
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
-  rcases layerA_locations root pre args suffix hD hR hlen hv with
+  rcases decoder_locations root pre args suffix hD hR hlen hv with
     ⟨d0, u, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
     ⟨d0, bs, u, rfl, hw, hat, _, _, hsub, hiw⟩ | hst
   · exact Or.inl ⟨u, hsub, Desc.slice_length hop hD0 hp hr hlen⟩
@@ -781,4 +781,4 @@ theorem layerA_slice {s : Bool}
 
 end Top
 
-end AbiLayerA
+end DecoderFaithfulness

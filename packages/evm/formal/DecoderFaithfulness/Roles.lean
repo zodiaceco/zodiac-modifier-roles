@@ -1,4 +1,4 @@
-import AbiLayerA.Bytes
+import DecoderFaithfulness.Bytes
 
 /-!
 # Zodiac Roles v3 decoder — transcription
@@ -32,7 +32,7 @@ control flow; deviations are listed here and at the definition:
   in order, as used here.
 -/
 
-namespace AbiLayerA.Roles
+namespace DecoderFaithfulness.Roles
 
 /-- `Encoding` in `types/Condition.sol`. -/
 inductive Encoding where
@@ -313,4 +313,4 @@ inductive Visit (data : Calldata) : Condition → Nat → List Nat → Condition
         (loc + (if c.inlined then 0 else 32) + sliceShift c.compValue) p d l →
       Visit data c loc p d l
 
-end AbiLayerA.Roles
+end DecoderFaithfulness.Roles

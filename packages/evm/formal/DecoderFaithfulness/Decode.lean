@@ -1,4 +1,4 @@
-import AbiLayerA.Meta
+import DecoderFaithfulness.Meta
 
 /-!
 # `AbiLocation` against the spec encoding
@@ -8,7 +8,7 @@ smaller than `2^256` bytes" (gas limits keep real calldata below `2^32`).
 It makes every offset and length word the encoder writes fit in a `uint256`.
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 open Roles
 
 theorem Placed.of_At {data : Bytes} {l : Nat} {u : Val} (h : At data l (enc u))
@@ -298,7 +298,7 @@ mutual
     | c, u, l, .logical ch0 he _ hm0 h0 hall, hu, hat => by
       have hge : 32 ≤ (enc u).length := by rw [enc_bytesLike hu, length_encBytes]; omega
       have hb := hat.bound
-      rw [AbiLayerA.size_eq, annotate_encoding, he, annotate_children]
+      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children]
       rw [ite_eq_right (by omega)]
       simp
       apply sizeNone_first data l _ _ ⟨by omega, by omega⟩
@@ -422,7 +422,7 @@ mutual
       have hge := (Desc.tuple he hne hall hop (s := s)).enc_ge
       have hb := hat.bound
       rw [enc_tuple] at hat hb hge ⊢
-      rw [AbiLayerA.size_eq, annotate_encoding, he, annotate_children]
+      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children]
       rw [ite_eq_right (by omega)]
       simp
       obtain ⟨h1, h2, h3⟩ := At_encTuple hat
@@ -446,7 +446,7 @@ mutual
         have := ht.bound
         have : (2 : Nat) ^ 255 < 2 ^ 256 := by decide
         omega
-      rw [AbiLayerA.size_eq, annotate_encoding, he, annotate_children, hch]
+      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children, hch]
       simp only [List.length_append, length_word] at hb
       rw [ite_eq_right (by omega)]
       simp only [List.map_cons]
@@ -460,7 +460,7 @@ mutual
     | c, u, l, .logical ch0 he _ hm0 h0 hall, hat => by
       have hge := h0.enc_ge
       have hb := hat.bound
-      rw [AbiLayerA.size_eq, annotate_encoding, he, annotate_children]
+      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children]
       rw [ite_eq_right (by omega)]
       simp
       apply sizeNone_first data l _ _ ⟨by omega, by omega⟩
@@ -492,4 +492,4 @@ mutual
       exact DescAll.sizes hlen hs k (by simp at hk; omega) (by simp at hkv; omega) l hat
 end
 
-end AbiLayerA
+end DecoderFaithfulness

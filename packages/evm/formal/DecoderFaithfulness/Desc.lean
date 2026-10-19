@@ -1,5 +1,5 @@
-import AbiLayerA.Spec
-import AbiLayerA.Roles
+import DecoderFaithfulness.Spec
+import DecoderFaithfulness.Roles
 
 /-!
 # Linking condition trees to values
@@ -33,7 +33,7 @@ malformed-calldata territory). With `s = false` every interpretation must
 hold, and the theorems give the full guarantee everywhere.
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 open Roles
 
 /-- Operators that make `evaluate` move to another location or are out of
@@ -188,4 +188,4 @@ def Placed (data : Bytes) (l : Nat) : Val → Prop
 def expectInput (bs : Bytes) : Input :=
   if bs.length = 32 then .word (wordVal bs) else .hash bs
 
-end AbiLayerA
+end DecoderFaithfulness

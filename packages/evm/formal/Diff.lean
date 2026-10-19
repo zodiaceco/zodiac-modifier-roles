@@ -1,7 +1,7 @@
-import AbiLayerA.Roles
+import DecoderFaithfulness.Roles
 
 /-!
-Differential-testing driver for the Roles transcription (`AbiLayerA/Roles.lean`).
+Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
 
 Reads one query per line on stdin:
 
@@ -17,7 +17,7 @@ where the children result is `none` (overflow) or comma-separated locations
 (`-` for an empty list). Used by `test/formal/lean-model.spec.ts`.
 -/
 
-open AbiLayerA AbiLayerA.Roles
+open DecoderFaithfulness DecoderFaithfulness.Roles
 
 def hexVal (c : Char) : Nat :=
   if '0' ≤ c ∧ c ≤ '9' then c.toNat - '0'.toNat

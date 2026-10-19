@@ -1,4 +1,4 @@
-import AbiLayerA.Bytes
+import DecoderFaithfulness.Bytes
 
 /-!
 # Solidity ABI encoding — reference specification
@@ -35,7 +35,7 @@ Values are untyped: whether a value fits a function signature is expressed
 on the Roles side, by the condition tree that describes it (`Desc.lean`).
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 
 inductive Val where
   | word (w : Bytes)
@@ -123,4 +123,4 @@ def Val.sub : Val → List Nat → Option Val
     | none => none
   | _, _ :: _ => none
 
-end AbiLayerA
+end DecoderFaithfulness

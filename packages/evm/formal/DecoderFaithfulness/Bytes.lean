@@ -6,7 +6,7 @@ Shared by the ABI specification (`Spec.lean`) and the Roles transcription
 ABI- or Roles-specific.
 -/
 
-namespace AbiLayerA
+namespace DecoderFaithfulness
 
 abbrev Byte := Fin 256
 abbrev Bytes := List Byte
@@ -65,4 +65,4 @@ theorem ceil32_ge (n : Nat) : n ≤ ceil32 n := by
   have := Nat.mod_lt (n + 31) (show 32 > 0 by decide)
   omega
 
-end AbiLayerA
+end DecoderFaithfulness
