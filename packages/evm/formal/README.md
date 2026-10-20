@@ -1,9 +1,9 @@
 # Formal verification of Roles v3
 
-Machine-checked proofs (Lean 4) of properties of the Zodiac Roles Modifier
-v3 contracts. Each property is one Lean library in this Lake package, with its
-own README. This page tracks what is proven, in simplified notation; the
-Lean statements are the authoritative versions.
+Machine-checked proofs (Lean 4) of properties of the Zodiac Roles Modifier v3
+contracts. Each property is one Lean library in this Lake package, with its own
+README. This page tracks what is proven, in simplified notation; the Lean
+statements are the authoritative versions.
 
 ```
 cd packages/evm/formal
@@ -23,19 +23,23 @@ A successful build means every theorem below is proven. There is no `sorry`,
 Not covered yet:
 
 - **Integrity ⇒ `Desc`, `ZipOK`.** That `Integrity.enforce` only accepts
-  condition trees that describe some ABI type, and enforces the Zip type
-  rules. Decoder faithfulness assumes it.
+  condition trees that describe some ABI type, and enforces the Zip type rules.
+  Decoder faithfulness assumes it, and it is false today: trees Integrity
+  accepts but `evaluate` misreads are tracked in
+  [packages/sdk/INTEGRITY_BACKLOG.md](../../sdk/INTEGRITY_BACKLOG.md), found
+  with the fuzzer `test/formal/integrity-gaps.spec.ts`.
 - What comparison operators do with their operand (`__compare`, keccak),
-  `WithinRatio`, `Custom` checkers, allowances. The operands are proven,
-  not what is done with them.
-- A Zip as a positional child of `Matches` (only a Zip under a top-level
-  or other `And`/`Or` is modeled). Integrity accepts such trees, but the
-  decoder treats the Zip as an extra parameter: parameters after it are
-  read at the wrong place, and a Zip over dynamic fields falsely overflows.
-  Reproduced on-chain; see the [details](DecoderFaithfulness/README.md#not-covered).
+  `WithinRatio`, `Custom` checkers, allowances. The operands are proven, not
+  what is done with them.
+- A Zip inside a type node (only a Zip whose ancestors are all `And`/`Or` is
+  modeled). Integrity accepts such trees, but the decoder gives the Zip a
+  parameter slot or inline size: later parameters are read at the wrong place (a
+  policy bypass, reproduced on-chain), and a Zip over dynamic fields falsely
+  overflows. See the [details](DecoderFaithfulness/README.md#not-covered) and
+  the backlog.
 - **Malformed calldata.** Whether Roles and the target contract decode
-  non-canonical encodings the same way. Not planned for now; it depends on
-  each target's decoder.
+  non-canonical encodings the same way. Not planned for now; it depends on each
+  target's decoder.
 - The rest of the contract: authorization flow, memberships, allowances,
   unwrappers.
 
@@ -64,9 +68,9 @@ All theorems share the hypotheses
 ```
 
 where $`\mathsf{RootOK}(c)`$ says the root is `AbiEncoded`, possibly under
-`And`/`Or`, and $`\mathsf{ZipOK}_s(c)`$ is Integrity's Zip type rule: each
-Pluck a Zip references is an array node, and Zip field $`f`$ describes every
-element of the arrays that Pluck describes (trivial without Zips). In short:
+`And`/`Or`, and $`\mathsf{ZipOK}_s(c)`$ is Integrity's Zip type rule: each Pluck
+a Zip references is an array node, and Zip field $`f`$ describes every element
+of the arrays that Pluck describes (trivial without Zips). In short:
 
 ```math
 \mathsf{cd} = \mathit{pre} \mathbin{+\!\!+} \mathsf{enc}(\vec a) \mathbin{+\!\!+} \mathit{sfx}
@@ -78,16 +82,16 @@ element of the arrays that Pluck describes (trivial without Zips). In short:
 \;\wedge\; \text{no false } \texttt{CalldataOverflow}
 ```
 
-Zip fields are evaluated at element $`i`$ of the array a Pluck reached at
-path $`p`$, so their component path is $`p \mathbin{+\!\!+} [i] \mathbin{+\!\!+} q`$
+Zip fields are evaluated at element $`i`$ of the array a Pluck reached at path
+$`p`$, so their component path is $`p \mathbin{+\!\!+} [i] \mathbin{+\!\!+} q`$
 and the same statements apply to them.
 
-The exact statements also cover nodes below `Slice` (windows), nodes that
-never read calldata, and interpretations that don't fit the data. Each
-theorem ends with **or (iv)**: with $`s = \mathsf{true}`$, $`d`$ may lie inside
-an interpretation that does not fit the data. That interpretation's root
-sits exactly at the right `bytes` value, but nothing is promised inside it.
-With $`s = \mathsf{false}`$, (iv) is impossible (`InStray.strict`).
+The exact statements also cover nodes below `Slice` (windows), nodes that never
+read calldata, and interpretations that don't fit the data. Each theorem ends
+with **or (iv)**: with $`s = \mathsf{true}`$, $`d`$ may lie inside an
+interpretation that does not fit the data. That interpretation's root sits
+exactly at the right `bytes` value, but nothing is promised inside it. With
+$`s = \mathsf{false}`$, (iv) is impossible (`InStray.strict`).
 
 ### `decoder_locations`: every visited node sits where the spec puts its component
 
@@ -107,8 +111,8 @@ $`\mathsf{cd}[0, |\mathit{pre}| + |\mathsf{enc}(\vec a)|] = \mathit{pre} \mathbi
 
 ### `decoder_input`: comparison operands are exactly the spec bytes
 
-For every `EqualTo`, `GreaterThan`, `LessThan`, signed
-comparison, `WithinAllowance` or `Pluck` node $`d`$, one of:
+For every `EqualTo`, `GreaterThan`, `LessThan`, signed comparison,
+`WithinAllowance` or `Pluck` node $`d`$, one of:
 
 ```math
 \begin{aligned}
@@ -125,8 +129,8 @@ comparison, `WithinAllowance` or `Pluck` node $`d`$, one of:
 
 ### `decoder_custom_operand`: `Custom` gets exactly the spec region
 
-For a `Custom` node $`d`$, the $`(\mathit{location}, \mathit{size})`$
-passed to the checker is one of:
+For a `Custom` node $`d`$, the $`(\mathit{location}, \mathit{size})`$ passed to
+the checker is one of:
 
 ```math
 (\ell,\ |\mathsf{enc}(u)|) \text{ with } \mathsf{cd}[\ell, |\mathsf{enc}(u)|] = \mathsf{enc}(u)
@@ -149,8 +153,8 @@ For $`d`$ a `Tuple`, `Array` or `AbiEncoded` node:
 ```
 
 Here $`\ell'`$ is $`\ell`$ moved past the length word and leading bytes for
-nested calldata. By `decoder_locations`, each $`\ell_i`$ is then where the
-spec put component $`i`$.
+nested calldata. By `decoder_locations`, each $`\ell_i`$ is then where the spec
+put component $`i`$.
 
 ### `decoder_slice`: `Slice` rejects exactly when the spec window doesn't exist
 
@@ -166,9 +170,9 @@ L = |w| \text{ for the enclosing window } w \sqsubseteq \mathsf{content}(u) \tex
 
 ### `decoder_bitmask`: Bitmask checks exactly the spec bits
 
-For a `Bitmask` node $`d`$ on a `Static` or `Dynamic` parameter (as
-Integrity requires), with compValue $`\mathit{cv}`$ = shift, mask, expected
-($`n`$ bytes each), and any memory contents after the compValue:
+For a `Bitmask` node $`d`$ on a `Static` or `Dynamic` parameter (as Integrity
+requires), with compValue $`\mathit{cv}`$ = shift, mask, expected ($`n`$ bytes
+each), and any memory contents after the compValue:
 
 ```math
 \mathsf{bitmaskCheck}(\mathsf{cd}, \ell, d) = \mathsf{bitmaskSpec}(b, \mathit{cv})
@@ -184,13 +188,13 @@ Integrity requires), with compValue $`\mathit{cv}`$ = shift, mask, expected
 \end{cases}
 ```
 
-So it never reports `CalldataOverflow` on correct calldata, and the
-32-byte chunks with a rinse mask compare exactly these bytes.
+So it never reports `CalldataOverflow` on correct calldata, and the 32-byte
+chunks with a rinse mask compare exactly these bytes.
 
 ### `decoder_zip`: Zip decodes exactly the plucked spec arrays
 
-For a reached Zip $`z`$, field $`f`$, and a reached Pluck node at
-$`(\ell, p)`$ with the slot $`z`$ references for $`f`$:
+For a reached Zip $`z`$, field $`f`$, and a reached Pluck node at $`(\ell, p)`$
+with the slot $`z`$ references for $`f`$:
 
 ```math
 v|_p = \mathsf{array}(u_0, \dots, u_{k-1})
@@ -199,18 +203,17 @@ v|_p = \mathsf{array}(u_0, \dots, u_{k-1})
 \qquad \text{or (iv)}
 ```
 
-So `ZippedArrayLengthMismatch` is reported exactly when the plucked spec
-arrays differ in length, and by `decoder_locations` field $`f`$ is evaluated
-at element $`i`$ exactly where the spec put $`u_i`$.
+So `ZippedArrayLengthMismatch` is reported exactly when the plucked spec arrays
+differ in length, and by `decoder_locations` field $`f`$ is evaluated at element
+$`i`$ exactly where the spec put $`u_i`$.
 
 ### Trusted base
 
-- `Roles.lean` matches the Solidity. It's a hand transcription, tested
-  against the contracts by `test/formal/lean-model.spec.ts`.
-- `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40
-  lines).
-- Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$
-  and $`\mathsf{ZipOK}_s`$ (not proven yet).
+- `Roles.lean` matches the Solidity. It's a hand transcription, tested against
+  the contracts by `test/formal/lean-model.spec.ts`.
+- `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
+- Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$ and
+  $`\mathsf{ZipOK}_s`$ (not proven yet).
 - When a Zip reads a Pluck slot, it holds a location where that Pluck was
   evaluated (Integrity's unique-slot and slot-filled-before-use rules).
 - The Lean 4.35 kernel.
@@ -225,5 +228,5 @@ at element $`i`$ exactly where the spec put $`u_i`$.
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                                     |
 
 To add a property, add a `[[lean_lib]]` to `lakefile.toml` and append its name
-to `defaultTargets`. Then add a row to the status table and a section with
-its theorems here.
+to `defaultTargets`. Then add a row to the status table and a section with its
+theorems here.
