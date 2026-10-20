@@ -28,7 +28,7 @@ Severity:
 | 0   | SDK checker predates v3                          | prerequisite | —                                |
 | 1   | Zip anywhere but under And/Or only               | bypass       | confirmed on-chain (5 shapes)    |
 | 2   | Non-structural child in a Pass/EqualTo container | false reject | confirmed (fuzzer + on-chain)    |
-| 3   | Integrity gas grows ~3× per nesting level        | usability    | measured                         |
+| 3   | Integrity dominates storing cost, hits tx cap    | usability    | measured                         |
 | 4   | `Slice` and plain checks can't share an And/Or   | usability    | confirmed (Integrity rejects)    |
 | 5   | Checks below Pass/EqualTo/Custom/Pluck never run | lint         | by design, easy to misread       |
 | 6   | Root encoding not checked on-chain               | low          | code reading; SDK already checks |
@@ -94,26 +94,47 @@ checker could misjudge it.
 SDK check: every child of a `Tuple`, `Array` or `AbiEncoded` node is structural,
 whatever the operator.
 
-## 3. Integrity gas grows ~3× per nesting level (usability)
+## 3. Integrity dominates the cost of storing permissions (usability)
 
-`TypeTree.resolve` and `hash` re-resolve each subtree at every level, and
-Integrity calls them for every node. Gas for `MockPackerUnpacker.roundtrip`
-(Integrity + pack + unpack):
+`TypeTree.resolve`/`hash` re-resolve each subtree at every level and Integrity
+calls them for every node, so its gas grows ~3× per nesting level and roughly
+quadratically with the number of nodes. Measured on a local chain (2026-10-20),
+all leaves `EqualTo` with a 32-byte compValue. Integrity, pack and store are
+measured inside one call with `gasleft()`; the setters are full transactions:
 
-| depth (a chain of nested tuples) | 4    | 5    | 6    | 7    | 8     |
-| -------------------------------- | ---- | ---- | ---- | ---- | ----- |
-| gas                              | 0.3M | 0.7M | 1.8M | 5.3M | > 16M |
+| tree                                                     | nodes | depth | Integrity | pack | store | `allowFunction` | `allowFunctionPacked` | Integrity share |
+| -------------------------------------------------------- | ----- | ----- | --------- | ---- | ----- | --------------- | --------------------- | --------------- |
+| chain of nested tuples                                   | 4     | 4     | 197k      | 29k  | 51k   | 330k            | 90k                   | 60%             |
+|                                                          | 6     | 6     | 1.7M      | 75k  | 53k   | 1.9M            | 92k                   | 90%             |
+|                                                          | 8     | 8     | 15.9M     | 158k | 56k   | 16.2M           | 94k                   | 98%             |
+|                                                          | 9     | 9     | 54.9M     | 217k | 59k   | over the cap    | 95k                   | —               |
+| binary tuple tree                                        | 16    | 5     | 6.1M      | 392k | 109k  | 6.7M            | 154k                  | 91%             |
+|                                                          | 32    | 6     | 54.3M     | 1.7M | 183k  | over the cap    | 230k                  | —               |
+| flat: one call, n static params                          | 11    | 2     | 285k      | 91k  | 118k  | 577k            | 165k                  | 49%             |
+|                                                          | 51    | 2     | 4.0M      | 1.4M | 424k  | 6.0M            | 507k                  | 66%             |
+|                                                          | 101   | 2     | 14.4M     | 5.1M | 808k  | over the cap    | 935k                  | —               |
+| `Or` of b calls with 3 params                            | 17    | 3     | 1.1M      | 140k | 139k  | 1.4M            | 188k                  | 74%             |
+|                                                          | 65    | 3     | 10.9M     | 1.4M | 436k  | 13.0M           | 518k                  | 83%             |
+| `Or` of b calls, each with a tuple param holding an `Or` | 33    | 5     | 6.4M      | 519k | 208k  | 7.3M            | 264k                  | 88%             |
+|                                                          | 65    | 5     | 19.9M     | 1.7M | 377k  | over the cap    | 449k                  | —               |
 
-With two children per level, depth 7 already needs 12M. Since Fusaka (EIP-7825)
-one transaction may use at most 2^24 ≈ 16.8M gas, so a validated setter cannot
-store a tree nested 8 levels deep, however few nodes it has. And/Or wrappers and
-nested calldata add levels quickly. About a third of the fuzzer's random trees
-(depth ≥ 7) ran out of gas.
+"Over the cap" means more than 2^24 ≈ 16.8M gas, the per-transaction limit since
+Fusaka (EIP-7825). Takeaways:
 
-SDK check: estimate the depth and warn before a setter would exceed the cap;
-fall back to `...Packed` setters with `packConditions` via `eth_call` (RPC gas
-caps are usually higher). Contract fix: memoize hashes per node within
-`enforce`.
+- Above ~10 nodes Integrity is most of a validated setter's cost, above ~30
+  nodes (or depth 6) it is 80–98%. Storing the same tree with the `...Packed`
+  setter costs 5–70× less.
+- Validated setters fail beyond depth 8, or around 65–100 nodes, which realistic
+  `Or`-heavy permissions reach. `packConditions` via `eth_call` runs the same
+  code; at depth 10 or 200 flat params it exceeds 60M, more than many RPC gas
+  caps allow.
+- Packing is also superlinear (5.1M for 101 nodes), but an order of magnitude
+  below Integrity.
+
+SDK: run Integrity locally (item 0) and apply with `...Packed` setters, so its
+cost never lands on-chain; warn when a tree would not fit a validated setter.
+Contract fix: memoize type hashes per node within `enforce` and avoid the
+per-node `childBounds` scans; Integrity should then be roughly linear.
 
 ## 4. Slice and plain checks can't share an And/Or (usability)
 
