@@ -14,7 +14,13 @@ For the node at `<node index>` (BFS order, after pack/unpack) it prints
     <children result> <size result>
 
 where the children result is `none` (overflow) or comma-separated locations
-(`-` for an empty list). Used by `test/formal/lean-model.spec.ts`.
+(`-` for an empty list).
+
+A line `bm <calldata hex> <location> <compValue hex> <inlined 0|1> <size>`
+runs `bitmaskCheck` instead and prints the `Status` number it returns
+(0 `Ok`, 8 `BitmaskOverflow`, 9 `BitmaskNotAllowed`, 20 `CalldataOverflow`).
+
+Used by `test/formal/lean-model.spec.ts`.
 -/
 
 open DecoderFaithfulness DecoderFaithfulness.Roles
@@ -77,8 +83,17 @@ def showLocs : Option (List Nat) → String
   | some [] => "-"
   | some ls => ",".intercalate (ls.map toString)
 
+def statusCode : BitmaskStatus → Nat
+  | .Ok => 0
+  | .BitmaskOverflow => 8
+  | .BitmaskNotAllowed => 9
+  | .CalldataOverflow => 20
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
+  | ["bm", hex, loc, cv, inl, sz] =>
+    toString (statusCode
+      (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))
   | [hex, loc, idx, nodesStr] =>
     let data := parseHex hex
     let nodes := (nodesStr.splitOn "|").toArray.map fun e =>

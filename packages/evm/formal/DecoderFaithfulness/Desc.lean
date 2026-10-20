@@ -21,7 +21,9 @@ stronger.
   non-structural (`NonStruct`). Children of variant nodes may be different
   interpretations of the same `bytes` value.
 * `Slice` on a static word or on a bytes value, with nested slices below.
-* `Zip*` is out of scope (no constructor admits it).
+* `ZipSome` / `ZipEvery` as a non-structural child of an `And` / `Or` over a
+  dynamic value (Integrity only allows Zip next to dynamic-ish siblings).
+  What a Zip's fields describe is the separate hypothesis `ZipOK`.
 
 **Interpretations that do not hold.** A bytes-like child (`Dynamic`,
 `AbiEncoded`, or a logical node over such) may sit at a bytes value it does
@@ -74,6 +76,21 @@ inductive NonStruct : Condition → Prop
       c.encoding = .None → (c.operator = .And ∨ c.operator = .Or) →
       (∀ ch, ch ∈ c.children → NonStruct ch) → NonStruct c
 
+/-- A Zip node: `None` encoding, one child (the tuple whose children are
+    the fields). It reads no calldata at its own location. -/
+inductive ZipNode : Condition → Prop
+  | mk {c : Condition} (t : Condition) :
+      c.encoding = .None → (c.operator = .ZipSome ∨ c.operator = .ZipEvery) →
+      c.children = [t] → ZipNode c
+
+/-- No Zip child comes before `ch0`. `AbiLocation.size` of a logical node
+    returns the first child size that fits in calldata; a Zip child's size
+    is unrelated to the value, so the described child `ch0` must come
+    first. (Integrity requires the Plucks a Zip reads to be visited before
+    it, which puts the Zip after the sibling that holds them.) -/
+def ZipsAfter (cs : List Condition) (ch0 : Condition) : Prop :=
+  ∃ pre post, cs = pre ++ ch0 :: post ∧ ∀ ch, ch ∈ pre → ¬ ZipNode ch
+
 mutual
   /-- Bytes-like node: decodes its location as a length-prefixed value. -/
   inductive BytesLike : Condition → Prop
@@ -101,6 +118,7 @@ mutual
   inductive RootOKN : Condition → Prop
     | ok {c} : RootOK c → RootOKN c
     | ns {c} : NonStruct c → RootOKN c
+    | zip {c} : ZipNode c → RootOKN c
 end
 
 /-- Child of a `Slice`: a static leaf, or another `Slice` on a static value. -/
@@ -150,6 +168,7 @@ mutual
         c.encoding = .None → (c.operator = .And ∨ c.operator = .Or) →
         ch0 ∈ c.children → DescS s ch0 u →
         (∀ ch, ch ∈ c.children → DescSN s ch u) →
+        ZipsAfter c.children ch0 →
         Desc s c u
 
   inductive DescAll (s : Bool) : List Condition → List Val → Prop
@@ -162,11 +181,66 @@ mutual
     | desc {c u} : Desc s c u → DescS s c u
     | stray {c u} : s = true → BytesLike c → IsBytesLike u → DescS s c u
 
-  /-- Child of a logical node: structural, or non-structural. -/
+  /-- Child of a logical node: structural, non-structural, or a Zip (only
+      over a dynamic value, as Integrity requires). -/
   inductive DescSN (s : Bool) : Condition → Val → Prop
     | ds {c u} : DescS s c u → DescSN s c u
     | ns {c u} : NonStruct c → DescSN s c u
+    | zip {c u} : ZipNode c → u.isStatic = false → DescSN s c u
 end
+
+/-! ## Zip fields -/
+
+/-- `d` is `c` or a descendant of `c`. -/
+inductive Sub : Condition → Condition → Prop
+  | refl (c : Condition) : Sub c c
+  | child {d ch c : Condition} : ch ∈ c.children → Sub d ch → Sub d c
+
+/-- The Zip type rules Integrity enforces (`_checkZipIterator`,
+    `_validatePluckZipTypes`), stated on values: a Pluck node that a Zip in
+    `root` references (by slot index) is an `Array` node, and Zip field `f`
+    describes every element of any array that Pluck node describes. -/
+def ZipOK (s : Bool) (root : Condition) : Prop :=
+  ∀ z pk f, Sub z root → Sub pk root → (z.operator = .ZipSome ∨ z.operator = .ZipEvery) →
+    f < (zipFields z).length → pk.operator = .Pluck →
+    cvByte pk.compValue 0 = cvByte z.compValue f →
+    pk.encoding = .Array ∧
+    ∀ vs, Desc s pk (.array vs) → ∀ v, v ∈ vs → DescS s ((zipFields z).getD f default) v
+
+mutual
+  /-- The tree contains a Zip node. -/
+  def hasZip : Condition → Bool
+    | ⟨_, op, cs, _, _, _, _⟩ => decide (op = .ZipSome ∨ op = .ZipEvery) || hasZipAll cs
+
+  def hasZipAll : List Condition → Bool
+    | [] => false
+    | c :: cs => hasZip c || hasZipAll cs
+end
+
+theorem hasZipAll_mem {c : Condition} : ∀ {cs : List Condition}, c ∈ cs →
+    hasZipAll cs = false → hasZip c = false
+  | _ :: _, .head _, h => by simp [hasZipAll] at h; exact h.1
+  | _ :: _, .tail _ hm, h => by simp [hasZipAll] at h; exact hasZipAll_mem hm h.2
+
+theorem hasZip_false {c : Condition} (h : hasZip c = false) :
+    (c.operator ≠ .ZipSome ∧ c.operator ≠ .ZipEvery) ∧ hasZipAll c.children = false := by
+  rcases c with ⟨_, op, cs, _, _, _, _⟩
+  simp only [hasZip, Bool.or_eq_false_iff, decide_eq_false_iff_not, not_or] at h
+  exact h
+
+theorem hasZip_sub {z c : Condition} (hs : Sub z c) :
+    hasZip c = false → z.operator ≠ .ZipSome ∧ z.operator ≠ .ZipEvery := by
+  induction hs with
+  | refl => intro h; exact (hasZip_false h).1
+  | child hm _ ih => intro h; exact ih (hasZipAll_mem hm (hasZip_false h).2)
+
+/-- Trees without a Zip satisfy `ZipOK`. -/
+theorem ZipOK.of_noZip {s : Bool} {root : Condition} (h : hasZip root = false) : ZipOK s root := by
+  intro z _ _ hz _ hop
+  have := hasZip_sub hz h
+  rcases hop with hop | hop
+  · exact absurd hop this.1
+  · exact absurd hop this.2
 
 /-! ## Byte placement -/
 

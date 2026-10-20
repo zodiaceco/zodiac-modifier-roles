@@ -152,10 +152,10 @@ mutual
       rw [isInlined_eq, he]; simp [Val.isStatic]
     | c, _, .call he _ _ _ _ => by
       rw [isInlined_eq, he]; simp [Val.isStatic]
-    | c, u, .logical ch0 he _ hm0 h0 hall => by
+    | c, u, .logical ch0 he _ hm0 h0 hall _ => by
       have hns : ∀ ch, ch ∈ c.children →
           (isInlined ch = u.isStatic ∧ (u.isStatic = true → inlinedSize ch = (enc u).length)) ∨
-          (isInlined ch = true ∧ inlinedSize ch = 0) :=
+          (isInlined ch = true ∧ inlinedSize ch = 0) ∨ u.isStatic = false :=
         fun ch hm => DescSN.meta (hall ch hm)
       have m0 := DescS.meta h0
       rw [isInlined_eq, inlinedSize_eq, he, isInlinedAll_eq]
@@ -170,17 +170,19 @@ mutual
           rw [m0.1] at this; exact Bool.false_ne_true this
         · simp [List.all_eq_true]
           intro ch hm
-          rcases hns ch hm with h | h
+          rcases hns ch hm with h | h | h
           · rw [h.1, hst]
           · exact h.1
+          · rw [hst] at h; cases h
       · intro hst
         simp
         have hpos : 0 < (enc u).length := by have := DescS.enc_ge h0; omega
         apply inlinedSizeLoop_first _ _ hpos
         · intro ch hm
-          rcases hns ch hm with h | h
+          rcases hns ch hm with h | h | h
           · exact Or.inr (h.2 hst)
           · exact Or.inl h.2
+          · rw [hst] at h; cases h
         · exact ⟨ch0, hm0, (m0.2 hst)⟩
 
   theorem DescAll.meta {s : Bool} : ∀ {cs vs}, DescAll s cs vs →
@@ -201,11 +203,14 @@ mutual
     | _, _, .stray _ hb hu => by
       rw [BytesLike.meta hb, isStatic_bytesLike hu]; simp
 
+  /-- A Zip child has its own metadata, but only sits next to a dynamic
+      value, where the parent is not inlined anyway. -/
   theorem DescSN.meta {s : Bool} : ∀ {c u}, DescSN s c u →
       (isInlined c = u.isStatic ∧ (u.isStatic = true → inlinedSize c = (enc u).length)) ∨
-      (isInlined c = true ∧ inlinedSize c = 0)
+      (isInlined c = true ∧ inlinedSize c = 0) ∨ u.isStatic = false
     | _, _, .ds h => Or.inl (DescS.meta h)
-    | _, _, .ns h => Or.inr (NonStruct.meta h)
+    | _, _, .ns h => Or.inr (Or.inl (NonStruct.meta h))
+    | _, _, .zip _ h => Or.inr (Or.inr h)
 
   /-- Every described value is at least one word. -/
   theorem DescS.enc_ge {s : Bool} : ∀ {c u}, DescS s c u → 32 ≤ (enc u).length
@@ -222,7 +227,7 @@ mutual
       exact Nat.le_trans (DescAll.headLen_ge hall hne) (encTuple_length_ge _)
     | _, _, .array _ _ _ _ _ _ _ _ => by simp [enc_array]
     | _, _, .call _ _ _ _ _ => by simp [enc_call, length_encBytes]
-    | _, _, .logical _ _ _ _ h0 _ => DescS.enc_ge h0
+    | _, _, .logical _ _ _ _ h0 _ _ => DescS.enc_ge h0
 
   theorem DescAll.headLen_ge {s : Bool} : ∀ {cs vs}, DescAll s cs vs → vs ≠ [] →
       32 ≤ headLen vs

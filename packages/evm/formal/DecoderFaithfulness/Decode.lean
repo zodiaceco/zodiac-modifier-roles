@@ -239,6 +239,20 @@ theorem sizeNone_first (data : Bytes) (l s : Nat) (cs : List Condition)
       · omega
       · exact ⟨ch, hm, hch⟩
 
+/-- `sizeNone` returns `s` if the described child comes after children that
+    each give `s` or an implausible size. -/
+theorem sizeNone_prefix (data : Bytes) (l s : Nat) (ch0 : Condition) (post : List Condition)
+    (hs : 0 < s ∧ s ≤ data.length) (h0 : size data l ch0 = s) :
+    ∀ pre : List Condition, (∀ ch, ch ∈ pre → size data l ch = s ∨ data.length < size data l ch) →
+    sizeNone data l (pre ++ ch0 :: post) = s
+  | [], _ => by simp only [List.nil_append, sizeNone]; rw [h0, ite_eq_left hs]
+  | c :: pre, h => by
+    simp only [List.cons_append, sizeNone]
+    rcases h c (by simp) with h1 | h1
+    · rw [h1, ite_eq_left hs]
+    · rw [ite_eq_right (by omega)]
+      exact sizeNone_prefix data l s ch0 post hs h0 pre (fun ch hm => h ch (by simp [hm]))
+
 theorem NonStruct.size_gt {data : Bytes} (l : Nat) :
     ∀ {c}, NonStruct c → data.length < size data l (annotate c)
   | c, .leaf he hch _ => by
@@ -457,18 +471,16 @@ mutual
       rw [sizeArrayLoop_eq hlen (l + 32) (annotate c0) rfl vs 0 (headLen vs) h0
         (fun l' v hv hat' => DescS.size_eq hlen (h0 v hv) hat') h1 h2 h3]
       simp [encTuple]
-    | c, u, l, .logical ch0 he _ hm0 h0 hall, hat => by
+    | c, u, l, .logical ch0 he _ _ h0 hall ⟨pre, post, hcs, hnz⟩, hat => by
       have hge := h0.enc_ge
       have hb := hat.bound
-      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children]
+      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children, hcs]
       rw [ite_eq_right (by omega)]
-      simp
-      apply sizeNone_first data l _ _ ⟨by omega, by omega⟩
-      · intro ch hm
-        simp at hm
-        obtain ⟨ch', hm', rfl⟩ := hm
-        exact DescSN.size_cases hlen (hall ch' hm') hat
-      · exact ⟨annotate ch0, List.mem_map_of_mem hm0, DescS.size_eq hlen h0 hat⟩
+      simp only [reduceCtorEq, ite_false, ite_true, List.map_append, List.map_cons]
+      apply sizeNone_prefix data l _ _ _ ⟨by omega, by omega⟩ (DescS.size_eq hlen h0 hat)
+      intro ch hm
+      obtain ⟨ch', hm', rfl⟩ := List.mem_map.mp hm
+      exact DescSN.size_cases hlen (hall ch' (by rw [hcs]; simp [hm'])) (hnz ch' hm') hat
 
   theorem DescS.size_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       ∀ {c u l}, DescS s c u → At data l (enc u) →
@@ -477,10 +489,11 @@ mutual
     | _, _, _, .stray _ hb hu, hat => BytesLike.size_eq hlen hb hu hat
 
   theorem DescSN.size_cases {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, DescSN s c u → At data l (enc u) →
+      ∀ {c u l}, DescSN s c u → ¬ ZipNode c → At data l (enc u) →
       size data l (annotate c) = (enc u).length ∨ data.length < size data l (annotate c)
-    | _, _, _, .ds h, hat => Or.inl (DescS.size_eq hlen h hat)
-    | _, _, l, .ns h, _ => Or.inr (NonStruct.size_gt l h)
+    | _, _, _, .ds h, _, hat => Or.inl (DescS.size_eq hlen h hat)
+    | _, _, l, .ns h, _, _ => Or.inr (NonStruct.size_gt l h)
+    | _, _, _, .zip hz _, hnz, _ => absurd hz hnz
 
   theorem DescAll.sizes {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       ∀ {cs vs}, DescAll s cs vs →

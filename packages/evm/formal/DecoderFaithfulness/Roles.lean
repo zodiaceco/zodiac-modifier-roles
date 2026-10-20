@@ -11,9 +11,12 @@ Transcribed from `packages/evm/contracts` (branch `main`, commit 9a63c505):
                                    → `annotate` (the `inlined` / `size` /
                                      `leadingBytes` metadata the evaluator sees)
 * `core/evaluate/ConditionEvaluator.sol`
-                                   → `input` (`__input`) and `Visit`
-                                     (which node `evaluate` visits at which
-                                     calldata location)
+                                   → `input` (`__input`), `Visit` (which
+                                     node `evaluate` visits at which calldata
+                                     location) and `Eval` (adds the Zip jump
+                                     of `_zipIterator` / `_zipLocations` via
+                                     the locations `_pluck` stores)
+* `core/evaluate/BitmaskChecker.sol` → `bitmaskCheck`
 
 This file does not import the ABI spec. Each definition follows the Solidity
 control flow; deviations are listed here and at the definition:
@@ -264,9 +267,10 @@ def readsInput : Operator → Bool
 /-- `Visit data c loc p d l`: evaluating `c` at `loc` can evaluate node `d`
     at `l`. `p` records the ABI component index of each structural step
     (`Matches` child `i`, array element `i`); `And`/`Or` add no step.
-    One constructor per branch of `evaluate` that recurses. Short-circuiting
-    only removes visits, so it is not modeled. `Zip*` is not modeled (out of
-    scope). -/
+    One constructor per branch of `evaluate` that recurses into a child at a
+    location derived from its own. Short-circuiting only removes visits, so
+    it is not modeled. `Zip*` reads locations stored by earlier `Pluck`
+    nodes instead; that jump is added by `Eval` below. -/
 inductive Visit (data : Calldata) : Condition → Nat → List Nat → Condition → Nat → Prop
   | here {c loc} : Visit data c loc [] c loc
   /-- `_and` / `_or`: every child at the same location. -/
@@ -312,5 +316,110 @@ inductive Visit (data : Calldata) : Condition → Nat → List Nat → Condition
       Visit data ((c.children.headD default).withSize (sliceSize c.compValue))
         (loc + (if c.inlined then 0 else 32) + sliceShift c.compValue) p d l →
       Visit data c loc p d l
+
+/-! ## ConditionEvaluator.sol: `ZipSome` / `ZipEvery`
+
+`_pluck` stores the location it is evaluated at in
+`context.pluckedLocations[compValue[0]]`; `_zipLocations` decodes field `f`
+of the Zip as an array at `pluckedLocations[compValue[f]]`, with
+`fields[f]` as element template (the `stub`), and `_zipIterator` evaluates
+`fields[f]` at element `i`.
+
+Modeling assumption (from Integrity, not proven here): when a Zip reads
+slot `k`, the slot holds a location at which the unique Pluck node with
+index `k` was evaluated. `_validateUniquePluckDefinitions` makes the Pluck
+node unique, `_validatePluckAssignments` makes every slot a Zip reads
+written before on that evaluation path, and `_pluck` is the only writer. -/
+
+/-- `condition.children[0].children`: the fields of a Zip. -/
+def zipFields (c : Condition) : List Condition := (c.children.headD default).children
+
+/-- `uint8(compValue[k])`. (Out of range panics in Solidity; Integrity sizes
+    the compValues of Zip and Pluck.) -/
+def cvByte (cv : Bytes) (k : Nat) : Nat := (cv.getD k 0).val
+
+/-- `stub` in `_zipLocations`: an `Array` node with `field` as element
+    template; every other member is zero. -/
+def zipStub (field : Condition) : Condition :=
+  ⟨.Array, .Pass, [field], false, 0, 0, []⟩
+
+/-- `Eval data root p d l`: evaluating `root` at location 0 can evaluate `d`
+    at `l`. `Visit`, plus Zip jumps: field `f` of a visited Zip is evaluated
+    at element `i` of the array decoded at the location of a visited Pluck
+    node with the referenced index. `p` is the component path of `d` from
+    the root: the Pluck node's path, then the element index. The Zip's own
+    location is unused, as in `_zipIterator`. -/
+inductive Eval (data : Calldata) (root : Condition) : List Nat → Condition → Nat → Prop
+  | visit {p d l} : Visit data root 0 p d l → Eval data root p d l
+  | zip {pz z lz pp pk L p d l} (f : Nat) (locs : List Nat) (i : Nat) (hi : i < locs.length) :
+      Eval data root pz z lz →
+      (z.operator = .ZipSome ∨ z.operator = .ZipEvery) →
+      f < (zipFields z).length →
+      Eval data root pp pk L →
+      pk.operator = .Pluck →
+      cvByte pk.compValue 0 = cvByte z.compValue f →
+      children data L (zipStub ((zipFields z).getD f default)) = some locs →
+      Visit data ((zipFields z).getD f default) locs[i] p d l →
+      Eval data root (pp ++ i :: p) d l
+
+/-! ## BitmaskChecker.sol
+
+`bytes32` values are modeled as their 32 bytes, so `&` is bytewise and `==`
+is equality of byte lists. -/
+
+/-- The `Status` values `BitmaskChecker.check` returns. -/
+inductive BitmaskStatus where
+  | Ok | BitmaskOverflow | BitmaskNotAllowed | CalldataOverflow
+  deriving DecidableEq, Repr, Inhabited
+
+/-- `a & b` on `bytes32`. -/
+def band (a b : Bytes) : Bytes := List.zipWith (· &&& ·) a b
+
+/-- `calldataload(add(data.offset, p))` as bytes, zero-filled past the end of
+    `data` (on-chain, whatever follows `data` in `msg.data`; the loop only
+    compares bytes that are in bounds, the rest is rinsed). -/
+def loadBytes (data : Calldata) (p : Nat) : Bytes := (data.drop p ++ zeros 32).take 32
+
+/-- `mload(add(add(compValue, 0x22), p))`: the 32 bytes at byte `2 + p` of the
+    compValue (after its length word). Past its end, memory holds whatever
+    follows (`junk`, arbitrary). -/
+def mloadCv (cv junk : Bytes) (p : Nat) : Bytes := (cv.drop (2 + p) ++ junk ++ zeros 32).take 32
+
+/-- `_rinseMask(bytesLeft)`: `min(bytesLeft, 32)` leading `0xff` bytes, then
+    zeros. -/
+def rinseMask (bytesLeft : Nat) : Bytes :=
+  List.replicate (min bytesLeft 32) 255 ++ zeros (32 - min bytesLeft 32)
+
+/-- The chunk loop of `check`, `for (i = start; i < n; i += 32)`, with `fuel`
+    iterations available (`n` is enough: the loop runs `⌈n/32⌉ ≤ n` times).
+    `value` is `data[start:]`. -/
+def bitmaskLoop (value cv junk : Bytes) (shift n : Nat) : (fuel i : Nat) → BitmaskStatus
+  | 0, _ => .Ok
+  | fuel + 1, i =>
+    if i < n then
+      let mask := mloadCv cv junk i
+      let expected := mloadCv cv junk (n + i)
+      let actual := loadBytes value (shift + i)
+      let rinse := rinseMask (n - i)
+      if band expected rinse ≠ band (band actual mask) rinse then .BitmaskNotAllowed
+      else bitmaskLoop value cv junk shift n fuel (i + 32)
+    else .Ok
+
+/-- `BitmaskChecker.check(data, location, compValue, inlined, size)`.
+    `compValue.length - 2` reverts in Solidity for a compValue shorter than 2
+    bytes (Integrity requires at least 4); here it is 0. -/
+def bitmaskCheck (data : Calldata) (location : Nat) (cv : Bytes) (inlined : Bool)
+    (size : Nat) (junk : Bytes) : BitmaskStatus :=
+  let shift := sliceShift cv
+  let n := (cv.length - 2) / 2
+  if inlined = false ∧ location + 32 > data.length then .BitmaskOverflow
+  else
+    let start := if inlined then location else location + 32
+    let encodedLength := if inlined then size else load data location
+    -- mask window must fit within the declared value length
+    if shift + n > encodedLength then .BitmaskOverflow
+    -- declared value length must be physically present in calldata
+    else if start + encodedLength > data.length then .CalldataOverflow
+    else bitmaskLoop (data.drop start) cv junk shift n n 0
 
 end DecoderFaithfulness.Roles

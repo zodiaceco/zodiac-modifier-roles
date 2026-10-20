@@ -22,10 +22,17 @@ A successful build means every theorem below is proven. There is no `sorry`,
 
 Not covered yet:
 
-- **Integrity ⇒ `Desc`.** That `Integrity.enforce` only accepts condition
-  trees that describe some ABI type. Decoder faithfulness assumes it.
-- `ZipSome`/`ZipEvery`, `BitmaskChecker` internals, and what comparison
-  operators do with their operand (`__compare`, keccak).
+- **Integrity ⇒ `Desc`, `ZipOK`.** That `Integrity.enforce` only accepts
+  condition trees that describe some ABI type, and enforces the Zip type
+  rules. Decoder faithfulness assumes it.
+- What comparison operators do with their operand (`__compare`, keccak),
+  `WithinRatio`, `Custom` checkers, allowances. The operands are proven,
+  not what is done with them.
+- A Zip as a positional child of `Matches` (only a Zip under a top-level
+  or other `And`/`Or` is modeled). Integrity accepts such trees, but the
+  decoder treats the Zip as an extra parameter: parameters after it are
+  read at the wrong place, and a Zip over dynamic fields falsely overflows.
+  Reproduced on-chain; see the [details](DecoderFaithfulness/README.md#not-covered).
 - **Malformed calldata.** Whether Roles and the target contract decode
   non-canonical encodings the same way. Not planned for now; it depends on
   each target's decoder.
@@ -41,7 +48,7 @@ Not covered yet:
 | $`\mathsf{cd} = \mathit{pre} \mathbin{+\!\!+} \mathsf{enc}(\vec a) \mathbin{+\!\!+} \mathit{sfx}`$ | correctly encoded calldata, with arbitrary trailing bytes $`\mathit{sfx}`$                                                                                                 |
 | $`\mathsf{cd}[\ell, n]`$                                                                           | the $`n`$ bytes of $`\mathsf{cd}`$ starting at position $`\ell`$                                                                                                           |
 | $`\mathsf{Desc}_s(c, v)`$                                                                          | condition tree $`c`$ describes value $`v`$ (the structural rules Integrity enforces); with $`s = \mathsf{true}`$, alternative nested-calldata interpretations need not fit |
-| $`(d, \ell, p) \in \mathsf{Visit}(\mathsf{cd}, c)`$                                                | evaluating $`c`$ on $`\mathsf{cd}`$ reaches node $`d`$ at byte $`\ell`$ along child-index path $`p`$                                                                       |
+| $`(d, \ell, p) \in \mathsf{Eval}(\mathsf{cd}, c)`$                                                 | evaluating $`c`$ on $`\mathsf{cd}`$ reaches node $`d`$ at byte $`\ell`$ along component path $`p`$ (including through Zips)                                                |
 | $`v\vert_p`$                                                                                       | the component of $`v`$ at path $`p`$ (tuple field / array element / argument $`i`$ per step)                                                                               |
 | $`\mathsf{content}(u)`$                                                                            | the 32-byte word of a static $`u`$, or the bytes of a `bytes`/`string` value without length word and padding                                                               |
 | $`w \sqsubseteq x`$                                                                                | $`w`$ is a contiguous part of $`x`$                                                                                                                                        |
@@ -53,11 +60,13 @@ Not covered yet:
 All theorems share the hypotheses
 
 ```math
-\mathsf{Desc}_s(c, v), \qquad \mathsf{RootOK}(c), \qquad |\mathsf{cd}| < 2^{255}, \qquad (d, \ell, p) \in \mathsf{Visit}(\mathsf{cd}, c), \qquad u = v|_p
+\mathsf{Desc}_s(c, v), \qquad \mathsf{RootOK}(c), \qquad \mathsf{ZipOK}_s(c), \qquad |\mathsf{cd}| < 2^{255}, \qquad (d, \ell, p) \in \mathsf{Eval}(\mathsf{cd}, c), \qquad u = v|_p
 ```
 
 where $`\mathsf{RootOK}(c)`$ says the root is `AbiEncoded`, possibly under
-`And`/`Or`. In short:
+`And`/`Or`, and $`\mathsf{ZipOK}_s(c)`$ is Integrity's Zip type rule: each
+Pluck a Zip references is an array node, and Zip field $`f`$ describes every
+element of the arrays that Pluck describes (trivial without Zips). In short:
 
 ```math
 \mathsf{cd} = \mathit{pre} \mathbin{+\!\!+} \mathsf{enc}(\vec a) \mathbin{+\!\!+} \mathit{sfx}
@@ -65,8 +74,13 @@ where $`\mathsf{RootOK}(c)`$ says the root is `AbiEncoded`, possibly under
 \forall (d, \ell, p) \in \mathsf{Visit}:\;
 \mathsf{cd}[\ell, |\mathsf{enc}(v|_p)|] = \mathsf{enc}(v|_p)
 \;\wedge\; \mathsf{input}(d) = \mathsf{enc}(v|_p)
+\;\wedge\; \mathsf{bitmask}(d) = \mathsf{bitmaskSpec}(\mathsf{content}(v|_p))
 \;\wedge\; \text{no false } \texttt{CalldataOverflow}
 ```
+
+Zip fields are evaluated at element $`i`$ of the array a Pluck reached at
+path $`p`$, so their component path is $`p \mathbin{+\!\!+} [i] \mathbin{+\!\!+} q`$
+and the same statements apply to them.
 
 The exact statements also cover nodes below `Slice` (windows), nodes that
 never read calldata, and interpretations that don't fit the data. Each
@@ -150,14 +164,55 @@ L = |w| \text{ for the enclosing window } w \sqsubseteq \mathsf{content}(u) \tex
 \qquad\text{or (iv)}
 ```
 
+### `decoder_bitmask`: Bitmask checks exactly the spec bits
+
+For a `Bitmask` node $`d`$ on a `Static` or `Dynamic` parameter (as
+Integrity requires), with compValue $`\mathit{cv}`$ = shift, mask, expected
+($`n`$ bytes each), and any memory contents after the compValue:
+
+```math
+\mathsf{bitmaskCheck}(\mathsf{cd}, \ell, d) = \mathsf{bitmaskSpec}(b, \mathit{cv})
+\quad\text{with } b = \mathsf{content}(u) \text{, or } b = w \sqsubseteq \mathsf{content}(u) \text{ below }\texttt{Slice}\text{, or (iv)}
+```
+
+```math
+\mathsf{bitmaskSpec}(b, \mathit{cv}) =
+\begin{cases}
+\texttt{BitmaskOverflow} & \text{if } \mathit{shift} + n > |b| \\
+\texttt{Ok} & \text{if } \forall j < n:\; b[\mathit{shift} + j] \mathbin{\&} \mathit{mask}[j] = \mathit{expected}[j] \\
+\texttt{BitmaskNotAllowed} & \text{otherwise}
+\end{cases}
+```
+
+So it never reports `CalldataOverflow` on correct calldata, and the
+32-byte chunks with a rinse mask compare exactly these bytes.
+
+### `decoder_zip`: Zip decodes exactly the plucked spec arrays
+
+For a reached Zip $`z`$, field $`f`$, and a reached Pluck node at
+$`(\ell, p)`$ with the slot $`z`$ references for $`f`$:
+
+```math
+v|_p = \mathsf{array}(u_0, \dots, u_{k-1})
+\;\wedge\;
+\mathsf{children}(\mathsf{cd}, \ell, \mathsf{stub}(\mathit{field}_f)) = \mathsf{some}(\ell_0, \dots, \ell_{k-1})
+\qquad \text{or (iv)}
+```
+
+So `ZippedArrayLengthMismatch` is reported exactly when the plucked spec
+arrays differ in length, and by `decoder_locations` field $`f`$ is evaluated
+at element $`i`$ exactly where the spec put $`u_i`$.
+
 ### Trusted base
 
 - `Roles.lean` matches the Solidity. It's a hand transcription, tested
   against the contracts by `test/formal/lean-model.spec.ts`.
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40
   lines).
-- Integrity only accepts trees with $`\mathsf{Desc}_s`$ and
-  $`\mathsf{RootOK}`$ (not proven yet).
+- Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$
+  and $`\mathsf{ZipOK}_s`$ (not proven yet).
+- When a Zip reads a Pluck slot, it holds a location where that Pluck was
+  evaluated (Integrity's unique-slot and slot-filled-before-use rules).
 - The Lean 4.35 kernel.
 
 ## Layout
