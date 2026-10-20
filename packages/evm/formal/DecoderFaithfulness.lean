@@ -6,4 +6,5 @@ import DecoderFaithfulness.Basic
 import DecoderFaithfulness.Meta
 import DecoderFaithfulness.Decode
 import DecoderFaithfulness.Main
+import DecoderFaithfulness.Bitmask
 import DecoderFaithfulness.Example

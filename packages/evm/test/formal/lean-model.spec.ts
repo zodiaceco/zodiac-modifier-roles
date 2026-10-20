@@ -242,6 +242,108 @@ function corrupt(data: string): string {
   return hexlify(Uint8Array.from(out));
 }
 
+/** Conditions that pass for any value of type `t`. */
+function passFor(t: Ty): Node {
+  switch (t.k) {
+    case "word":
+      return { paramType: Encoding.Static, operator: Operator.Pass };
+    case "bytes":
+      return { paramType: Encoding.Dynamic, operator: Operator.Pass };
+    case "tuple":
+      return {
+        paramType: Encoding.Tuple,
+        operator: Operator.Matches,
+        children: t.cs.map(passFor),
+      };
+    case "array":
+      return {
+        paramType: Encoding.Array,
+        operator: Operator.Pass,
+        children: [passFor(t.e)],
+      };
+    case "call":
+      return {
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children: t.args.map(passFor),
+      };
+  }
+}
+
+/** The bytes a `Slice` or `Bitmask` indexes into: the word of a static
+ *  value, the content of a `bytes`/`string` value. */
+function contentOf(t: Ty, v: unknown): Buffer {
+  if (t.k === "word")
+    return Buffer.from(abiCoder.encode([t.abi], [v]).slice(2), "hex");
+  if (t.k === "bytes")
+    return t.abi === "bytes"
+      ? Buffer.from(String(v).slice(2), "hex")
+      : Buffer.from(String(v), "utf8");
+  throw new Error("no content");
+}
+
+type Connection = Awaited<ReturnType<typeof network.create>>;
+
+/** MockEvaluator: Integrity → pack → unpack → evaluate, on calldata. */
+async function deployEvaluator(connection: Connection) {
+  const { ethers } = connection;
+  // Deploy the linked libraries from bytecode only (their ABIs use enum
+  // types ethers cannot parse).
+  const [signer] = await ethers.getSigners();
+  const lib = async (name: string) => {
+    const { bytecode } = await hre.artifacts.readArtifact(name);
+    const c = await new ContractFactory([], bytecode, signer).deploy();
+    return c.getAddress();
+  };
+  return (
+    await ethers.getContractFactory("MockEvaluator", {
+      libraries: {
+        CustomConditionChecker: await lib("CustomConditionChecker"),
+        WithinRatioChecker: await lib("WithinRatioChecker"),
+      },
+    })
+  ).deploy();
+}
+
+/** Bitmask compValue: 2-byte shift, mask, expected. */
+const bitmaskCv = (shift: number, mask: Buffer, expected: Buffer) =>
+  hexlify(
+    Buffer.concat([
+      Buffer.from([(shift >> 8) & 0xff, shift & 0xff]),
+      mask,
+      expected,
+    ]),
+  );
+
+/** `bitmaskSpec`: status of a Bitmask on the operand bytes `bs`. */
+function bitmaskSpec(
+  bs: Buffer,
+  shift: number,
+  mask: Buffer,
+  expected: Buffer,
+) {
+  const n = mask.length;
+  if (shift + n > bs.length) return Status.BitmaskOverflow;
+  for (let j = 0; j < n; j++)
+    if ((bs[shift + j] & mask[j]) !== expected[j])
+      return Status.BitmaskNotAllowed;
+  return Status.Ok;
+}
+
+/** A mask and an expected value that matches `bs` at `shift` (where in
+ *  range), possibly with one bit flipped. */
+function randBitmask(bs: Buffer, shift: number, n: number) {
+  const mask = Buffer.from(bytes(n));
+  const expected = Buffer.alloc(n);
+  for (let j = 0; j < n; j++)
+    expected[j] = shift + j < bs.length ? bs[shift + j] & mask[j] : int(256);
+  if (chance(0.4)) {
+    const j = int(n);
+    expected[j] ^= 1 << int(8);
+  }
+  return { mask, expected };
+}
+
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
@@ -409,55 +511,11 @@ describe("Lean model of the Roles decoder (differential)", function () {
     let checked = 0;
     const fails: string[] = [];
 
-    // Conditions that pass for any value, so only the slice decides.
-    const passFor = (t: Ty): Node => {
-      switch (t.k) {
-        case "word":
-          return { paramType: Encoding.Static, operator: Operator.Pass };
-        case "bytes":
-          return { paramType: Encoding.Dynamic, operator: Operator.Pass };
-        case "tuple":
-          return {
-            paramType: Encoding.Tuple,
-            operator: Operator.Matches,
-            children: t.cs.map(passFor),
-          };
-        case "array":
-          return {
-            paramType: Encoding.Array,
-            operator: Operator.Pass,
-            children: [passFor(t.e)],
-          };
-        case "call":
-          return {
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: t.args.map(passFor),
-          };
-      }
-    };
-
     for (let c = 0; c < CASES; c++) {
       if (c % 50 === 0) {
         await connection?.close();
         connection = await network.create();
-        const { ethers } = connection;
-        // Deploy the linked libraries from bytecode only (their ABIs use
-        // enum types ethers cannot parse).
-        const [signer] = await ethers.getSigners();
-        const lib = async (name: string) => {
-          const { bytecode } = await hre.artifacts.readArtifact(name);
-          const c = await new ContractFactory([], bytecode, signer).deploy();
-          return c.getAddress();
-        };
-        evaluator = await (
-          await ethers.getContractFactory("MockEvaluator", {
-            libraries: {
-              CustomConditionChecker: await lib("CustomConditionChecker"),
-              WithinRatioChecker: await lib("WithinRatioChecker"),
-            },
-          })
-        ).deploy();
+        evaluator = await deployEvaluator(connection);
       }
       const args = Array.from({ length: 1 + int(3) }, () => randTy(2));
       const target: Ty = chance(0.5)
@@ -470,15 +528,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
         hexlify(bytes(4)) + abiCoder.encode(args.map(abiType), vals).slice(2);
 
       // Spec side: the bytes a Slice indexes into.
-      const content =
-        target.k === "word"
-          ? Buffer.from(
-              abiCoder.encode([target.abi], [vals[at]]).slice(2),
-              "hex",
-            )
-          : target.abi === "bytes"
-            ? Buffer.from(String(vals[at]).slice(2), "hex")
-            : Buffer.from(String(vals[at]), "utf8");
+      const content = contentOf(target, vals[at]);
       const shift = int(content.length + 8);
       const size = 1 + int(32);
       const inRange = shift + size <= content.length;
@@ -531,6 +581,384 @@ describe("Lean model of the Roles decoder (differential)", function () {
     await connection?.close();
     for (const f of fails.slice(0, 10)) console.log(`      MISMATCH ${f}`);
     console.log(`      ${checked} slice evaluations checked against the spec`);
+    expect(fails.length).to.equal(0);
+  });
+
+  it(`agrees with BitmaskChecker on ${CASES * 4} random inputs`, async function () {
+    if (!existsSync(LEAN_BIN)) this.skip();
+    rand = mulberry32(SEED + 2000);
+    const connection = await network.create();
+    const mock = await (
+      await connection.ethers.getContractFactory("MockBitmask")
+    ).deploy();
+
+    type Query = { line: string; sol: string; info: string };
+    const queries: Query[] = [];
+    let reverts = 0;
+    for (let c = 0; c < CASES * 4; c++) {
+      const data = Buffer.from(bytes(int(200)));
+      const inlined = chance(0.5);
+      let location = int(data.length + 40);
+      let size = 1 + int(32);
+      if (!inlined) {
+        size = int(64);
+        // Usually a plausible length word at the location.
+        if (chance(0.7) && data.length >= 32) {
+          location = int(data.length - 31);
+          const len = int(data.length - location - 32 + 8 + 1);
+          data.fill(0, location, location + 32);
+          data.writeUInt16BE(Math.max(0, len) & 0xffff, location + 30);
+        }
+      } else if (chance(0.7) && data.length > 0) {
+        location = int(data.length);
+      }
+      const start = inlined ? location : location + 32;
+      // The operand length `check` uses: `size`, or the length word.
+      const declared = inlined
+        ? size
+        : location + 32 <= data.length
+          ? Number(BigInt(hexlify(data.subarray(location, location + 32))))
+          : 0;
+      let n: number, shift: number;
+      if (chance(0.75) && declared >= 1 && declared < 1000) {
+        // A window inside the declared operand (multi-chunk when long).
+        n = 1 + int(Math.min(declared, 96));
+        shift = int(declared - n + 1);
+      } else {
+        n = chance(0.3) ? 33 + int(60) : 1 + int(32);
+        shift = chance(0.8)
+          ? int(Math.max(1, data.length - start) + 2)
+          : int(70000);
+      }
+      const window = data.subarray(Math.min(start, data.length));
+      const { mask, expected } = randBitmask(window, shift, n);
+      let cv = bitmaskCv(shift, mask, expected);
+      if (chance(0.05)) cv = cv + "ab"; // odd length (Integrity rejects it)
+      const dataHex = hexlify(data);
+      let sol: string;
+      try {
+        sol = String(
+          Number(await mock.check(dataHex, location, cv, inlined, size)),
+        );
+      } catch {
+        reverts++;
+        continue;
+      }
+      queries.push({
+        line: `bm ${dataHex} ${location} ${cv} ${inlined ? 1 : 0} ${size}`,
+        sol,
+        info: `case ${c}: len ${data.length} loc ${location} inlined ${inlined} size ${size} shift ${shift} n ${n}`,
+      });
+    }
+    await connection.close();
+
+    const res = spawnSync(LEAN_BIN, {
+      input: queries.map((q) => q.line).join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const out = String(res.stdout).trim().split("\n");
+    expect(out.length).to.equal(queries.length);
+    const counts = new Map<string, number>();
+    for (const q of queries) counts.set(q.sol, (counts.get(q.sol) ?? 0) + 1);
+    const mismatches = queries
+      .map((q, i) => ({ ...q, lean: out[i] }))
+      .filter((q) => q.lean !== q.sol);
+    for (const m of mismatches.slice(0, 10))
+      console.log(`MISMATCH ${m.info}\n  sol:  ${m.sol}\n  lean: ${m.lean}`);
+    console.log(
+      `      ${queries.length} bitmask checks compared (status ${[...counts]
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")}), ${reverts} on-chain reverts skipped`,
+    );
+    expect(mismatches.length).to.equal(0);
+  });
+
+  it(`Bitmask checks exactly the spec bits (${CASES} random cases)`, async function () {
+    rand = mulberry32(SEED + 3000);
+    let connection: Connection | undefined;
+    let evaluator: any;
+    let checked = 0;
+    const fails: string[] = [];
+    const counts = new Map<number, number>();
+
+    for (let c = 0; c < CASES; c++) {
+      if (c % 50 === 0) {
+        await connection?.close();
+        connection = await network.create();
+        evaluator = await deployEvaluator(connection);
+      }
+      const args = Array.from({ length: 1 + int(3) }, () => randTy(2));
+      const target: Ty = chance(0.5)
+        ? { k: "word", abi: ["uint256", "address", "bytes32", "bool"][int(4)] }
+        : { k: "bytes", abi: chance(0.5) ? "bytes" : "string" };
+      const at = int(args.length + 1);
+      args.splice(at, 0, target);
+      const vals = args.map(randVal);
+      const data =
+        hexlify(bytes(4)) + abiCoder.encode(args.map(abiType), vals).slice(2);
+      const content = contentOf(target, vals[at]);
+      const paramType =
+        target.k === "word" ? Encoding.Static : Encoding.Dynamic;
+
+      // Operand: the content, or (below a Slice) a window of it.
+      let operand = content;
+      let slice: { shift: number; size: number } | undefined;
+      if (chance(0.3)) {
+        slice = { shift: int(content.length + 4), size: 1 + int(32) };
+        operand =
+          slice.shift + slice.size <= content.length
+            ? content.subarray(slice.shift, slice.shift + slice.size)
+            : Buffer.alloc(0);
+      }
+      let n: number, shift: number;
+      if (chance(0.75) && operand.length >= 1) {
+        n = 1 + int(Math.min(operand.length, 72));
+        shift = int(operand.length - n + 1);
+      } else {
+        n = chance(0.3) ? 33 + int(40) : 1 + int(32);
+        shift = int(operand.length + 3);
+      }
+      const { mask, expected } = randBitmask(operand, shift, n);
+      const want =
+        slice && slice.shift + slice.size > content.length
+          ? Status.CalldataOverflow
+          : bitmaskSpec(operand, shift, mask, expected);
+
+      const bitmask: Node = {
+        paramType: slice ? Encoding.Static : paramType,
+        operator: Operator.Bitmask,
+        compValue: bitmaskCv(shift, mask, expected),
+      };
+      const root: Node = {
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children: args.map((t, i) =>
+          i !== at
+            ? passFor(t)
+            : slice
+              ? {
+                  paramType,
+                  operator: Operator.Slice,
+                  compValue: sliceCv(slice.shift, slice.size),
+                  children: [bitmask],
+                }
+              : bitmask,
+        ),
+      };
+      const got = Number(
+        await evaluator.evaluate(data, flattenCondition(root as any), {
+          gasLimit: 30_000_000,
+        }),
+      );
+      checked++;
+      counts.set(want, (counts.get(want) ?? 0) + 1);
+      if (got !== want)
+        fails.push(
+          `case ${c}: (${args.map(abiType).join(",")}) bitmask arg ${at} ` +
+            `${slice ? `slice ${slice.shift}/${slice.size} ` : ""}shift ${shift} n ${n} ` +
+            `len ${content.length}: got status ${got}, want ${want}`,
+        );
+    }
+    await connection?.close();
+    for (const f of fails.slice(0, 10)) console.log(`      MISMATCH ${f}`);
+    console.log(
+      `      ${checked} bitmask evaluations checked against the spec (want ${[
+        ...counts,
+      ]
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")})`,
+    );
+    expect(fails.length).to.equal(0);
+  });
+
+  it(`Zip evaluates the spec elements (${CASES} random cases)`, async function () {
+    rand = mulberry32(SEED + 4000);
+    let connection: Connection | undefined;
+    let evaluator: any;
+    let checked = 0;
+    const fails: string[] = [];
+    const counts = new Map<number, number>();
+
+    // Element types: a word, bytes, or a tuple of those.
+    const randElem = (): Ty =>
+      chance(0.4)
+        ? { k: "word", abi: ["uint256", "address", "bytes32"][int(3)] }
+        : chance(0.3)
+          ? { k: "bytes", abi: chance(0.5) ? "bytes" : "string" }
+          : {
+              k: "tuple",
+              cs: Array.from({ length: 1 + int(3) }, () =>
+                chance(0.5)
+                  ? { k: "word", abi: "uint256" }
+                  : { k: "bytes", abi: "bytes" },
+              ) as Ty[],
+            };
+    // Path to the first word inside an element type, if any.
+    const wordPath = (t: Ty): number[] | undefined => {
+      if (t.k === "word") return [];
+      if (t.k === "tuple")
+        for (let i = 0; i < t.cs.length; i++) {
+          const p = wordPath(t.cs[i]);
+          if (p) return [i, ...p];
+        }
+      return undefined;
+    };
+    const at = (v: unknown, p: number[]): unknown =>
+      p.reduce((x: any, i) => x[i], v);
+    const setAt = (v: unknown, p: number[], x: unknown): unknown =>
+      p.length === 0
+        ? x
+        : (v as unknown[]).map((c, i) =>
+            i === p[0] ? setAt(c, p.slice(1), x) : c,
+          );
+    // Conditions on an element: EqualTo `x` on the word at `p`.
+    const check = (t: Ty, p: number[], x: string): Node => {
+      if (p.length === 0)
+        return {
+          paramType: Encoding.Static,
+          operator: Operator.EqualTo,
+          compValue: x,
+        };
+      if (t.k !== "tuple") throw new Error("path");
+      return {
+        paramType: Encoding.Tuple,
+        operator: Operator.Matches,
+        children: t.cs.map((c, i) =>
+          i === p[0] ? check(c, p.slice(1), x) : passFor(c),
+        ),
+      };
+    };
+    const wordAbi = (t: Ty, p: number[]): string =>
+      p.length === 0
+        ? (t as any).abi
+        : wordAbi((t as any).cs[p[0]], p.slice(1));
+
+    for (let c = 0; c < CASES; c++) {
+      if (c % 50 === 0) {
+        await connection?.close();
+        connection = await network.create();
+        evaluator = await deployEvaluator(connection);
+      }
+      const k = 2 + int(2); // zipped arrays
+      const elems = Array.from({ length: k }, randElem);
+      const len = int(4);
+      const lens = elems.map(() => (chance(0.8) ? len : int(4)));
+      const zipped = elems.map((e, f) =>
+        Array.from({ length: lens[f] }, () => randVal(e)),
+      );
+
+      // Check one field: EqualTo `x` on the first word inside it.
+      const f0 = elems.findIndex((e) => wordPath(e) !== undefined);
+      const every = chance(0.5);
+      let fields = elems.map(passFor);
+      let pred = (_i: number) => true;
+      if (f0 >= 0) {
+        const p = wordPath(elems[f0])!;
+        const abi = wordAbi(elems[f0], p);
+        const els = zipped[f0];
+        const x =
+          els.length > 0 && chance(0.7)
+            ? at(els[int(els.length)], p)
+            : randVal({ k: "word", abi });
+        // Sometimes make every element match.
+        if (els.length > 0 && chance(0.3))
+          for (let i = 0; i < els.length; i++) els[i] = setAt(els[i], p, x);
+        const xEnc = abiCoder.encode([abi], [x]);
+        fields = fields.map((n, f) =>
+          f === f0 ? check(elems[f0], p, xEnc) : n,
+        );
+        pred = (i) => abiCoder.encode([abi], [at(zipped[f0][i], p)]) === xEnc;
+      }
+
+      // Other parameters around the zipped arrays.
+      const others = Array.from({ length: int(3) }, () => randTy(1));
+      const params: { t: Ty; zip?: number }[] = [
+        ...others.map((t) => ({ t })),
+        ...elems.map((e, f) => ({ t: { k: "array", e } as Ty, zip: f })),
+      ];
+      for (let i = params.length - 1; i > 0; i--) {
+        const j = int(i + 1);
+        [params[i], params[j]] = [params[j], params[i]];
+      }
+      const vals = params.map((p) =>
+        p.zip === undefined ? randVal(p.t) : zipped[p.zip],
+      );
+      const data2 =
+        hexlify(bytes(4)) +
+        abiCoder
+          .encode(
+            params.map((p) => abiType(p.t)),
+            vals,
+          )
+          .slice(2);
+
+      const sameLen = lens.every((l) => l === lens[0]);
+      const idx = Array.from({ length: lens[0] }, (_, i) => i);
+      const want = !sameLen
+        ? Status.ZippedArrayLengthMismatch
+        : every
+          ? idx.every(pred)
+            ? Status.Ok
+            : Status.NotEveryZippedElementPasses
+          : idx.some(pred)
+            ? Status.Ok
+            : Status.NoZippedElementPasses;
+
+      const root: Node = {
+        paramType: Encoding.None,
+        operator: Operator.And,
+        children: [
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: params.map((p) =>
+              p.zip === undefined
+                ? passFor(p.t)
+                : {
+                    paramType: Encoding.Array,
+                    operator: Operator.Pluck,
+                    compValue: hexlify(Uint8Array.from([p.zip])),
+                    children: [passFor(elems[p.zip])],
+                  },
+            ),
+          },
+          {
+            paramType: Encoding.None,
+            operator: every ? Operator.ZipEvery : Operator.ZipSome,
+            compValue: hexlify(Uint8Array.from(elems.map((_, f) => f))),
+            children: [
+              {
+                paramType: Encoding.Tuple,
+                operator: Operator.Matches,
+                children: fields,
+              },
+            ],
+          },
+        ],
+      };
+      const got = Number(
+        await evaluator.evaluate(data2, flattenCondition(root as any), {
+          gasLimit: 30_000_000,
+        }),
+      );
+      checked++;
+      counts.set(want, (counts.get(want) ?? 0) + 1);
+      if (got !== want)
+        fails.push(
+          `case ${c}: (${params.map((p) => abiType(p.t)).join(",")}) ` +
+            `${every ? "ZipEvery" : "ZipSome"} lens ${lens.join("/")}: got status ${got}, want ${want}`,
+        );
+    }
+    await connection?.close();
+    for (const f of fails.slice(0, 10)) console.log(`      MISMATCH ${f}`);
+    console.log(
+      `      ${checked} zip evaluations checked against the spec (want ${[
+        ...counts,
+      ]
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")})`,
+    );
     expect(fails.length).to.equal(0);
   });
 });
