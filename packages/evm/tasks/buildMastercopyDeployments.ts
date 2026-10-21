@@ -55,6 +55,12 @@ export async function buildMastercopyDeployments(
     contract:
       "contracts/periphery/unwrappers/MultiSendUnwrapper.sol:MultiSendUnwrapper",
   });
+  const signTypedMessageLib = await readArtifact({
+    hre,
+    contractName: "SignTypedMessageLib",
+    contract:
+      "contracts/periphery/signing/SignTypedMessageLib.sol:SignTypedMessageLib",
+  });
 
   const libraries = {
     ConditionStorer: conditionStorer.address,
@@ -81,6 +87,7 @@ export async function buildMastercopyDeployments(
     customConditionChecker,
     avatarIsOwnerOfERC721,
     multiSendUnwrapper,
+    signTypedMessageLib,
     roles,
   ];
 }
