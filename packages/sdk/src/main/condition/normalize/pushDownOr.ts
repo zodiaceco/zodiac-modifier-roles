@@ -3,7 +3,7 @@ import { Encoding, Condition, Operator } from "../../types"
 // rawConditionId is injective; the packed conditionId is not (compValues are
 // concatenated without lengths), so it must not be used to decide equality.
 import { rawConditionId as conditionId } from "../conditionId"
-import { writesSlots } from "./effects"
+import { charges, writesSlots } from "./effects"
 
 /** push OR conditions as far down the tree as possible without changing semantics */
 export function pushDownOr(
@@ -53,8 +53,32 @@ export function pushDownOr(
 function matches(children: Condition[]): Condition[] {
   invariant(children.length > 1)
 
+  // the merged node keeps the first branch's compValue (the leading bytes of
+  // an AbiEncoded Matches), so all branches must agree on it
+  const compValue = (c: Condition) => (c.compValue ?? "0x").toLowerCase()
+  if (!children.every((c) => compValue(c) === compValue(children[0]))) {
+    return children
+  }
+
+  // a branch that fails after plucking leaves its slots written for the next
+  // branch, which the merged form would not reproduce
+  if (children.some(writesSlots)) {
+    return children
+  }
+
   const hingeIndex = findMatchesHingeIndex(children)
   if (hingeIndex === null) {
+    return children
+  }
+
+  // the merged Or commits to the first passing hinge child; the original
+  // could backtrack into the next branch when a later sibling exceeds an
+  // allowance this child charged
+  if (
+    children.some(
+      (c) => c.children![hingeIndex] && charges(c.children![hingeIndex])
+    )
+  ) {
     return children
   }
 
@@ -82,6 +106,11 @@ function and(children: Condition[]): Condition[] {
 
   const hingeIndices = findAndHingeIndices(children)
   if (!hingeIndices) {
+    return children
+  }
+
+  // see matches(): the merged Or must not commit to a charging child
+  if (children.some((c, i) => charges(c.children![hingeIndices[i]]))) {
     return children
   }
 

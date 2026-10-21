@@ -129,5 +129,29 @@ suite(
       )
       expect(result).toEqual(calldata(and(allowance(0xaa), or(eq(1), eq(2)))))
     })
+
+    it("does not merge calldata branches with different leading bytes", () => {
+      const sel = (s: `0x${string}`, ...children: Condition[]): Condition => ({
+        ...calldata(...children),
+        compValue: s,
+      })
+      const input = or(
+        sel("0x0004aaaaaaaa", eq(1), eq(2)),
+        sel("0x0004bbbbbbbb", eq(1), eq(3))
+      )
+      // merging would keep only selector aaaaaaaa: sel(a, 1, or(2, 3))
+      const result = normalizeCondition(input)
+      expect(result.operator).toBe(Operator.Or)
+      expect(result.children).toHaveLength(2)
+    })
+
+    it("does not merge branches whose differing child charges an allowance", () => {
+      // or(m(W, W), m(5, W)): if W(x0) passes but W(x0) + W(x1) exceeds the
+      // allowance, the original still tries x0 == 5; the merged form would not
+      const result = normalizeCondition(
+        or(calldata(allowance(1), allowance(1)), calldata(eq(5), allowance(1)))
+      )
+      expect(result.operator).toBe(Operator.Or)
+    })
   }
 )
