@@ -3,7 +3,7 @@ import { Encoding, Condition, Operator } from "../../types"
 // rawConditionId is injective; the packed conditionId is not (compValues are
 // concatenated without lengths), so it must not be used to decide equality.
 import { rawConditionId as conditionId } from "../conditionId"
-import { charges, writesSlots } from "./effects"
+import { canReorderAnd, charges, isStructural, writesSlots } from "./effects"
 
 /** push OR conditions as far down the tree as possible without changing semantics */
 export function pushDownOr(
@@ -71,6 +71,13 @@ function matches(children: Condition[]): Condition[] {
     return children
   }
 
+  // the merged Or reads a parameter iff its children do, so they must agree,
+  // or the parameters after the hinge would shift
+  const hinges = children.map((c) => c.children![hingeIndex])
+  if (!hinges.every((h) => h && isStructural(h) === isStructural(hinges[0]))) {
+    return children
+  }
+
   // the merged Or commits to the first passing hinge child; the original
   // could backtrack into the next branch when a later sibling exceeds an
   // allowance this child charged
@@ -101,6 +108,11 @@ function and(children: Condition[]): Condition[] {
   // findAndHingeIndices treats And as commutative, which it is not when a
   // child writes Pluck slots that a sibling reads
   if (children.some(writesSlots)) {
+    return children
+  }
+
+  // each branch is brought into the first branch's order
+  if (!children.every((c) => canReorderAnd(c.children!))) {
     return children
   }
 
@@ -162,6 +174,10 @@ function findMatchesHingeIndex(conditions: readonly Condition[]) {
   }
 
   let hingeIndex: number | null = null
+
+  for (const other of others) {
+    if (other.children!.length !== left.length) return null
+  }
 
   for (const other of others) {
     const right = other.children!
