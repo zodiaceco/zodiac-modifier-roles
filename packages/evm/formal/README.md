@@ -20,6 +20,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------ |
 | [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter  | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
 | [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
+| [Condition check](#condition-check): a decidable check (the spec for the SDK) whose accepted trees satisfy the decoder theorems' hypotheses                   | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 
 Not covered yet:
 
@@ -28,7 +29,12 @@ Not covered yet:
   Decoder faithfulness assumes it, and it is false today: trees Integrity
   accepts but `evaluate` misreads are tracked in
   [packages/sdk/INTEGRITY_BACKLOG.md](../../sdk/INTEGRITY_BACKLOG.md), found
-  with the fuzzer `test/formal/integrity-gaps.spec.ts`.
+  with the fuzzer `test/formal/integrity-gaps.spec.ts`. The
+  [condition check](#condition-check) proves the hypotheses for every tree it
+  accepts instead, for clients that store trees with the `...Packed` setters.
+- **Pluck slots.** That the slot a Zip reads holds the location of the unique
+  Pluck with that index, evaluated before the Zip. The decoder model assumes it
+  (Integrity checks it); the condition check does not enforce it yet.
 - **Integrity ⇒ `Packable`.** The condition packing theorem assumes the width,
   order and compValue checks listed in its
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
@@ -267,6 +273,50 @@ produce exactly this.
   modeled. `ImmutableStorage` returns the stored bytes.
 - The Lean 4.35 kernel.
 
+## Condition check
+
+[Details](ConditionCheck/README.md) · Lean: `ConditionCheck/Sound.lean`
+
+`checkCondition s c` classifies every node bottom-up: structural with an ABI
+type $`t`$ (`static`, `dynamic`, `tuple`, `array`, `call lb ts`),
+non-structural, or a Zip. Containers need structural children of the right
+types, a Zip may only be a child of `And`/`Or` (after the child that describes
+the value, and only over a dynamic value), and each Pluck a Zip reads is an
+array whose element type is the field's type. It returns the root's type.
+
+### `checkCondition_sound`: accepted trees satisfy the decoder hypotheses
+
+```math
+\mathsf{checkCondition}_s(c) = \mathsf{some}(t)
+\;\Longrightarrow\;
+\mathsf{RootOK}(c) \;\wedge\; \mathsf{ZipOK}_s(c) \;\wedge\;
+\forall v = \mathsf{call}(\mathit{pre}, \vec a):\;
+v : t \;\Longrightarrow\; \mathsf{Desc}_s(c, v)
+```
+
+$`v : t`$ is "the calldata has type $`t`$": $`|\mathit{pre}| = lb`$ and each
+argument has its type. Nested calldata has its `call` type only if it parses
+as such; with $`s = \mathsf{true}`$, any `bytes` value also counts. So every
+decoder theorem holds for every well-typed calldata (`checked_input` spells out
+`decoder_input`).
+
+### `stored_input`: from the stored buffer to the operands
+
+```math
+\mathsf{Packable}(\mathit{fs}) \;\wedge\; \mathsf{checkCondition}_s(\mathsf{tree}(\mathit{fs})) = \mathsf{some}(t) \;\wedge\; \mathsf{unpack}(\mathsf{pack}(\mathit{fs})) = (r, \_)
+\;\Longrightarrow\; \text{the conclusion of } \texttt{decoder\_input} \text{ for } r \text{ and every calldata } v : t
+```
+
+This is the full chain for a tree stored with a `...Packed` setter, with no
+Integrity on-chain.
+
+### Trusted base
+
+Nothing beyond the decoder proof's: the check is the specification, and its
+soundness is proven against `Desc`, `RootOK` and `ZipOK`. The fuzzer
+(`GAP_CHECK=1`) also evaluates every accepted tree without Integrity and
+compares with a reference evaluator.
+
 ## Layout
 
 | Path                   | Contents                                                                             |
@@ -274,6 +324,7 @@ produce exactly this.
 | `lakefile.toml`        | The Lake package: one `lean_lib` per property, plus the `roles-model` test driver    |
 | `DecoderFaithfulness/` | Decoder faithfulness: models, proofs, examples, README                               |
 | `ConditionPacking/`    | Condition packing: byte-level pack/unpack model, round-trip proof, README            |
+| `ConditionCheck/`      | Condition check: the decidable check, its soundness, end-to-end theorem, README      |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 

@@ -21,6 +21,15 @@ contract MockEvaluator {
         ConditionFlat[] memory conditions
     ) public view returns (Status) {
         Integrity.enforce(conditions);
+        return evaluateUnchecked(data, conditions);
+    }
+
+    /// @dev Without Integrity, as for trees stored with the `...Packed`
+    ///      setters.
+    function evaluateUnchecked(
+        bytes calldata data,
+        ConditionFlat[] memory conditions
+    ) public view returns (Status) {
         bytes memory packed = ConditionPacker.pack(conditions);
         (Condition memory root, uint256 maxPluck) = ConditionUnpacker.unpack(
             packed
