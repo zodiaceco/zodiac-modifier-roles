@@ -183,11 +183,11 @@ const range = (n: number) => Array.from({ length: n }, (_, i) => i)
 // Topology on the flat array (`ConditionPacking/Model.lean`)
 // ---------------------------------------------------------------------------
 
-const at = (fs: readonly FlatNode[], i: number): FlatNode =>
+export const at = (fs: readonly FlatNode[], i: number): FlatNode =>
   fs[i] ?? DEFAULT_FLAT
 
 /** `Topology.childBounds`: `[childStart, childCount]`. */
-const childBounds = (
+export const childBounds = (
   fs: readonly FlatNode[],
   index: number
 ): [number, number] => {
@@ -204,7 +204,10 @@ const childBounds = (
 }
 
 /** `Topology.isInlined`. */
-const isInlinedFlat = (fs: readonly FlatNode[], index: number): boolean => {
+export const isInlinedFlat = (
+  fs: readonly FlatNode[],
+  index: number
+): boolean => {
   const encoding = at(fs, index).paramType
   if (
     encoding === Enc.Dynamic ||
@@ -218,7 +221,10 @@ const isInlinedFlat = (fs: readonly FlatNode[], index: number): boolean => {
 }
 
 /** `Topology.inlinedSize` (`sizeLoop`). */
-const inlinedSizeFlat = (fs: readonly FlatNode[], index: number): number => {
+export const inlinedSizeFlat = (
+  fs: readonly FlatNode[],
+  index: number
+): number => {
   const encoding = at(fs, index).paramType
   if (encoding === Enc.Static) return 32
   const [start, count] = childBounds(fs, index)
@@ -237,7 +243,7 @@ const kids = (fs: readonly FlatNode[], i: number): number[] =>
   range(fs.length).filter((j) => i < j && at(fs, j).parent === i)
 
 /** `ConditionPacker._transform` on one node. */
-const transformCv = (
+export const transformCv = (
   fs: readonly FlatNode[],
   i: number,
   f: FlatNode

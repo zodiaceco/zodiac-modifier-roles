@@ -24,7 +24,9 @@ type rules, and is proven to give the decoder proof's hypotheses. It rejects
 items 1, 2 and 6, accepts the safe shapes of items 4 and 10, and covers item 7.
 The SDK implements it in src/main/condition/checkStored.ts, differentially
 tested against the Lean definition (packages/evm/test/formal/sdk-check.spec.ts).
-It is not wired into the SDK's apply flow yet.
+`checkAndPack` (src/main/condition/packConditions.ts) runs it and packs the
+buffer for the `...Packed` setters. Neither is wired into the SDK's apply
+flow yet.
 
 Severity:
 

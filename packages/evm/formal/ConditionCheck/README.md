@@ -231,6 +231,21 @@ SDK_CHECK_CASES=40000 npx hardhat test test/formal/sdk-check.spec.ts
 The SDK's own unit tests (`checkStored.test.ts`, vitest) cover one case per
 rule without Lean.
 
+`packConditions.ts` packs an accepted array for the `...Packed` setters. It
+transcribes `packSpec (transform fs)` from
+[condition packing](../ConditionPacking/README.md), which `packBuffer_eq`
+proves equal to `ConditionPacker.pack` on packable arrays; `checkAndPack`
+runs `checkStored` first. Tests:
+
+- `sdk-check.spec.ts`: byte for byte against the Lean model of the packer
+  (`pk` query) on every packable random array, and against
+  `MockPackerUnpacker.packUnchecked` (the contract) on accepted ones;
+- `sdk-packed-roles.spec.ts`: end to end on `Roles`. The SDK buffer equals the
+  one `allowFunction` stores, and trees stored with `allowFunctionPacked` are
+  enforced as intended, including the two shapes Integrity rejects
+  (`Slice` next to a plain check, a Zip next to a tuple check);
+- `packConditions.test.ts` (vitest): a hand-computed buffer.
+
 ## Tests
 
 `test/formal/integrity-gaps.spec.ts` with `GAP_CHECK=1` runs `checkStored`

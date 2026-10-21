@@ -56,6 +56,7 @@ export {
   type Ty as ConditionType,
   type FlatNode,
 } from "./condition/checkStored"
+export { packConditions, checkAndPack } from "./condition/packConditions"
 
 /*
  *

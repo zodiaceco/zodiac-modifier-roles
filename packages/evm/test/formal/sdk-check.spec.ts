@@ -10,6 +10,11 @@
  * codes, compValues of the shapes each operator expects or not). For each array and both strictness modes, the two must give
  * the same verdict (`ok <type>`, `ns` or `none`).
  *
+ * The second test checks the SDK's packer (packConditions.ts) byte for byte:
+ * against the Lean model of `ConditionPacker.pack` (`pk` query) on every
+ * packable array, and against the contract (`MockPackerUnpacker.packUnchecked`)
+ * on arrays `checkStored` accepts.
+ *
  * Needs the Lean driver: `cd formal && lake build roles-model`. Skipped when it
  * is missing. `SDK_CHECK_CASES` sets the number of arrays (default 3000),
  * `SDK_CHECK_SEED` the seed.
@@ -20,6 +25,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
+import { network } from "hardhat";
 import {
   checkStored,
   opsOk,
@@ -602,5 +609,64 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     for (const [k, n] of [...why].sort()) console.log(`      ${k}: ${n}`);
     for (const m of mismatches.slice(0, 5)) console.log(`      MISMATCH ${m}`);
     expect(mismatches.length).to.equal(0);
+  });
+
+  it(`packs byte for byte like ConditionPacker (${CASES} random flat arrays)`, async function () {
+    if (!existsSync(LEAN_BIN)) this.skip();
+    rand = mulberry32(SEED + 1);
+    const arrays = Array.from({ length: CASES }, () => {
+      if (chance(0.3)) return genFlat();
+      const fs = flattenN(genTree());
+      return chance(0.35) ? mutateFlat(fs) : fs;
+    }).filter(
+      (fs) =>
+        fs.every(
+          (f) => f.paramType <= 6 && Object.values(O).includes(f.operator),
+        ) && packableB(fs),
+    );
+    // Lean model of the packer (with the assembly), on every packable array
+    const res = spawnSync(LEAN_BIN, {
+      input:
+        arrays.map((fs) => line(0, fs).replace(/^ck 0 /, "pk ")).join("\n") +
+        "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const out = String(res.stdout).trim().split("\n");
+    expect(out.length).to.equal(arrays.length);
+    const leanDiff = arrays.filter(
+      (fs, i) => out[i] !== "0x" + hex(packConditions(fs)),
+    );
+    for (const fs of leanDiff.slice(0, 3))
+      console.log(
+        `      LEAN MISMATCH ${line(0, fs)}\n        ts ${hex(packConditions(fs))}`,
+      );
+
+    // the contract, on arrays checkStored accepts
+    const { ethers } = await network.create();
+    const mock = await (
+      await ethers.getContractFactory("MockPackerUnpacker")
+    ).deploy();
+    const accepted = arrays
+      .filter((fs) => checkStored(fs, true) !== undefined)
+      .slice(0, 600);
+    let chainDiff = 0;
+    for (const fs of accepted) {
+      const sol = await mock.packUnchecked(
+        fs.map((f) => ({ ...f, compValue: "0x" + hex(f.compValue) })),
+        { gasLimit: 30_000_000 },
+      );
+      if (sol !== "0x" + hex(packConditions(fs))) {
+        if (chainDiff++ < 3)
+          console.log(
+            `      CHAIN MISMATCH ${line(0, fs)}\n        sol ${sol}\n        ts  0x${hex(packConditions(fs))}`,
+          );
+      }
+    }
+    console.log(
+      `      ${arrays.length} packable arrays vs Lean, ${accepted.length} accepted arrays vs ConditionPacker`,
+    );
+    expect(leanDiff.length).to.equal(0);
+    expect(chainDiff).to.equal(0);
   });
 });
