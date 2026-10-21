@@ -163,5 +163,27 @@ suite(
       expect(normalizeCondition(forward)).toEqual(forward)
       expect(normalizeCondition(backward)).toEqual(backward)
     })
+
+    it("pads the parameter a type tree child describes, past non-structural children", () => {
+      // f((uint), (uint,uint)) with an ether value check first, and
+      // g((uint), (uint,uint,uint)): the type tree lists parameters only
+      const ether: Condition = {
+        paramType: Encoding.EtherValue,
+        operator: Operator.LessThan,
+        compValue: word(10),
+      }
+      const result = normalizeCondition(
+        or(
+          calldata(ether, tuple(eq(1)), tuple(eq(2), eq(3))),
+          calldata(tuple(eq(4)), tuple(eq(5), eq(6), eq(7)))
+        )
+      )
+      const f = result.children!.find(
+        (b) => b.children![0].paramType === Encoding.EtherValue
+      )!
+      // the first tuple keeps its one field, the second gets the third one
+      expect(f.children![1].children).toHaveLength(1)
+      expect(f.children![2].children).toHaveLength(3)
+    })
   }
 )
