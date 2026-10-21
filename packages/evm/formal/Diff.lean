@@ -1,5 +1,6 @@
 import DecoderFaithfulness.Roles
 import ConditionPacking.Model
+import ConditionCheck.Check
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -28,7 +29,11 @@ and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
 `parent:encoding:operator:compValueHex:inlined:size` entries joined by `|`
 (the format of `MockPackerUnpacker.roundtrip`), or `none`.
 
-Used by `test/formal/lean-model.spec.ts`.
+A line `ck <s 0|1> <nodes>` runs `ConditionCheck.checkCondition s` on the tree
+the flat array describes (`ConditionPacking.rawTree`) and prints `ok` or
+`none`.
+
+Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
 -/
 
 open DecoderFaithfulness DecoderFaithfulness.Roles
@@ -128,6 +133,13 @@ def runLine (line : String) : String :=
          compValue := n.compValue } : ConditionPacking.Flat)
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
+  | ["ck", sStr, nodesStr] =>
+    let fs := (parseNodes nodesStr).toList.map fun n =>
+      ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,
+         compValue := n.compValue } : ConditionPacking.Flat)
+    match ConditionCheck.checkCondition (sStr == "1") (ConditionPacking.rawTree (zeros 32) fs 0) with
+    | some _ => "ok"
+    | none => "none"
   | ["bm", hex, loc, cv, inl, sz] =>
     toString (statusCode
       (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))

@@ -17,6 +17,12 @@ on Integrity-accepted trees (packages/evm/test/formal/integrity-gaps.spec.ts),
 and targeted on-chain probes through `MockEvaluator` (Integrity → pack → unpack
 → evaluate).
 
+The Lean check `checkCondition` (packages/evm/formal/ConditionCheck) is the
+proven specification for the structural part of these checks: every tree it
+accepts satisfies the decoder proof's hypotheses. It rejects items 1, 2 and 6,
+accepts the safe shape of item 4, and does not yet cover the Pluck-slot rules
+or operator/compValue rules (see its README).
+
 Severity:
 
 - **bypass**: a call the author meant to forbid is allowed.

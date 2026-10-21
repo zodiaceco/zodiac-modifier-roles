@@ -20,6 +20,14 @@
  * `GAP_CLEAN=1` adds only shapes inside the proof's hypotheses: any mismatch
  * then points at the reference evaluator (or a decoder bug). `GAP_SEED` sets
  * the PRNG seed, `GAP_REPORT=<file>` writes all mismatches as JSON.
+ *
+ * `GAP_CHECK=1` also runs the SDK check (`ConditionCheck.checkCondition` in
+ * packages/evm/formal, via the Lean driver; build it with
+ * `cd formal && lake build roles-model`). Every tree the check accepts is
+ * evaluated without Integrity (as the `...Packed` setters store it) and must
+ * match the reference; that is the only assertion in this mode. It also
+ * reports which tagged shapes the check rejects that Integrity accepts, and
+ * the reverse.
  */
 import { expect } from "chai";
 import {
@@ -31,7 +39,10 @@ import {
   toBeHex,
   zeroPadValue,
 } from "ethers";
+import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import hre, { network } from "hardhat";
 
@@ -41,6 +52,48 @@ const CASES = Number(process.env.GAP_CASES ?? 0);
 const SEED = Number(process.env.GAP_SEED ?? 1);
 const CLEAN = process.env.GAP_CLEAN === "1";
 const REPORT = process.env.GAP_REPORT;
+const CHECK = process.env.GAP_CHECK === "1";
+const LEAN_BIN = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../formal/.lake/build/bin/roles-model",
+);
+
+/** `checkCondition true` on each flat tree, via the Lean driver. */
+function leanCheck(flats: any[][]): boolean[] {
+  const lines = flats.map(
+    (flat) =>
+      "ck 1 " +
+      flat
+        .map(
+          (n) =>
+            `${n.parent}:${n.paramType}:${n.operator}:${String(n.compValue).slice(2)}`,
+        )
+        .join("|"),
+  );
+  const res = spawnSync(LEAN_BIN, {
+    input: lines.join("\n") + "\n",
+    maxBuffer: 1 << 28,
+  });
+  if (res.status !== 0) throw new Error(String(res.stderr));
+  const out = String(res.stdout).trim().split("\n");
+  if (out.length !== lines.length) throw new Error("lean: short output");
+  return out.map((o) => o === "ok");
+}
+
+function errName(e: any, iface: any): string {
+  let parsed: string | undefined;
+  try {
+    parsed = iface.parseError(e?.data)?.name;
+  } catch {}
+  return (
+    e?.revert?.name ??
+    parsed ??
+    (/OutOfGas/.test(JSON.stringify(e?.data ?? e?.message ?? ""))
+      ? "out of gas"
+      : undefined) ??
+    String(e?.shortMessage ?? e?.message ?? e).slice(0, 60)
+  );
+}
 
 const abi = AbiCoder.defaultAbiCoder();
 
@@ -949,12 +1002,62 @@ describe("Integrity gaps (fuzz)", function () {
     };
     const mismatches: Mismatch[] = [];
 
+    const cases = Array.from({ length: CASES }, () => {
+      const cs = genCase();
+      return {
+        ...cs,
+        tags: new Set(tags),
+        flat: flattenCondition(strip(cs.root)),
+      };
+    });
+    const checked = CHECK ? leanCheck(cases.map((cs) => cs.flat)) : [];
+    let checkAccepted = 0;
+    let checkCompared = 0;
+    const checkMismatches: Mismatch[] = [];
+    const onlyIntegrity = new Map<string, number>();
+    const onlyCheck = new Map<string, number>();
+    const bump = (m: Map<string, number>, k: string) =>
+      m.set(k, (m.get(k) ?? 0) + 1);
+
     for (let c = 0; c < CASES; c++) {
       if (c % 200 === 0) await fresh();
-      const { t, v, root } = genCase();
+      const { t, v, root, flat } = cases[c];
+      tags = cases[c].tags;
       const data = hexlify(raw(t, v));
-      const flat = flattenCondition(strip(root));
       const tagKey = [...tags].sort().join(" ") || "(none)";
+
+      if (checked[c]) {
+        checkAccepted++;
+        let okU: boolean;
+        let statusU: string;
+        try {
+          const s = Number(
+            await evaluator.evaluateUnchecked(data, flat, {
+              gasLimit: 16_000_000,
+            }),
+          );
+          okU = s === 0;
+          statusU = okU ? "Ok" : `status ${s}`;
+        } catch (e: any) {
+          okU = false;
+          statusU = `revert ${errName(e, evaluator.interface)}`;
+        }
+        const exp = ref(root, t, v, { slots: new Map() });
+        if (exp !== "unk") {
+          checkCompared++;
+          if ((exp === "ok") !== okU)
+            checkMismatches.push({
+              kind: okU ? "bypass" : "false-reject",
+              tags: tagKey,
+              status: statusU,
+              sig: sig(t),
+              tree: show(root),
+              size: count(root),
+              data,
+              flat: flat.map((f) => ({ ...f })),
+            });
+        }
+      }
 
       let status: string;
       let ok: boolean;
@@ -965,17 +1068,7 @@ describe("Integrity gaps (fuzz)", function () {
         status = s === 0 ? "Ok" : `status ${s}`;
         ok = s === 0;
       } catch (e: any) {
-        let parsed: string | undefined;
-        try {
-          parsed = evaluator.interface.parseError(e?.data)?.name;
-        } catch {}
-        const name =
-          e?.revert?.name ??
-          parsed ??
-          (/OutOfGas/.test(JSON.stringify(e?.data ?? e?.message ?? ""))
-            ? "out of gas"
-            : undefined) ??
-          String(e?.shortMessage ?? e?.message ?? e).slice(0, 60);
+        const name = errName(e, evaluator.interface);
         if (name === "out of gas") {
           outOfGas++;
           if (process.env.GAP_DEBUG)
@@ -987,6 +1080,7 @@ describe("Integrity gaps (fuzz)", function () {
         const integrity = /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic";
         if (integrity) {
           rejected.set(name, (rejected.get(name) ?? 0) + 1);
+          if (checked[c]) bump(onlyCheck, `${name} | ${tagKey}`);
           for (const tg of tags) {
             const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
             st.rejected++;
@@ -998,6 +1092,7 @@ describe("Integrity gaps (fuzz)", function () {
         ok = false;
       }
       accepted++;
+      if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey);
       if (process.env.GAP_DEBUG)
         console.log(`OK  size ${count(root)} depth ${depth(root)}`);
       for (const tg of tags) {
@@ -1059,6 +1154,23 @@ describe("Integrity gaps (fuzz)", function () {
           2,
         ),
       );
+    if (CHECK) {
+      console.log(
+        `\n      check: ${checkAccepted} accepted, ${checkCompared} compared without Integrity, ${checkMismatches.length} mismatches`,
+      );
+      for (const [k, n] of [...onlyIntegrity].sort((a, b) => b[1] - a[1]))
+        console.log(`      Integrity accepts, check rejects ${n}× ${k}`);
+      for (const [k, n] of [...onlyCheck].sort((a, b) => b[1] - a[1]))
+        console.log(`      check accepts, Integrity rejects ${n}× ${k}`);
+      for (const m of checkMismatches.slice(0, 5)) {
+        console.log(`\n      CHECK MISMATCH ${m.kind} | ${m.tags}`);
+        console.log(`        sig    ${m.sig}`);
+        console.log(`        tree   ${m.tree}`);
+        console.log(`        status ${m.status}`);
+      }
+      expect(checkMismatches.length).to.equal(0);
+      return;
+    }
     expect(mismatches.length).to.equal(0);
   });
 });
