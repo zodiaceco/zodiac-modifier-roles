@@ -20,6 +20,11 @@ export function padToMatchTypeTree(condition: Condition): Condition {
 
   const isPaddeable = (c: Condition) => isLogical(c) || isComplex(c)
 
+  // type trees are only defined for nodes with populated children
+  if (!(condition.children || []).filter(isPaddeable).every(hasTypeTree)) {
+    return condition
+  }
+
   const typeTreeIds = new Set(
     (condition.children || [])
       .filter(isPaddeable)
@@ -91,7 +96,9 @@ function extendWithPassNodes(
     }
   }
 
-  if (isComplex(condition)) {
+  // only extend a node with a type tree of its own encoding: appending
+  // children to, e.g., an array would change what it checks
+  if (isComplex(condition) && condition.paramType === typeTree.paramType) {
     const children = (condition.children || []) as Condition[]
 
     /*
@@ -118,4 +125,14 @@ function mergeArrays<T>(a: T[], b: T[]): T[] {
   if (a.length <= b.length) return b
 
   return [...b, ...a.slice(b.length)]
+}
+
+/** createTypeTree succeeds on every node below (and including) `condition` */
+function hasTypeTree(condition: Condition): boolean {
+  const children = condition.children || []
+  if (isLogical(condition) || isComplex(condition)) {
+    if (children.length === 0) return false
+    if (isArray(condition) && !createTypeTree(children[0])) return false
+  }
+  return children.every(hasTypeTree)
 }
