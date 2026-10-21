@@ -49,6 +49,11 @@ import { fileURLToPath } from "node:url";
 
 import hre, { network } from "hardhat";
 
+import {
+  checkStored,
+  toFlatNodes,
+  tyKey,
+} from "../../../sdk/src/main/condition/checkStored.js";
 import { Encoding, Operator, flattenCondition } from "../utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
@@ -144,7 +149,8 @@ function mutate(flat: any[]): string {
   }
 }
 
-/** `checkStored true` on each flat tree, via the Lean driver. */
+/** `checkStored true` on each flat tree, via the Lean driver; also checks
+ *  that the SDK's transcription gives the same verdict. */
 function leanCheck(flats: any[][]): boolean[] {
   const lines = flats.map(
     (flat) =>
@@ -163,7 +169,20 @@ function leanCheck(flats: any[][]): boolean[] {
   if (res.status !== 0) throw new Error(String(res.stderr));
   const out = String(res.stdout).trim().split("\n");
   if (out.length !== lines.length) throw new Error("lean: short output");
-  return out.map((o) => o === "ok" || o === "ns");
+  flats.forEach((flat, i) => {
+    const v = checkStored(toFlatNodes(flat), true);
+    const ts =
+      v === undefined
+        ? "none"
+        : v.kind === "noCalldata"
+          ? "ns"
+          : `ok ${tyKey(v.type)}`;
+    if (ts !== out[i])
+      throw new Error(
+        `SDK checkStored differs from Lean: ${lines[i]}\n  lean ${out[i]}\n  sdk  ${ts}`,
+      );
+  });
+  return out.map((o) => o.startsWith("ok") || o === "ns");
 }
 
 function errName(e: any, iface: any): string {
