@@ -20,17 +20,25 @@ export const checkConditionIntegrity = (condition: Condition): void => {
  * Since the children conditions address the very same value it does not make sense for them to declare incompatible param types.
  * */
 const checkConsistentChildrenTypes = (condition: Condition): Encoding => {
+  // EtherValue checks and Zips read no parameter of their own
+  if (condition.paramType === Encoding.EtherValue) return Encoding.None
+  if (
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+  ) {
+    return Encoding.None
+  }
   if (condition.paramType !== Encoding.None) {
     return condition.paramType
   }
 
-  const [first, ...rest] = condition.children || []
-  const expectedType = first
-    ? checkConsistentChildrenTypes(first)
-    : Encoding.None
+  const childTypes = (condition.children || []).map(
+    checkConsistentChildrenTypes
+  )
+  const expectedType =
+    childTypes.find((t) => t !== Encoding.None) ?? Encoding.None
 
-  rest.forEach((child) => {
-    const childType = checkConsistentChildrenTypes(child)
+  childTypes.forEach((childType) => {
     checkParameterTypeCompatibility(expectedType, childType)
   })
 
@@ -66,7 +74,6 @@ const checkConditionIntegrityRecursive = (condition: Condition): void => {
   checkParamTypeIntegrity(condition)
   checkCompValueIntegrity(condition)
   checkChildrenIntegrity(condition)
-  banDeprecatedCondition(condition)
 }
 
 const checkParamTypeIntegrity = (condition: Condition): void => {
@@ -77,6 +84,7 @@ const checkParamTypeIntegrity = (condition: Condition): void => {
       Encoding.Tuple,
       Encoding.Array,
       Encoding.AbiEncoded,
+      Encoding.EtherValue,
     ],
 
     [Operator.And]: [Encoding.None],
@@ -90,7 +98,11 @@ const checkParamTypeIntegrity = (condition: Condition): void => {
     [Operator.ArrayEvery]: [Encoding.Array],
     [Operator.ArrayTailMatches]: [Encoding.Array],
 
+    [Operator.ZipSome]: [Encoding.None],
+    [Operator.ZipEvery]: [Encoding.None],
+
     [Operator.Slice]: [Encoding.Static, Encoding.Dynamic],
+    [Operator.Pluck]: [Encoding.Static, Encoding.EtherValue, Encoding.Array],
 
     [Operator.EqualToAvatar]: [Encoding.Static],
     [Operator.EqualTo]: [
@@ -98,12 +110,13 @@ const checkParamTypeIntegrity = (condition: Condition): void => {
       Encoding.Dynamic,
       Encoding.Tuple,
       Encoding.Array,
+      Encoding.EtherValue,
     ],
 
-    [Operator.GreaterThan]: [Encoding.Static],
-    [Operator.LessThan]: [Encoding.Static],
-    [Operator.SignedIntGreaterThan]: [Encoding.Static],
-    [Operator.SignedIntLessThan]: [Encoding.Static],
+    [Operator.GreaterThan]: [Encoding.Static, Encoding.EtherValue],
+    [Operator.LessThan]: [Encoding.Static, Encoding.EtherValue],
+    [Operator.SignedIntGreaterThan]: [Encoding.Static, Encoding.EtherValue],
+    [Operator.SignedIntLessThan]: [Encoding.Static, Encoding.EtherValue],
 
     [Operator.Bitmask]: [Encoding.Static, Encoding.Dynamic],
 
@@ -112,11 +125,12 @@ const checkParamTypeIntegrity = (condition: Condition): void => {
       Encoding.Dynamic,
       Encoding.Tuple,
       Encoding.Array,
+      Encoding.EtherValue,
     ],
 
     [Operator.WithinRatio]: [Encoding.None],
 
-    [Operator.WithinAllowance]: [Encoding.Static],
+    [Operator.WithinAllowance]: [Encoding.Static, Encoding.EtherValue],
 
     [Operator.CallWithinAllowance]: [Encoding.None],
   }
@@ -136,7 +150,18 @@ const checkParamTypeIntegrity = (condition: Condition): void => {
 const checkCompValueIntegrity = (condition: Condition): void => {
   const requiresCompValue =
     condition.operator >= Operator.EqualTo ||
-    condition.operator === Operator.Slice
+    condition.operator === Operator.Slice ||
+    condition.operator === Operator.Pluck ||
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+
+  // AbiEncoded Matches may carry leading bytes (2-byte count + prefix)
+  if (
+    condition.operator === Operator.Matches &&
+    condition.paramType === Encoding.AbiEncoded
+  ) {
+    return
+  }
 
   if (requiresCompValue && !condition.compValue) {
     throw new Error(
@@ -213,17 +238,5 @@ const checkChildrenIntegrity = (condition: Condition): void => {
         `\`${Operator[condition.operator]}\` condition must have children`
       )
     }
-  }
-}
-
-const DEPRECATED_OPERATORS = [
-  3, // Nor
-  6, // ArraySome
-  8, // ArraySubset
-]
-
-const banDeprecatedCondition = (condition: Condition): void => {
-  if (DEPRECATED_OPERATORS.includes(condition.operator)) {
-    throw new Error(`Condition operator ${condition.operator} is deprecated`)
   }
 }
