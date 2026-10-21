@@ -3,7 +3,7 @@ import { Encoding, Condition, Operator } from "../../types"
 import { conditionId, rawConditionId } from "../conditionId"
 import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
-import { canReorderAnd, canReorderOr, charges } from "./effects"
+import { canReorderAnd, canReorderOr, charges, writesSlots } from "./effects"
 
 /**
  * Normalizes a condition by transforming its structure without altering its semantics.
@@ -100,13 +100,16 @@ const flattenNestedBranches = (condition: Condition): Condition => {
 
 /**
  * remove duplicate child branches in AND/OR
- * (an AND keeps duplicates that charge an allowance: each copy charges again)
+ * (an AND keeps duplicates that charge an allowance: each copy charges again;
+ * nothing is removed next to children that write Pluck slots, since a later
+ * copy may read slots a sibling wrote in between)
  */
 const dedupeChildren = (condition: Condition): Condition => {
   if (
     condition.operator === Operator.And ||
     condition.operator === Operator.Or
   ) {
+    if (condition.children?.some(writesSlots)) return condition
     const isAnd = condition.operator === Operator.And
     const seen = new Set<string>()
     const uniqueChildren = condition.children?.filter((child) => {
