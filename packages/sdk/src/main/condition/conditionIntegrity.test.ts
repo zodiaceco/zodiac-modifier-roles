@@ -91,3 +91,79 @@ suite("checkRootConditionIntegrity()", () => {
     ).to.throw("Root param type must be `AbiEncoded`, got `Static`")
   })
 })
+
+suite("checkRootConditionIntegrity() with v3 operators", () => {
+  const word = (n: number) =>
+    `0x${n.toString(16).padStart(64, "0")}` as `0x${string}`
+  const arrayOfUint = (operator: Operator, compValue?: `0x${string}`) => ({
+    paramType: Encoding.Array,
+    operator,
+    compValue,
+    children: [{ paramType: Encoding.Static, operator: Operator.Pass }],
+  })
+
+  it("accepts ArraySome and ArrayTailMatches (no longer banned)", () => {
+    for (const operator of [Operator.ArraySome, Operator.ArrayTailMatches]) {
+      expect(() =>
+        checkRootConditionIntegrity({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [arrayOfUint(operator)],
+        })
+      ).not.toThrow()
+    }
+  })
+
+  it("accepts Plucks with a Zip and an EtherValue check next to the calldata", () => {
+    expect(() =>
+      checkRootConditionIntegrity({
+        paramType: Encoding.None,
+        operator: Operator.And,
+        children: [
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x0004a9059cbb",
+            children: [
+              arrayOfUint(Operator.Pluck, "0x00"),
+              arrayOfUint(Operator.Pluck, "0x01"),
+            ],
+          },
+          {
+            paramType: Encoding.None,
+            operator: Operator.ZipEvery,
+            compValue: "0x0001",
+            children: [
+              {
+                paramType: Encoding.Tuple,
+                operator: Operator.Matches,
+                children: [
+                  {
+                    paramType: Encoding.Static,
+                    operator: Operator.EqualTo,
+                    compValue: word(5),
+                  },
+                  { paramType: Encoding.Static, operator: Operator.Pass },
+                ],
+              },
+            ],
+          },
+          {
+            paramType: Encoding.EtherValue,
+            operator: Operator.LessThan,
+            compValue: word(10),
+          },
+        ],
+      })
+    ).not.toThrow()
+  })
+
+  it("requires a compValue on Pluck", () => {
+    expect(() =>
+      checkConditionIntegrity({
+        paramType: Encoding.Static,
+        operator: Operator.Pluck,
+      })
+    ).toThrow("must have a compValue")
+  })
+})
