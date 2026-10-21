@@ -21,6 +21,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter  | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
 | [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
 | [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
+| [Normalization](#normalization): the SDK's `normalizeCondition` never changes what a condition means (on decoded values)                                       | [`Normalize`](Normalize/README.md)                     | Proven |
 
 Not covered yet:
 
@@ -347,6 +348,77 @@ indices are not needed for safe decoding.
 - The fuzzer (`GAP_CHECK=1`) also evaluates every accepted tree without
   Integrity and compares with a reference evaluator.
 
+## Normalization
+
+[Details](Normalize/README.md) · Lean: `Normalize/Sound.lean`
+
+The SDK normalizes every condition before it is stored (`normalizeCondition`:
+prune trailing `Pass` nodes, pad branches to one type tree, flatten, dedupe and
+unwrap `And`/`Or`, push `Or` down into `Matches`/`And`, sort). `Normalize/Defs.lean`
+transcribes it; `test/formal/sdk-normalize.spec.ts` checks the transcription
+against the TypeScript on random trees (40,000 over 8 seeds, no difference).
+
+### `normalize_sound`: normalization keeps the meaning
+
+$`[\![c]\!](v, \sigma, \kappa)`$ evaluates condition $`c`$ on the decoded value
+$`v`$ with plucked slots $`\sigma`$ and allowance consumptions $`\kappa`$, and
+returns whether it passes, the slots after it, and (if it passes) the
+consumptions after it. `Pass`, `And`, `Or` and `Matches` on tuples and calldata
+are defined as `evaluate` runs them: slots written by a failing `Or` branch stay
+written, consumptions start over in every branch. Every other operator is
+opaque. For every fuel $`n`$:
+
+```math
+orall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
+```
+
+The opaque operators are assumed to (`World.Ok`): see their children only
+through their meanings; ignore trailing `Pass` children of tuple and calldata
+nodes (they describe type); write slots only if `Pluck`; charge only if
+`Custom`, `WithinAllowance` or `CallWithinAllowance`; and choose between
+charges depending on earlier ones only if `ArraySome` or `ZipSome`. Charges
+commute, which `consume_comm` proves of `AllowanceConsumer.consume`.
+
+### Findings
+
+Normalization changed what conditions check in eight ways, all fixed in the SDK
+(`packages/sdk/src/main/condition/normalize`, with regression tests in
+`effects.test.ts`):
+
+1. `pushDownOr` compared children by the packed `conditionId`, which joins
+   compValues without lengths: different tuples could collide and `Or`
+   branches were merged into a **wider** permission.
+2. Merging `Or[sel A(…), sel B(…)]` kept only the first branch's leading bytes:
+   one selector was lost and the other **widened**.
+3. `Or` branches that charge allowances were sorted: a different allowance was
+   charged.
+4. `And` children were sorted past the `Pluck` that writes the slot a Zip reads
+   (fails safe: the check rejects it).
+5. Duplicate allowance checks in an `And` were removed: each copy charges.
+6. A merged `Or` commits to its first passing hinge child, while the original
+   could backtrack when a later sibling exceeded an allowance (narrower).
+7. An `And` whose child chooses between charges (`Or[W₁, W₂]`) was sorted next
+   to another charging child: the choice depends on what was charged before.
+8. Padding paired a node's children with the sibling's type-tree children by
+   position, but type trees list only structural children: with a
+   non-structural child first (e.g. an ether value check), the wrong parameter
+   was padded. A static tuple grew, and every later parameter was **read at the
+   wrong offset**, in both branches. It also padded nodes with the type tree of
+   a different encoding (an array like a tuple).
+
+The calldata-level bug 8 is outside the theorem (which is about decoded
+values); writing down what padding may do at the value level exposed it.
+
+### Not covered
+
+- **Calldata.** The theorem is about decoded values. That the normalized tree
+  reads the same values from calldata (pruned and padded `Pass` nodes keep the
+  layout) is not proven. Padding is meant to add `Pass` nodes for parameters a
+  branch leaves out, of the type another branch gives them; it relies on the
+  branches describing the same type where they overlap.
+- `World.Ok` for the opaque operators, from reading `evaluate`.
+- The transcription, which is differentially tested, not proven equal.
+
 ## Layout
 
 | Path                   | Contents                                                                             |
@@ -355,6 +427,7 @@ indices are not needed for safe decoding.
 | `DecoderFaithfulness/` | Decoder faithfulness: models, proofs, examples, README                               |
 | `ConditionPacking/`    | Condition packing: byte-level pack/unpack model, round-trip proof, README            |
 | `ConditionCheck/`      | Condition check: the decidable check, its soundness, end-to-end theorem, README      |
+| `Normalize/`           | Normalization: transcription of the SDK's normalizeCondition, semantics, proof       |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
