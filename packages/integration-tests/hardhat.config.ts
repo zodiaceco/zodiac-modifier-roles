@@ -14,13 +14,13 @@ export default defineConfig({
     tests: "test",
   },
   solidity: {
-    version: "0.8.30",
+    version: "0.8.37",
     settings: {
       evmVersion: "cancun",
       viaIR: true,
       optimizer: {
         enabled: true,
-        runs: 100,
+        runs: 10,
       },
     },
     npmFilesToBuild: [
