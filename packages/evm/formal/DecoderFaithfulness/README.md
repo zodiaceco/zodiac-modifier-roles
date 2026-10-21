@@ -30,6 +30,9 @@ Setting (`Main.lean`):
   trailing bytes.
 - The evaluator runs on `annotate root`, the tree as pack + unpack leave it
   (with the `inlined` / `size` / `leadingBytes` metadata `Topology` computes).
+  That pack + unpack really produce `annotate` of the input tree is proven
+  separately, on the byte buffer:
+  [`ConditionPacking`](../ConditionPacking/README.md).
 
 `Eval` is what `evaluate` reaches from the root: `Visit` (one step per branch of
 `evaluate` that recurses), plus the Zip jump: field `f` of a reached Zip is

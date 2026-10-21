@@ -16,9 +16,10 @@ A successful build means every theorem below is proven. There is no `sorry`,
 
 ## Status
 
-| Property                                                                                                                                                     | Library                                                | Status |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ | ------ |
-| [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
+| Property                                                                                                                                                      | Library                                                | Status |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------ |
+| [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter  | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
+| [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
 
 Not covered yet:
 
@@ -28,6 +29,10 @@ Not covered yet:
   accepts but `evaluate` misreads are tracked in
   [packages/sdk/INTEGRITY_BACKLOG.md](../../sdk/INTEGRITY_BACKLOG.md), found
   with the fuzzer `test/formal/integrity-gaps.spec.ts`.
+- **Integrity ⇒ `Packable`.** The condition packing theorem assumes the width,
+  order and compValue checks listed in its
+  [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
+  that Integrity enforces them is from reading the code, not proven.
 - What comparison operators do with their operand (`__compare`, keccak),
   `WithinRatio`, `Custom` checkers, allowances. The operands are proven, not
   what is done with them.
@@ -210,7 +215,9 @@ $`i`$ exactly where the spec put $`u_i`$.
 ### Trusted base
 
 - `Roles.lean` matches the Solidity. It's a hand transcription, tested against
-  the contracts by `test/formal/lean-model.spec.ts`.
+  the contracts by `test/formal/lean-model.spec.ts`. Its `annotate` (what pack
+  - unpack leave of the tree) is proven against the byte-level packer and
+    unpacker by [condition packing](#condition-packing).
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
 - Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$ and
   $`\mathsf{ZipOK}_s`$ (not proven yet).
@@ -218,14 +225,57 @@ $`i`$ exactly where the spec put $`u_i`$.
   evaluated (Integrity's unique-slot and slot-filled-before-use rules).
 - The Lean 4.35 kernel.
 
+## Condition packing
+
+[Details](ConditionPacking/README.md) · Lean: `ConditionPacking/Main.lean`
+
+### `pack_roundtrip`: unpack ∘ pack returns the input tree
+
+For a flat condition array $`\mathit{fs}`$ (the `ConditionFlat[]` argument of
+the setters) that is $`\mathsf{Packable}`$ (BFS order, field widths, and the
+compValue shapes Integrity requires), any avatar, and any memory around the
+buffer:
+
+```math
+\mathsf{unpack}(\mathsf{pack}(\mathit{fs})) = \big(\mathsf{annotate}(\mathsf{tree}(\mathit{fs})),\ 1 + \max \mathsf{pluckIndex}(\mathit{fs})\big)
+```
+
+$`\mathsf{tree}(\mathit{fs})`$ is the tree the parent pointers describe
+(children in array order), with compValues as `_transform` leaves them.
+$`\mathsf{annotate}`$ adds the `inlined` / `size` / `leadingBytes` metadata. It
+is the function the decoder proof assumes, so the decoder theorems hold for the
+tree `unpack` returns.
+
+### `packBuffer_eq`: the buffer format
+
+```math
+\mathsf{pack}(\mathit{fs}) = \mathsf{be}_3(n \cdot 256 + \mathit{maxPluck})
+\mathbin{+\!\!+} \mathop{+\!\!+}_{i < n} \mathsf{be}_4(\mathsf{node}_i)
+\mathbin{+\!\!+} \mathop{+\!\!+}_{i < n,\ \mathit{cv}_i \ne []} \big(\mathsf{be}_2(|\mathit{cv}_i|) \mathbin{+\!\!+} \mathit{cv}_i\big)
+```
+
+$`\mathsf{node}_i`$ packs encoding, operator, child count, inlined size and
+has-compValue into 32 bits. A client that calls the `...Packed` setters must
+produce exactly this.
+
+### Trusted base
+
+- `ConditionPacking/Model.lean` matches the Solidity, including the assembly.
+  It's tested against the contracts (byte-identical buffers and identical
+  unpacked trees) by `test/formal/lean-model.spec.ts`.
+- The EVM semantics of `mload` / `mstore` / `mcopy` / `shl` / `shr` / `or` as
+  modeled. `ImmutableStorage` returns the stored bytes.
+- The Lean 4.35 kernel.
+
 ## Layout
 
-| Path                   | Contents                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------- |
-| `lakefile.toml`        | The Lake package: one `lean_lib` per property, plus the `roles-model` test driver           |
-| `DecoderFaithfulness/` | Decoder faithfulness: models, proofs, examples, README                                      |
-| `Diff.lean`            | `roles-model` executable: runs the Lean decoder model on queries from the differential test |
-| `../test/formal/`      | Tests of the Lean models against the Solidity contracts                                     |
+| Path                   | Contents                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `lakefile.toml`        | The Lake package: one `lean_lib` per property, plus the `roles-model` test driver    |
+| `DecoderFaithfulness/` | Decoder faithfulness: models, proofs, examples, README                               |
+| `ConditionPacking/`    | Condition packing: byte-level pack/unpack model, round-trip proof, README            |
+| `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
+| `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
 To add a property, add a `[[lean_lib]]` to `lakefile.toml` and append its name
 to `defaultTargets`. Then add a row to the status table and a section with its

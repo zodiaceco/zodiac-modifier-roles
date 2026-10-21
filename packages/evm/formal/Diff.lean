@@ -1,4 +1,5 @@
 import DecoderFaithfulness.Roles
+import ConditionPacking.Model
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -19,6 +20,13 @@ where the children result is `none` (overflow) or comma-separated locations
 A line `bm <calldata hex> <location> <compValue hex> <inlined 0|1> <size>`
 runs `bitmaskCheck` instead and prints the `Status` number it returns
 (0 `Ok`, 8 `BitmaskOverflow`, 9 `BitmaskNotAllowed`, 20 `CalldataOverflow`).
+
+A line `pk <nodes>` prints the buffer `ConditionPacker.pack` produces in the
+packing model (`ConditionPacking/Model.lean`), as hex. A line `up <buffer hex>`
+runs the model's `ConditionUnpacker.unpack` on a buffer (avatar = address 0)
+and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
+`parent:encoding:operator:compValueHex:inlined:size` entries joined by `|`
+(the format of `MockPackerUnpacker.roundtrip`), or `none`.
 
 Used by `test/formal/lean-model.spec.ts`.
 -/
@@ -89,8 +97,37 @@ def statusCode : BitmaskStatus → Nat
   | .BitmaskNotAllowed => 9
   | .CalldataOverflow => 20
 
+def hexOf (bs : Bytes) : String :=
+  let d := "0123456789abcdef".toList
+  "0x" ++ String.ofList (bs.flatMap fun b => [d.getD (b.val / 16) '0', d.getD (b.val % 16) '0'])
+
+def parseNodes (nodesStr : String) : Array Flat :=
+  (nodesStr.splitOn "|").toArray.map fun e =>
+    match e.splitOn ":" with
+    | [p, en, op, cv] => { parent := p.toNat!, encoding := en.toNat!, operator := op.toNat!,
+                           compValue := parseHex cv : Flat }
+    | _ => { parent := 0, encoding := 0, operator := 0, compValue := [] }
+
+def showUnpacked (buf : Bytes) : String :=
+  match ConditionPacking.unpack (zeros 32) (ConditionPacking.bufMem buf fun _ => 0) with
+  | none => "none"
+  | some (root, maxPluck) =>
+    let rec go : Nat → Nat → List (Nat × Condition) → List String
+      | 0, _, _ => []
+      | _, _, [] => []
+      | fuel + 1, idx, (p, c) :: queue =>
+        s!"{p}:{ConditionPacking.encCode c.encoding}:{ConditionPacking.opCode c.operator}:{(hexOf c.compValue).drop 2}:{if c.inlined then 1 else 0}:{c.size}"
+          :: go fuel (idx + 1) (queue ++ c.children.map fun ch => (idx, ch))
+    s!"{maxPluck} " ++ "|".intercalate (go 100000 0 [(0, root)])
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
+  | ["pk", nodesStr] =>
+    let fs := (parseNodes nodesStr).toList.map fun n =>
+      ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,
+         compValue := n.compValue } : ConditionPacking.Flat)
+    hexOf (ConditionPacking.pack (fun _ => 0) fs)
+  | ["up", hex] => showUnpacked (parseHex hex)
   | ["bm", hex, loc, cv, inl, sz] =>
     toString (statusCode
       (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))

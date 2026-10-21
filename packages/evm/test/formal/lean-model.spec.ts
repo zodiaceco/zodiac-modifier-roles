@@ -7,6 +7,10 @@
  * `AbiLocation.size` result computed on-chain through `MockLocator`
  * (Integrity → pack → unpack → AbiLocation) must equal the Lean model's.
  *
+ * The pack test compares the Lean packing model
+ * (packages/evm/formal/ConditionPacking/Model.lean) with ConditionPacker and
+ * ConditionUnpacker: byte-identical buffers, and identical unpacked trees.
+ *
  * Needs the Lean driver: `cd formal && lake build roles-model`. Skipped when
  * the binary is missing. `LEAN_DIFF_CASES` sets the number of cases (default
  * 300), `LEAN_DIFF_SEED` the PRNG seed.
@@ -960,5 +964,171 @@ describe("Lean model of the Roles decoder (differential)", function () {
         .join(", ")})`,
     );
     expect(fails.length).to.equal(0);
+  });
+  it(`packs and unpacks like ConditionPacker/Unpacker (${CASES} random trees)`, async function () {
+    if (!existsSync(LEAN_BIN)) this.skip();
+    rand = mulberry32(SEED + 7);
+
+    // Random compValues that exercise `_transform` and every compValue
+    // shape Integrity accepts.
+    let pluckIndex = 0;
+    const word = () => hexlify(bytes(32));
+    const decorate = (n: Node): Node => {
+      const kids = n.children?.map(decorate);
+      const d: Node = { ...n, ...(kids ? { children: kids } : {}) };
+      const leaf = !kids || kids.length === 0;
+      if (n.operator === Operator.Pass && leaf) {
+        if (n.paramType === Encoding.Static) {
+          const r = int(8);
+          if (r === 0)
+            return { ...d, operator: Operator.EqualTo, compValue: word() };
+          if (r === 1) return { ...d, operator: Operator.EqualToAvatar };
+          if (r === 2)
+            return { ...d, operator: Operator.GreaterThan, compValue: word() };
+          if (r === 3)
+            return {
+              ...d,
+              operator: Operator.Bitmask,
+              compValue: hexlify(bytes(2 + 2 * (1 + int(32)))),
+            };
+          if (r === 4 && pluckIndex < 255)
+            return {
+              ...d,
+              operator: Operator.Pluck,
+              compValue: hexlify(Uint8Array.from([(pluckIndex++ * 3) % 255])),
+            };
+          if (r === 5)
+            return {
+              ...d,
+              operator: Operator.Custom,
+              compValue: hexlify(bytes(20 + int(40))),
+            };
+        }
+        if (n.paramType === Encoding.Dynamic) {
+          const r = int(3);
+          if (r === 0)
+            return {
+              ...d,
+              operator: Operator.EqualTo,
+              compValue: abiCoder.encode(["bytes"], [hexlify(bytes(int(70)))]),
+            };
+          if (r === 1)
+            return {
+              ...d,
+              operator: Operator.Bitmask,
+              compValue: hexlify(bytes(2 + 2 * (1 + int(20)))),
+            };
+        }
+        if (n.paramType === Encoding.EtherValue && chance(0.5))
+          return { ...d, operator: Operator.LessThan, compValue: word() };
+      }
+      if (
+        n.paramType === Encoding.AbiEncoded &&
+        n.operator === Operator.Matches
+      ) {
+        const r = int(3);
+        if (r === 1) return { ...d, compValue: hexlify(bytes(2)) };
+        if (r === 2) {
+          const lb = int(33);
+          return {
+            ...d,
+            compValue: hexlify(Uint8Array.from([0, lb, ...bytes(lb)])),
+          };
+        }
+      }
+      // EqualTo on a whole container: the inlined case keeps its first word.
+      if (
+        (n.paramType === Encoding.Tuple || n.paramType === Encoding.Array) &&
+        chance(0.15)
+      )
+        return {
+          ...d,
+          operator: Operator.EqualTo,
+          compValue: hexlify(bytes(64 + 32 * int(4))),
+        };
+      return d;
+    };
+
+    let connection: Awaited<ReturnType<typeof network.create>> | undefined;
+    let mock: any;
+    const queries: { line: string; sol: string; info: string }[] = [];
+    let rejected = 0;
+    const rejectedBy = new Map<string, number>();
+    for (let c = 0; c < CASES; c++) {
+      if (c % 50 === 0) {
+        await connection?.close();
+        connection = await network.create();
+        mock = await (
+          await connection.ethers.getContractFactory("MockPackerUnpacker")
+        ).deploy();
+      }
+      pluckIndex = int(100);
+      const args = Array.from({ length: 1 + int(4) }, () =>
+        randTy(chance(0.7) ? 2 : 3),
+      );
+      const root = decorate({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children: args.map(condFor),
+      });
+      const flat = flattenCondition(root as any);
+      let sol: string;
+      try {
+        sol = await mock.pack(flat, { gasLimit: 30_000_000 });
+      } catch (e: any) {
+        rejected++;
+        // Integrity's gas grows ~3x per nesting level (see
+        // packages/sdk/INTEGRITY_BACKLOG.md, item 3).
+        let why = /out of gas/i.test(String(e?.shortMessage ?? e?.message))
+          ? "out of gas"
+          : "revert";
+        try {
+          why = mock.interface.parseError(e.data)?.name ?? why;
+        } catch {}
+        rejectedBy.set(why, (rejectedBy.get(why) ?? 0) + 1);
+        continue;
+      }
+      const nodes = flat
+        .map(
+          (n) =>
+            `${n.parent}:${n.paramType}:${n.operator}:${String(n.compValue).slice(2)}`,
+        )
+        .join("|");
+      queries.push({ line: `pk ${nodes}`, sol, info: `case ${c}: ${nodes}` });
+      // Unpack the contract's buffer in the model, compare with the contract.
+      const [unpacked, maxPluck] = await mock.roundtrip(flat, {
+        gasLimit: 30_000_000,
+      });
+      queries.push({
+        line: `up ${sol}`,
+        sol:
+          `${maxPluck} ` +
+          unpacked
+            .map(
+              (n: any) =>
+                `${n.parent}:${n.encoding}:${n.operator}:${String(n.compValue).slice(2)}:${n.inlined ? 1 : 0}:${n.size}`,
+            )
+            .join("|"),
+        info: `case ${c} (unpack): ${nodes}`,
+      });
+    }
+    await connection?.close();
+
+    const res = spawnSync(LEAN_BIN, {
+      input: queries.map((q) => q.line).join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const out = String(res.stdout).trim().split("\n");
+    expect(out.length).to.equal(queries.length);
+    const mismatches = queries
+      .map((q, i) => ({ ...q, lean: out[i] }))
+      .filter((q) => q.lean !== q.sol);
+    for (const m of mismatches.slice(0, 5))
+      console.log(`MISMATCH ${m.info}\n  sol:  ${m.sol}\n  lean: ${m.lean}`);
+    console.log(
+      `      ${queries.length / 2} buffers packed and unpacked, ${rejected} trees rejected by Integrity (${[...rejectedBy].map(([k, n]) => `${n} ${k}`).join(", ")})`,
+    );
+    expect(mismatches.length).to.equal(0);
   });
 });
