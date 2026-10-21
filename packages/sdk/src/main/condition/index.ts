@@ -9,3 +9,4 @@ export {
   type Ty,
   type FlatNode,
 } from "./checkStored"
+export { packConditions, checkAndPack } from "./packConditions"
