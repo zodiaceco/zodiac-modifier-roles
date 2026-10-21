@@ -1,6 +1,7 @@
 import DecoderFaithfulness.Roles
 import ConditionPacking.Model
 import ConditionCheck.Stored
+import Normalize.Defs
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -134,6 +135,16 @@ partial def tyKey : ConditionCheck.Ty → String
   | .array t => "A(" ++ tyKey t ++ ")"
   | .call lb ts => s!"C{lb}(" ++ ",".intercalate (ts.map tyKey) ++ ")"
 
+/-- An SDK condition tree from flat nodes `parent:enc:op:cv` (BFS order). -/
+partial def buildCond (ns : Array Flat) (i : Nat) : Normalize.Cond :=
+  let n := ns[i]!
+  let kids := (List.range ns.size).filter fun j => j > i && ns[j]!.parent == i
+  ⟨n.encoding, n.operator, n.compValue.map (·.toNat), kids.map (buildCond ns)⟩
+
+def showCond (c : Normalize.Cond) : String :=
+  "|".intercalate ((Normalize.bfsGo (Normalize.nodeCount c) [(c, 0)] #[]).toList.map
+    fun (p, x) => s!"{p}:{x.enc}:{x.op}:{(Normalize.hexOf x.cv).drop 2}")
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
   | ["pk", nodesStr] =>
@@ -142,6 +153,7 @@ def runLine (line : String) : String :=
          compValue := n.compValue } : ConditionPacking.Flat)
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
+  | ["nz", nodesStr] => showCond (Normalize.normalize 1000 (buildCond (parseNodes nodesStr) 0))
   | ["ck", sStr, nodesStr] =>
     let ns := (parseNodes nodesStr).toList
     let fs? := ns.mapM fun n =>
