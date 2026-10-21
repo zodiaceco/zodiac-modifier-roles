@@ -3,6 +3,7 @@ import { Encoding, Condition, Operator } from "../../types"
 import { conditionId, rawConditionId } from "../conditionId"
 import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
+import { canReorderAnd, canReorderOr, charges } from "./effects"
 
 /**
  * Normalizes a condition by transforming its structure without altering its semantics.
@@ -97,16 +98,20 @@ const flattenNestedBranches = (condition: Condition): Condition => {
   return condition
 }
 
-/** remove duplicate child branches in AND/OR */
+/**
+ * remove duplicate child branches in AND/OR
+ * (an AND keeps duplicates that charge an allowance: each copy charges again)
+ */
 const dedupeChildren = (condition: Condition): Condition => {
   if (
     condition.operator === Operator.And ||
     condition.operator === Operator.Or
   ) {
+    const isAnd = condition.operator === Operator.And
     const seen = new Set<string>()
     const uniqueChildren = condition.children?.filter((child) => {
       const id = rawConditionId(child)
-      if (seen.has(id)) return false
+      if (seen.has(id)) return isAnd && charges(child)
 
       seen.add(id)
       return true
@@ -130,7 +135,11 @@ const unwrapSingleChild = (condition: Condition): Condition => {
   return condition
 }
 
-/** enforce a canonical order of AND/OR branches */
+/**
+ * enforce a canonical order of AND/OR branches
+ * (unless reordering would change which allowance is charged or which
+ * Pluck slots are written before they are read, see ./effects)
+ */
 const sortBranchesCanonical = (condition: Condition): Condition => {
   if (
     condition.operator === Operator.And ||
@@ -138,12 +147,30 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
   ) {
     if (!condition.children) return condition
 
+    const canReorder =
+      condition.operator === Operator.And
+        ? canReorderAnd(condition.children)
+        : canReorderOr(condition.children)
+    if (!canReorder) return condition
+
     const sorted = condition.children
       .map((c) => ({
         condition: c,
-        id: conditionId(c),
+        id: BigInt(conditionId(c)),
+        raw: rawConditionId(c),
       }))
-      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
+      // conditionId is not injective: break ties with the raw id
+      .sort((a, b) =>
+        a.id !== b.id
+          ? a.id < b.id
+            ? -1
+            : 1
+          : a.raw < b.raw
+            ? -1
+            : a.raw > b.raw
+              ? 1
+              : 0
+      )
       .map(({ condition }) => condition)
 
     // in case of mixed-type children (dynamic & abiEncoded), those with children must come first

@@ -12,7 +12,7 @@ import { encodeKey } from "../../keys"
 
 const DUMMY_COMP = (id: number) => ({
   paramType: Encoding.Static,
-  operator: Operator.Custom,
+  operator: Operator.EqualTo, // side-effect free (a Custom adapter may charge allowances)
   compValue: abiEncode(["uint256"], [id]),
 })
 

@@ -1,6 +1,9 @@
 import { Encoding, Condition, Operator } from "../../types"
 
-import { conditionId } from "../conditionId"
+// rawConditionId is injective; the packed conditionId is not (compValues are
+// concatenated without lengths), so it must not be used to decide equality.
+import { rawConditionId as conditionId } from "../conditionId"
+import { writesSlots } from "./effects"
 
 /** push OR conditions as far down the tree as possible without changing semantics */
 export function pushDownOr(
@@ -70,6 +73,12 @@ function matches(children: Condition[]): Condition[] {
 
 function and(children: Condition[]): Condition[] {
   invariant(children.length > 1)
+
+  // findAndHingeIndices treats And as commutative, which it is not when a
+  // child writes Pluck slots that a sibling reads
+  if (children.some(writesSlots)) {
+    return children
+  }
 
   const hingeIndices = findAndHingeIndices(children)
   if (!hingeIndices) {
@@ -190,9 +199,21 @@ function findAndHingeIndices(conditions: Condition[]) {
   if (!uniqueChildrenIds.every((ids) => ids.length === 1)) return null
 
   // Step 5: Map the unique IDs back to their original index, or -1 if none
-  return uniqueChildrenIds.map((unique, i) =>
+  const hinges = uniqueChildrenIds.map((unique, i) =>
     unique.length === 0 ? -1 : allChildrenIds[i].indexOf(unique[0])
   )
+
+  // Step 6: The remaining children must agree as multisets, not just as sets:
+  // a duplicate that charges an allowance charges once per copy
+  const rest = allChildrenIds.map((ids, i) =>
+    ids
+      .filter((_, j) => j !== hinges[i])
+      .sort()
+      .join("\n")
+  )
+  if (!rest.every((r) => r === rest[0])) return null
+
+  return hinges
 }
 
 const conditionsEqual = (a: Condition | undefined, b: Condition | undefined) =>
