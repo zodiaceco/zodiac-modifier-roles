@@ -138,6 +138,11 @@ def K.fits (t : Ty) : K → Bool
   | .ty t' => t' == t
   | _ => true
 
+/-- `k` is structural with a bytes-like type. -/
+def K.bytesLikeTy : K → Bool
+  | .ty t' => t'.isBytesLike
+  | _ => false
+
 /-- `k` is not structural, or has a bytes-like type. -/
 def K.bytesLikeOk : K → Bool
   | .ty t' => t'.isBytesLike
@@ -183,7 +188,11 @@ def classifyNode (s : Bool) (e : Encoding) (op : Operator) (cs : List Condition)
   | .Array =>
     if !isNavOp op || isArrayOp op then
       match ks with
-      | .ty t :: rest => if rest.all (· == .ty t) then some (.ty (.array t)) else none
+      | .ty t :: rest =>
+        if rest.all (· == .ty t) then some (.ty (.array t))
+        -- variant array (`s = true`): children are bytes-like interpretations
+        else if s && ks.all K.bytesLikeTy then some (.ty (.array .dynamic))
+        else none
       | _ => none
     else none
   | .AbiEncoded =>
@@ -223,6 +232,12 @@ mutual
         rootOkAll s cs
 end
 
+/-- Every value of type `t1` has type `t2` (`hasT_compat`): equal types, a
+    `dynamic` field over bytes-like elements, or (`s = true`) any two
+    bytes-like types, as Integrity's `_isTypeCompatible`. -/
+def tyCompat (s : Bool) (t1 t2 : Ty) : Bool :=
+  t1 == t2 || (t2 == .dynamic && t1.isBytesLike) || (s && t1.isBytesLike && t2.isBytesLike)
+
 /-- Every Pluck node that field `f` of Zip `z` may read (same slot index) is
     an `Array` whose element template has the field's type. -/
 def zipFieldOk (s : Bool) (all : List Condition) (z : Condition) (f : Nat) : Bool :=
@@ -230,7 +245,7 @@ def zipFieldOk (s : Bool) (all : List Condition) (z : Condition) (f : Nat) : Boo
     !(pk.operator == .Pluck && cvByte pk.compValue 0 == cvByte z.compValue f) ||
       (pk.encoding == .Array &&
         match classify s (pk.children.headD default), classify s ((zipFields z).getD f default) with
-        | some (.ty t1), some (.ty t2) => t1 == t2
+        | some (.ty t1), some (.ty t2) => tyCompat s t1 t2
         | _, _ => false)
 
 def zipCheck (s : Bool) (root : Condition) : Bool :=

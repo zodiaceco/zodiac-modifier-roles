@@ -1,6 +1,6 @@
 import DecoderFaithfulness.Roles
 import ConditionPacking.Model
-import ConditionCheck.Check
+import ConditionCheck.Stored
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -29,9 +29,9 @@ and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
 `parent:encoding:operator:compValueHex:inlined:size` entries joined by `|`
 (the format of `MockPackerUnpacker.roundtrip`), or `none`.
 
-A line `ck <s 0|1> <nodes>` runs `ConditionCheck.checkCondition s` on the tree
-the flat array describes (`ConditionPacking.rawTree`) and prints `ok` or
-`none`.
+A line `ck <s 0|1> <nodes>` runs `ConditionCheck.checkStored s` (the full SDK
+check) on the flat array and prints `ok` (typed root), `ns` (root reads no
+calldata) or `none` (rejected, also for unknown encoding/operator codes).
 
 Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
 -/
@@ -134,12 +134,19 @@ def runLine (line : String) : String :=
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
   | ["ck", sStr, nodesStr] =>
-    let fs := (parseNodes nodesStr).toList.map fun n =>
-      ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,
-         compValue := n.compValue } : ConditionPacking.Flat)
-    match ConditionCheck.checkCondition (sStr == "1") (ConditionPacking.rawTree (zeros 32) fs 0) with
-    | some _ => "ok"
+    let ns := (parseNodes nodesStr).toList
+    let fs? := ns.mapM fun n =>
+      match ConditionPacking.encOf? n.encoding, ConditionPacking.opOf? n.operator with
+      | some e, some o => some ({ parent := n.parent, paramType := e, operator := o,
+                                  compValue := n.compValue } : ConditionPacking.Flat)
+      | _, _ => none
+    match fs? with
     | none => "none"
+    | some fs =>
+      match ConditionCheck.checkStored (sStr == "1") fs with
+      | some (.typed _) => "ok"
+      | some .noCalldata => "ns"
+      | none => "none"
   | ["bm", hex, loc, cv, inl, sz] =>
     toString (statusCode
       (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))
