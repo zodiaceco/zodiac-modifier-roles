@@ -20,7 +20,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------ |
 | [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter  | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
 | [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
-| [Condition check](#condition-check): a decidable check (the spec for the SDK) whose accepted trees satisfy the decoder theorems' hypotheses                   | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
+| [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 
 Not covered yet:
 
@@ -32,16 +32,18 @@ Not covered yet:
   with the fuzzer `test/formal/integrity-gaps.spec.ts`. The
   [condition check](#condition-check) proves the hypotheses for every tree it
   accepts instead, for clients that store trees with the `...Packed` setters.
-- **Pluck slots.** That the slot a Zip reads holds the location of the unique
-  Pluck with that index, evaluated before the Zip. The decoder model assumes it
-  (Integrity checks it); the condition check does not enforce it yet.
+- **Pluck slots, fully.** That the slot a Zip reads holds the location where a
+  Pluck with that index was evaluated. The decoder model assumes it. The
+  condition check proves no unwritten slot is read, against a model of
+  `evaluate`'s control flow (`Run`); that `Run` matches the Solidity is
+  trusted.
 - **Integrity ⇒ `Packable`.** The condition packing theorem assumes the width,
   order and compValue checks listed in its
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
   that Integrity enforces them is from reading the code, not proven.
-- What comparison operators do with their operand (`__compare`, keccak),
-  `WithinRatio`, `Custom` checkers, allowances. The operands are proven, not
-  what is done with them.
+- What `WithinRatio`, `Custom` checkers and allowances do with their
+  operands. (`Bitmask` and the comparison operators are proven, the latter
+  assuming keccak256 has no collisions.)
 - A Zip inside a type node (only a Zip whose ancestors are all `And`/`Or` is
   modeled). Integrity accepts such trees, but the decoder gives the Zip a
   parameter slot or inline size: later parameters are read at the wrong place (a
@@ -227,8 +229,10 @@ $`i`$ exactly where the spec put $`u_i`$.
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
 - Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$ and
   $`\mathsf{ZipOK}_s`$ (not proven yet).
-- When a Zip reads a Pluck slot, it holds a location where that Pluck was
-  evaluated (Integrity's unique-slot and slot-filled-before-use rules).
+- When a Zip reads a Pluck slot, it holds a location where a Pluck with that
+  index was evaluated (Integrity's slot-filled-before-use rule; the
+  [condition check](#condition-check) proves its version against a model of
+  the control flow).
 - The Lean 4.35 kernel.
 
 ## Condition packing
@@ -275,47 +279,73 @@ produce exactly this.
 
 ## Condition check
 
-[Details](ConditionCheck/README.md) · Lean: `ConditionCheck/Sound.lean`
+[Details](ConditionCheck/README.md) · Lean: `ConditionCheck/Stored.lean`
 
-`checkCondition s c` classifies every node bottom-up: structural with an ABI
-type $`t`$ (`static`, `dynamic`, `tuple`, `array`, `call lb ts`),
-non-structural, or a Zip. Containers need structural children of the right
-types, a Zip may only be a child of `And`/`Or` (after the child that describes
-the value, and only over a dynamic value), and each Pluck a Zip reads is an
-array whose element type is the field's type. It returns the root's type.
+`checkStored s fs` checks a flat condition array before it is stored with a
+`...Packed` setter: `Packable`, Integrity's per-operator rules, the Pluck slot
+assignment rule, and a type check. `checkCondition s c` classifies every node
+bottom-up: structural with an ABI type $`t`$ (`static`, `dynamic`, `tuple`,
+`array`, `call lb ts`), non-structural, or a Zip. Containers need structural
+children of the right types, a Zip may only be a child of `And`/`Or` (after
+the child that describes the value, and only over a dynamic value), and each
+Pluck a Zip reads is an array whose element type fits the field. The check
+returns the root's type, or that the root reads no calldata.
 
-### `checkCondition_sound`: accepted trees satisfy the decoder hypotheses
+### `checkStored_sound`: what an accepted array guarantees
+
+For every avatar and memory contents:
 
 ```math
-\mathsf{checkCondition}_s(c) = \mathsf{some}(t)
+\mathsf{checkStored}_s(\mathit{fs}) = \mathsf{some}(\mathsf{typed}\ t)
 \;\Longrightarrow\;
-\mathsf{RootOK}(c) \;\wedge\; \mathsf{ZipOK}_s(c) \;\wedge\;
-\forall v = \mathsf{call}(\mathit{pre}, \vec a):\;
-v : t \;\Longrightarrow\; \mathsf{Desc}_s(c, v)
+\mathsf{unpack}(\mathsf{pack}(\mathit{fs})) = \mathsf{annotate}(c)
+\;\wedge\; \neg\,\mathsf{Run}(c) \text{ reads an unwritten slot}
+\;\wedge\; \mathsf{RootOK}(c) \;\wedge\; \mathsf{ZipOK}_s(c) \;\wedge\;
+\forall v : t.\ \mathsf{Desc}_s(c, v)
 ```
 
-$`v : t`$ is "the calldata has type $`t`$": $`|\mathit{pre}| = lb`$ and each
-argument has its type. Nested calldata has its `call` type only if it parses
-as such; with $`s = \mathsf{true}`$, any `bytes` value also counts. So every
-decoder theorem holds for every well-typed calldata (`checked_input` spells out
-`decoder_input`).
+where $`c = \mathsf{tree}(\mathit{fs})`$ and $`v : t`$ is "the calldata
+$`v = \mathsf{call}(\mathit{pre}, \vec a)`$ has type $`t`$":
+$`|\mathit{pre}| = lb`$ and each argument has its type. Nested calldata has its
+`call` type only if it parses as such; with $`s = \mathsf{true}`$, any `bytes`
+value also counts. So every decoder theorem holds for every well-typed
+calldata. For $`\mathsf{noCalldata}`$, every node `evaluate` reaches reads only
+the ether value.
 
-### `stored_input`: from the stored buffer to the operands
+The parts: `checkCondition_sound` (the type check gives the decoder
+hypotheses), `run_sound` (the slot rule: no execution reads an unwritten
+slot), `packableB_sound`, and `checkCondition_avatar` (the avatar stored in
+`EqualToAvatar` nodes doesn't matter).
+
+### Comparison operators
 
 ```math
-\mathsf{Packable}(\mathit{fs}) \;\wedge\; \mathsf{checkCondition}_s(\mathsf{tree}(\mathit{fs})) = \mathsf{some}(t) \;\wedge\; \mathsf{unpack}(\mathsf{pack}(\mathit{fs})) = (r, \_)
-\;\Longrightarrow\; \text{the conclusion of } \texttt{decoder\_input} \text{ for } r \text{ and every calldata } v : t
+\texttt{EqualTo}(\mathsf{abi.encode}(w)) \text{ passes on } u \iff \mathsf{enc}(u) = \mathsf{enc}(w)
+\qquad
+\texttt{GreaterThan}(x) \text{ passes on } u \iff \mathsf{uint}(\mathsf{enc}(u)) > \mathsf{uint}(x)
 ```
 
-This is the full chain for a tree stored with a `...Packed` setter, with no
-Integrity on-chain.
+(`equalTo_intended`, `compare_word`, signed variants likewise, `checked_equalTo`
+end to end), assuming keccak256 has no collisions.
+
+### Findings
+
+Where Integrity and the check differ (details in the
+[README](ConditionCheck/README.md#findings-where-integrity-and-the-check-differ)):
+Integrity accepts trees `evaluate` misreads (backlog items 1, 2, 6), and
+rejects two shapes that are read correctly: `Slice` next to plain checks
+(item 4) and a Zip next to a `Tuple`/`Array` check (item 10). Unique Pluck
+indices are not needed for safe decoding.
 
 ### Trusted base
 
-Nothing beyond the decoder proof's: the check is the specification, and its
-soundness is proven against `Desc`, `RootOK` and `ZipOK`. The fuzzer
-(`GAP_CHECK=1`) also evaluates every accepted tree without Integrity and
-compares with a reference evaluator.
+- The decoder and packing proofs' trusted bases.
+- `Run` (`Slots.lean`) matches `evaluate`'s control flow, and `_pluck` is the
+  only writer of the slots.
+- `comparePasses` matches `__compare`/`__compareSigned`; keccak256 has no
+  collisions (for `EqualTo`).
+- The fuzzer (`GAP_CHECK=1`) also evaluates every accepted tree without
+  Integrity and compares with a reference evaluator.
 
 ## Layout
 

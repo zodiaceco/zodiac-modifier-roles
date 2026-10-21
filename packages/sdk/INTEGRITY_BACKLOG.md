@@ -17,11 +17,11 @@ on Integrity-accepted trees (packages/evm/test/formal/integrity-gaps.spec.ts),
 and targeted on-chain probes through `MockEvaluator` (Integrity → pack → unpack
 → evaluate).
 
-The Lean check `checkCondition` (packages/evm/formal/ConditionCheck) is the
-proven specification for the structural part of these checks: every tree it
-accepts satisfies the decoder proof's hypotheses. It rejects items 1, 2 and 6,
-accepts the safe shape of item 4, and does not yet cover the Pluck-slot rules
-or operator/compValue rules (see its README).
+The Lean check `checkStored` (packages/evm/formal/ConditionCheck) is the
+specification for the SDK's check on a flat array before a `...Packed` setter.
+It covers `Packable`, Integrity's operator rules, the Pluck-slot rule and the
+type rules, and is proven to give the decoder proof's hypotheses. It rejects
+items 1, 2 and 6, accepts the safe shape of item 4, and covers item 7.
 
 Severity:
 
@@ -29,15 +29,19 @@ Severity:
 - **false reject**: a call the author meant to allow is rejected (fails safe).
 - **usability**: a legitimate tree cannot be stored.
 
-| #   | Shape                                            | Severity     | Status                           |
-| --- | ------------------------------------------------ | ------------ | -------------------------------- |
-| 0   | SDK checker predates v3                          | prerequisite | —                                |
-| 1   | Zip anywhere but under And/Or only               | bypass       | confirmed on-chain (5 shapes)    |
-| 2   | Non-structural child in a Pass/EqualTo container | false reject | confirmed (fuzzer + on-chain)    |
-| 3   | Integrity dominates storing cost, hits tx cap    | usability    | measured                         |
-| 4   | `Slice` and plain checks can't share an And/Or   | usability    | confirmed (Integrity rejects)    |
-| 5   | Checks below Pass/EqualTo/Custom/Pluck never run | lint         | by design, easy to misread       |
-| 6   | Root encoding not checked on-chain               | low          | code reading; SDK already checks |
+| #   | Shape                                            | Severity     | Status                             |
+| --- | ------------------------------------------------ | ------------ | ---------------------------------- |
+| 0   | SDK checker predates v3                          | prerequisite | —                                  |
+| 1   | Zip anywhere but under And/Or only               | bypass       | confirmed on-chain (5 shapes)      |
+| 2   | Non-structural child in a Pass/EqualTo container | false reject | confirmed (fuzzer + on-chain)      |
+| 3   | Integrity dominates storing cost, hits tx cap    | usability    | measured                           |
+| 4   | `Slice` and plain checks can't share an And/Or   | usability    | confirmed (Integrity rejects)      |
+| 5   | Checks below Pass/EqualTo/Custom/Pluck never run | lint         | by design, easy to misread         |
+| 6   | Root encoding not checked on-chain               | low          | code reading; SDK already checks   |
+| 7   | `...Packed` setters skip every check             | prerequisite | code reading; proven what to check |
+| 8   | `Custom` checkers can read unwritten Pluck slots | lint         | code reading                       |
+| 9   | Integrity rules not needed for safe decoding     | info         | proof                              |
+| 10  | Zip next to a `Tuple`/`Array` check is rejected  | usability    | fuzzer (checker mode)              |
 
 ## 0. The SDK checker predates v3
 
@@ -172,12 +176,65 @@ the first calldata word as a length and slices 32 bytes too far. The SDK's
 still accepts the `Dynamic` variant beside it. Keep the root check when porting
 (item 0), and reject `Dynamic` at the root.
 
+## 7. `...Packed` setters skip every check (prerequisite)
+
+`allowTargetPacked`, `allowFunctionPacked` and `allowFunctionGloballyPacked`
+store a buffer as given; `MalformedConditionBuffer` is never raised. Besides
+the shapes above, a client that builds buffers must itself enforce what the
+packer and unpacker rely on (`Packable` in
+packages/evm/formal/ConditionPacking: BFS order, field widths, Pluck index
+≤ 254, `AbiEncoded` and `EqualTo` compValue shapes; otherwise the buffer
+decodes to a different tree) and that every slot a Zip or `WithinRatio` reads
+is written first (an unwritten slot reads as location 0: the Zip decodes an
+array at the start of calldata).
+
+SDK check: `checkStored` (all of it). Its parts are proven sufficient:
+`packableB_sound`, `run_sound`, `checkCondition_sound`.
+
+## 8. `Custom` checkers can read unwritten Pluck slots (lint)
+
+`Custom` receives `context.pluckedValues`, but nothing says which slots a
+checker reads, so Integrity cannot require them to be written. A checker that
+reads a slot no Pluck wrote on the current path sees zero.
+
+SDK: document for custom checker authors; optionally let the author declare
+the slots a `Custom` node reads and check them like `WithinRatio`'s.
+
+## 9. Integrity rules not needed for safe decoding (info)
+
+The proof of the condition check shows that some rules Integrity enforces are
+not needed for `evaluate` to read the right bytes. The SDK check keeps them,
+since they catch likely mistakes:
+
+- `DuplicatePluckIndex`: with two Pluck nodes on one slot, a Zip reads
+  whichever ran last; both are constrained by the Zip type rule, so the read
+  is still correct.
+- A Zip needs at least two arrays (`ArraySome`/`ArrayEvery` cover one).
+
+Items 4 and 10 are the rules found that reject trees the decoder reads
+correctly and that an author would want.
+
+## 10. Zip next to a `Tuple`/`Array` check is rejected (usability)
+
+`_validateVariantTypes` treats a Zip as a typed sibling in an `And`/`Or`,
+compatible only with `Dynamic`/`AbiEncoded` siblings. So
+`And[Matches:Tuple[..., a[], b[]], ZipEvery(...)]` on a dynamic tuple
+parameter is rejected with `UnsuitableChildTypeTree`, although the decoder
+reads it correctly (the checker-mode fuzzer evaluates such trees without
+Integrity and they match the reference). Only the root form
+`And[Matches:AbiEncoded[...], Zip]` passes, so zipping arrays inside a tuple
+parameter needs the Zip at the root.
+
+SDK: `checkStored` accepts it (for `...Packed` setters). Contract fix: give a
+Zip hash 0 in `TypeTree`, together with item 1.
+
 ## Running the fuzzer
 
 ```
 cd packages/evm
 GAP_CASES=2000 npx hardhat test test/formal/integrity-gaps.spec.ts
 GAP_CASES=300 GAP_CLEAN=1 npx hardhat test test/formal/integrity-gaps.spec.ts  # reference sanity check
+GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity-gaps.spec.ts  # the SDK check vs Integrity
 ```
 
 Mismatches are grouped by the tags of the shapes the generator added. In clean

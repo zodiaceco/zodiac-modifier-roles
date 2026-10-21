@@ -195,7 +195,8 @@ theorem node_tuple {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
 theorem node_array {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .Array op cs lb cv ks = some k) :
     ∃ t0, k = .ty (.array t0) ∧ (isNavOp op = false ∨ isArrayOp op = true) ∧
-      ks ≠ [] ∧ ∀ k', k' ∈ ks → k' = .ty t0 := by
+      ks ≠ [] ∧ ∀ k', k' ∈ ks → ∃ t', k' = .ty t' ∧
+        (t' = t0 ∨ (s = true ∧ t0 = .dynamic ∧ t'.isBytesLike = true)) := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
@@ -208,9 +209,20 @@ theorem node_array {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
         intro k' hk'
         simp only [List.mem_cons] at hk'
         rcases hk' with rfl | hk'
-        · rfl
-        · simpa using List.all_eq_true.mp hr k' hk'
-      · cases h
+        · exact ⟨t, rfl, .inl rfl⟩
+        · have := List.all_eq_true.mp hr k' hk'
+          simp only [beq_iff_eq] at this
+          exact ⟨t, this, .inl rfl⟩
+      · split at h
+        · rename_i hv
+          simp only [Option.some.injEq] at h; subst h
+          simp only [Bool.and_eq_true] at hv
+          refine ⟨.dynamic, rfl, by simpa [Bool.or_eq_true] using hc, by simp, ?_⟩
+          intro k' hk'
+          have := List.all_eq_true.mp hv.2 k' hk'
+          rcases k' with t' | _ | _ <;> simp [K.bytesLikeTy] at this
+          exact ⟨t', rfl, .inr ⟨hv.1, rfl, this⟩⟩
+        · cases h
     · cases h
   · cases h
 
@@ -630,8 +642,12 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     have hchild : ∀ ch, ch ∈ c.children → ∀ v, v ∈ vs → DescS s ch v := by
       intro ch hm v hv
       obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
-      rw [hallk k hk] at hck
-      exact (ih ch hm hck (hev v hv)).1
+      obtain ⟨t', rfl, ht'⟩ := hallk k hk
+      have hv' : HasT s v t' := by
+        rcases ht' with rfl | ⟨hs, rfl, hb⟩
+        · exact hev v hv
+        · exact hasT_of_bytesLike hs (isBytesLike_of_hasT (hev v hv) rfl) hb
+      exact (ih ch hm hck hv').1
     obtain ⟨c0, cs, hcs⟩ : ∃ c0 cs, c.children = c0 :: cs := by
       cases hc : c.children with
       | nil => rw [hc] at hlen; exact absurd (List.eq_nil_of_length_eq_zero hlen) hne
@@ -751,9 +767,13 @@ theorem hasT_of_descS (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     obtain ⟨vs, c0, cs, rfl, hcs, h0⟩ := Desc.array_inv hD he
     have hm0 : c0 ∈ c.children := by rw [hcs]; simp
     obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm0
-    rw [hallk k hk] at hck
+    obtain ⟨t', rfl, ht'⟩ := hallk k hk
     simp only [HasT]
-    exact ⟨t0, rfl, (hasTEach_iff s t0).mpr fun v hv => ih c0 hm0 hck (h0 v hv)⟩
+    refine ⟨t0, rfl, (hasTEach_iff s t0).mpr fun v hv => ?_⟩
+    have := ih c0 hm0 hck (h0 v hv)
+    rcases ht' with rfl | ⟨_, rfl, hb⟩
+    · exact this
+    · exact hasT_dynamic (isBytesLike_of_hasT this hb)
   case AbiEncoded =>
     obtain ⟨ts, hk, _, _, hts⟩ := node_abi hn
     simp only [K.ty.injEq] at hk; subst hk
@@ -771,6 +791,14 @@ termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
 
 /-! ## Zips -/
+
+theorem hasT_compat {s : Bool} {t1 t2 : Ty} {v : Val} (hc : tyCompat s t1 t2 = true)
+    (h : HasT s v t1) : HasT s v t2 := by
+  simp only [tyCompat, Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq] at hc
+  rcases hc with (rfl | ⟨rfl, hb⟩) | ⟨⟨hs, hb1⟩, hb2⟩
+  · exact h
+  · exact hasT_dynamic (isBytesLike_of_hasT h hb)
+  · exact hasT_of_bytesLike hs (isBytesLike_of_hasT h hb1) hb2
 
 theorem zipOK_of (s : Bool) (root : Condition) (hz : zipCheck s root = true) : ZipOK s root := by
   intro z pk f hzs hpks hzop hf hpk hcv
@@ -790,11 +818,10 @@ theorem zipOK_of (s : Bool) (root : Condition) (hz : zipCheck s root = true) : Z
   refine ⟨henc, fun vs hD v hv => ?_⟩
   split at hm
   · rename_i t1 t2 h1 h2
-    simp only [beq_iff_eq] at hm; subst hm
     obtain ⟨vs', c0, cs, hvs, hch, h0⟩ := Desc.array_inv hD henc
     cases hvs
     rw [hch] at h1
-    exact (desc_of_ty s _ h2 (hasT_of_descS s c0 h1 (h0 v hv))).1
+    exact (desc_of_ty s _ h2 (hasT_compat hm (hasT_of_descS s c0 h1 (h0 v hv)))).1
   · cases hm
 
 /-! ## The root -/

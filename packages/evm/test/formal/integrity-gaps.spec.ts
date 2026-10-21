@@ -27,7 +27,10 @@
  * evaluated without Integrity (as the `...Packed` setters store it) and must
  * match the reference; that is the only assertion in this mode. It also
  * reports which tagged shapes the check rejects that Integrity accepts, and
- * the reverse.
+ * the reverse. `GAP_MUTATE=0.5` (with `GAP_CHECK=1`) also changes one node of
+ * that share of trees (operator, encoding, compValue length or a boundary
+ * byte) to probe the operator rules; mutated trees are only compared on
+ * accept/reject.
  */
 import { expect } from "chai";
 import {
@@ -53,12 +56,95 @@ const SEED = Number(process.env.GAP_SEED ?? 1);
 const CLEAN = process.env.GAP_CLEAN === "1";
 const REPORT = process.env.GAP_REPORT;
 const CHECK = process.env.GAP_CHECK === "1";
+const MUTATE = Number(process.env.GAP_MUTATE ?? 0);
 const LEAN_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../formal/.lake/build/bin/roles-model",
 );
 
-/** `checkCondition true` on each flat tree, via the Lean driver. */
+const OPS = [
+  0, 1, 2, 4, 5, 6, 7, 8, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+  28, 30,
+];
+
+/** A `WithinRatio` compValue: slots, decimals, ratios, optional adapters. */
+function ratioCv(): Uint8Array {
+  const pick = <T>(xs: T[]) => xs[int(xs.length)];
+  const head = [
+    int(4),
+    pick([0, 18, 27, 28]),
+    int(4),
+    pick([0, 6, 27, 28]),
+    ...bytes(4).map((b) => (chance(0.3) ? 0 : b)),
+    ...bytes(4).map((b) => (chance(0.3) ? 0 : b)),
+  ];
+  const blob = () => {
+    const n = pick([0, 0, 5, 20, 24]);
+    return [n, ...bytes(n)];
+  };
+  const tail = chance(0.5) ? [] : chance(0.5) ? blob() : [...blob(), ...blob()];
+  const out = [...head, ...tail];
+  if (chance(0.2)) out.pop();
+  return Uint8Array.from(out);
+}
+
+/** Changes one node of a flat tree; returns a description. */
+function mutate(flat: any[]): string {
+  const i = int(flat.length);
+  const n = flat[i];
+  const was = Operator[n.operator];
+  const leaf = !flat.some((m, j) => j > 0 && m.parent === i);
+  switch (int(leaf ? 5 : 4)) {
+    case 0:
+      n.operator = OPS[int(OPS.length)];
+      return `op ${was}→${Operator[n.operator]}`;
+    case 1:
+      n.paramType = int(7);
+      return `enc→${Encoding[n.paramType]} on ${was}`;
+    case 2: {
+      const len = [0, 1, 2, 3, 4, 5, 12, 20, 31, 32, 33, 34, 54, 63, 64, 65][
+        int(16)
+      ];
+      n.compValue = hexlify(bytes(len));
+      return `cv length ${len} on ${was}`;
+    }
+    case 3: {
+      const b = getBytes(n.compValue);
+      if (b.length === 0) return `cv byte (empty) on ${was}`;
+      const k = int(Math.min(b.length, 4));
+      b[k] = [0, 1, 27, 28, 32, 33, 254, 255][int(8)];
+      n.compValue = hexlify(b);
+      return `cv byte ${k} on ${was}`;
+    }
+    default: {
+      const op = [
+        Operator.WithinRatio,
+        Operator.WithinAllowance,
+        Operator.CallWithinAllowance,
+        Operator.Custom,
+        Operator.Empty,
+      ][int(5)];
+      n.operator = op;
+      if (op === Operator.WithinRatio) {
+        n.paramType = Encoding.None;
+        n.compValue = hexlify(ratioCv());
+      } else if (op === Operator.WithinAllowance) {
+        n.compValue = hexlify(bytes([32, 34, 54, 53][int(4)]));
+      } else if (op === Operator.CallWithinAllowance) {
+        n.paramType = Encoding.None;
+        n.compValue = hexlify(bytes(32));
+      } else if (op === Operator.Custom) {
+        n.compValue = hexlify(bytes([19, 20, 52][int(3)]));
+      } else {
+        n.paramType = Encoding.None;
+        n.compValue = "0x";
+      }
+      return `leaf→${Operator[op]}`;
+    }
+  }
+}
+
+/** `checkStored true` on each flat tree, via the Lean driver. */
 function leanCheck(flats: any[][]): boolean[] {
   const lines = flats.map(
     (flat) =>
@@ -77,7 +163,7 @@ function leanCheck(flats: any[][]): boolean[] {
   if (res.status !== 0) throw new Error(String(res.stderr));
   const out = String(res.stdout).trim().split("\n");
   if (out.length !== lines.length) throw new Error("lean: short output");
-  return out.map((o) => o === "ok");
+  return out.map((o) => o === "ok" || o === "ns");
 }
 
 function errName(e: any, iface: any): string {
@@ -1004,10 +1090,14 @@ describe("Integrity gaps (fuzz)", function () {
 
     const cases = Array.from({ length: CASES }, () => {
       const cs = genCase();
+      const flat = flattenCondition(strip(cs.root)).map((f) => ({ ...f }));
+      let mutated: string | undefined;
+      if (CHECK && MUTATE > 0 && chance(MUTATE)) mutated = mutate(flat);
       return {
         ...cs,
-        tags: new Set(tags),
-        flat: flattenCondition(strip(cs.root)),
+        tags: mutated ? new Set([...tags, `mut: ${mutated}`]) : new Set(tags),
+        flat,
+        mutated,
       };
     });
     const checked = CHECK ? leanCheck(cases.map((cs) => cs.flat)) : [];
@@ -1016,8 +1106,20 @@ describe("Integrity gaps (fuzz)", function () {
     const checkMismatches: Mismatch[] = [];
     const onlyIntegrity = new Map<string, number>();
     const onlyCheck = new Map<string, number>();
-    const bump = (m: Map<string, number>, k: string) =>
+    const examples = new Map<string, string>();
+    const bump = (m: Map<string, number>, k: string, flat?: any[]) => {
       m.set(k, (m.get(k) ?? 0) + 1);
+      if (flat && !examples.has(k))
+        examples.set(
+          k,
+          flat
+            .map(
+              (n, i) =>
+                `${i}<${n.parent} ${Encoding[n.paramType]}:${Operator[n.operator]}:${String(n.compValue).slice(0, 20)}`,
+            )
+            .join(" "),
+        );
+    };
 
     for (let c = 0; c < CASES; c++) {
       if (c % 200 === 0) await fresh();
@@ -1026,7 +1128,7 @@ describe("Integrity gaps (fuzz)", function () {
       const data = hexlify(raw(t, v));
       const tagKey = [...tags].sort().join(" ") || "(none)";
 
-      if (checked[c]) {
+      if (checked[c] && !cases[c].mutated) {
         checkAccepted++;
         let okU: boolean;
         let statusU: string;
@@ -1080,7 +1182,7 @@ describe("Integrity gaps (fuzz)", function () {
         const integrity = /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic";
         if (integrity) {
           rejected.set(name, (rejected.get(name) ?? 0) + 1);
-          if (checked[c]) bump(onlyCheck, `${name} | ${tagKey}`);
+          if (checked[c]) bump(onlyCheck, `${name} | ${tagKey}`, flat);
           for (const tg of tags) {
             const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
             st.rejected++;
@@ -1092,7 +1194,8 @@ describe("Integrity gaps (fuzz)", function () {
         ok = false;
       }
       accepted++;
-      if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey);
+      if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey, flat);
+      if (cases[c].mutated) continue;
       if (process.env.GAP_DEBUG)
         console.log(`OK  size ${count(root)} depth ${depth(root)}`);
       for (const tg of tags) {
@@ -1162,6 +1265,9 @@ describe("Integrity gaps (fuzz)", function () {
         console.log(`      Integrity accepts, check rejects ${n}× ${k}`);
       for (const [k, n] of [...onlyCheck].sort((a, b) => b[1] - a[1]))
         console.log(`      check accepts, Integrity rejects ${n}× ${k}`);
+      if (process.env.GAP_EXAMPLES)
+        for (const [k, e] of examples)
+          console.log(`\n      EXAMPLE ${k}\n        ${e}`);
       for (const m of checkMismatches.slice(0, 5)) {
         console.log(`\n      CHECK MISMATCH ${m.kind} | ${m.tags}`);
         console.log(`        sig    ${m.sig}`);
