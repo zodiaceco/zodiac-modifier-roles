@@ -36,6 +36,15 @@ export function pushDownOr(
     return condition
   }
 
+  // Matches compares children by position only on tuples and calldata
+  if (
+    isMatches &&
+    children[0].paramType !== Encoding.Tuple &&
+    children[0].paramType !== Encoding.AbiEncoded
+  ) {
+    return condition
+  }
+
   const [first] = children
 
   const nextChildren = isMatches

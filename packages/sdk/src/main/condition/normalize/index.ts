@@ -20,6 +20,10 @@ import {
  * deduplicated storage. In particular, the Roles contract stores conditions as bytecode
  * at addresses derived from hashing the condition data — so structurally consistent
  * representations help avoid redundant storage.
+ *
+ * That the rewrites keep the meaning is proven in Lean, against a
+ * transcription of this code (packages/evm/formal/Normalize); effects.ts
+ * holds the rules for reordering and removing children.
  */
 export function normalizeCondition(condition: Condition): Condition {
   let result: Condition = {
