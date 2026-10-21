@@ -3,7 +3,13 @@ import { Encoding, Condition, Operator } from "../../types"
 import { conditionId, rawConditionId } from "../conditionId"
 import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
-import { canReorderAnd, canReorderOr, charges, writesSlots } from "./effects"
+import {
+  canReorderAnd,
+  canReorderOr,
+  charges,
+  isStructural,
+  writesSlots,
+} from "./effects"
 
 /**
  * Normalizes a condition by transforming its structure without altering its semantics.
@@ -35,7 +41,10 @@ export function normalizeCondition(condition: Condition): Condition {
   return result
 }
 
-/** Removes trailing Pass nodes from Matches on AbiEncoded and dynamic tuples (as long as the tuple stays marked dynamic) */
+/**
+ * Removes trailing Pass nodes from Matches on AbiEncoded and dynamic tuples (as long as the tuple stays marked dynamic).
+ * Non-structural children (e.g. CallWithinAllowance) read no parameter, so Pass nodes before them are trailing too.
+ */
 const prunePassNodes = (condition: Condition): Condition => {
   if (!condition.children) return condition
   if (condition.operator !== Operator.Matches) return condition
@@ -48,36 +57,35 @@ const prunePassNodes = (condition: Condition): Condition => {
 
   if (!canPrune) return condition
 
+  // CallWithinAllowance children read no parameter and are moved to the end,
+  // unless that could change the evaluation (see canReorderAnd)
   const isGlobalAllowance = (child: Condition) =>
-    child.operator === Operator.CallWithinAllowance
+    child.operator === Operator.CallWithinAllowance && !isStructural(child)
+  const children = canReorderAnd(condition.children)
+    ? [
+        ...condition.children.filter((child) => !isGlobalAllowance(child)),
+        ...condition.children.filter(isGlobalAllowance),
+      ]
+    : condition.children
 
-  // keep all children nodes with Encoding.None
-  // (CallWithinAllowance conditions appear as children of AbiEncoded.Matches)
-  const tailChildren = condition.children.filter(isGlobalAllowance)
-  const prunableChildren = condition.children.filter(
-    (child) => !isGlobalAllowance(child)
-  )
-
-  // Start from the end and prune all trailing Pass nodes.
   // Always keep the first child, even if it is a Pass, because children must not be empty.
   // For tuples keep all children up to the first dynamic child.
-  let keepChildrenUntil = 0
-  if (isDynamicTuple) {
-    keepChildrenUntil = prunableChildren.findIndex(isDynamicParamType)
-  }
-  let prunedChildren: Condition[] = prunableChildren.slice(
-    0,
-    keepChildrenUntil + 1
-  )
-  for (let i = prunableChildren.length - 1; i > keepChildrenUntil; i--) {
-    const child = prunableChildren[i]
-    if (child.operator !== Operator.Pass) {
-      prunedChildren = prunableChildren.slice(0, i + 1)
-      break
-    }
+  const keepChildrenUntil = isDynamicTuple
+    ? children.findIndex(isDynamicParamType)
+    : 0
+
+  // the trailing run of Pass and non-structural children
+  let cut = children.length
+  for (let i = children.length - 1; i > keepChildrenUntil; i--) {
+    const child = children[i]
+    if (child.operator !== Operator.Pass && isStructural(child)) break
+    cut = i
   }
 
-  condition.children = [...prunedChildren, ...tailChildren]
+  condition.children = [
+    ...children.slice(0, cut),
+    ...children.slice(cut).filter((child) => child.operator !== Operator.Pass),
+  ]
   return condition
 }
 
@@ -202,6 +210,7 @@ const cleanEmptyFields = (condition: Condition): Condition => {
 const isDynamicParamType = (condition: Condition): boolean => {
   switch (condition.paramType) {
     case Encoding.Static:
+    case Encoding.EtherValue:
       return false
     case Encoding.Dynamic:
     case Encoding.Array:

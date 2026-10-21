@@ -153,5 +153,15 @@ suite(
       )
       expect(result.operator).toBe(Operator.Or)
     })
+
+    it("keeps the order of an And where a choice depends on earlier charges", () => {
+      // And[Or[W(a), W(b)], W(a)]: which Or branch is charged depends on
+      // whether W(a) was charged before it
+      const choice = or(allowance(0xaa), allowance(0xbb))
+      const forward = calldata(and(choice, allowance(0xaa)))
+      const backward = calldata(and(allowance(0xaa), choice))
+      expect(normalizeCondition(forward)).toEqual(forward)
+      expect(normalizeCondition(backward)).toEqual(backward)
+    })
   }
 )
