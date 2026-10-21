@@ -21,7 +21,10 @@ The Lean check `checkStored` (packages/evm/formal/ConditionCheck) is the
 specification for the SDK's check on a flat array before a `...Packed` setter.
 It covers `Packable`, Integrity's operator rules, the Pluck-slot rule and the
 type rules, and is proven to give the decoder proof's hypotheses. It rejects
-items 1, 2 and 6, accepts the safe shape of item 4, and covers item 7.
+items 1, 2 and 6, accepts the safe shapes of items 4 and 10, and covers item 7.
+The SDK implements it in src/main/condition/checkStored.ts, differentially
+tested against the Lean definition (packages/evm/test/formal/sdk-check.spec.ts).
+It is not wired into the SDK's apply flow yet.
 
 Severity:
 

@@ -30,7 +30,7 @@ and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
 (the format of `MockPackerUnpacker.roundtrip`), or `none`.
 
 A line `ck <s 0|1> <nodes>` runs `ConditionCheck.checkStored s` (the full SDK
-check) on the flat array and prints `ok` (typed root), `ns` (root reads no
+check) on the flat array and prints `ok <type>` (typed root), `ns` (root reads no
 calldata) or `none` (rejected, also for unknown encoding/operator codes).
 
 Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
@@ -125,6 +125,15 @@ def showUnpacked (buf : Bytes) : String :=
           :: go fuel (idx + 1) (queue ++ c.children.map fun ch => (idx, ch))
     s!"{maxPluck} " ++ "|".intercalate (go 100000 0 [(0, root)])
 
+/-- The type as `S`, `D`, `T(..)`, `A(..)`, `C<lb>(..)` (as `tyKey` in the
+    SDK's checkStored.ts). -/
+partial def tyKey : ConditionCheck.Ty → String
+  | .static => "S"
+  | .dynamic => "D"
+  | .tuple ts => "T(" ++ ",".intercalate (ts.map tyKey) ++ ")"
+  | .array t => "A(" ++ tyKey t ++ ")"
+  | .call lb ts => s!"C{lb}(" ++ ",".intercalate (ts.map tyKey) ++ ")"
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
   | ["pk", nodesStr] =>
@@ -144,7 +153,7 @@ def runLine (line : String) : String :=
     | none => "none"
     | some fs =>
       match ConditionCheck.checkStored (sStr == "1") fs with
-      | some (.typed _) => "ok"
+      | some (.typed t) => s!"ok {tyKey t}"
       | some .noCalldata => "ns"
       | none => "none"
   | ["bm", hex, loc, cv, inl, sz] =>

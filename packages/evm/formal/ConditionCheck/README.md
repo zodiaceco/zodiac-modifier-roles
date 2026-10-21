@@ -211,6 +211,26 @@ these two.
   `UnsuitableCompValue`. It is still rejected; the fuzzer counts Panics as
   accepted, so such cases show up as "Integrity accepts, check rejects".
 
+## SDK implementation
+
+`packages/sdk/src/main/condition/checkStored.ts` transcribes `checkStored`
+function by function (exported as `checkStored` / `checkStoredConditions`).
+`test/formal/sdk-check.spec.ts` compares it with the Lean definition through
+the driver's `ck` query, which prints the verdict and the inferred type. It
+uses random arrays: type-directed trees (nested calldata, variants, slices,
+Plucks with Zips and `WithinRatio`), the same with one node mutated, and
+loosely structured or malformed ones. Both strictness modes must agree
+exactly, and in the fuzzer's checker mode every fuzzed tree is compared too.
+Last run: 40,000 arrays, about 19,000 accepted per mode, no difference.
+
+```
+cd packages/evm/formal && lake build roles-model && cd ..
+SDK_CHECK_CASES=40000 npx hardhat test test/formal/sdk-check.spec.ts
+```
+
+The SDK's own unit tests (`checkStored.test.ts`, vitest) cover one case per
+rule without Lean.
+
 ## Tests
 
 `test/formal/integrity-gaps.spec.ts` with `GAP_CHECK=1` runs `checkStored`
