@@ -1,10 +1,13 @@
-**📯 Legacy Zodiac Roles v1 sources at: [gnosis/zodiac-modifier-roles-v1](https://github.com/gnosisguild/zodiac-modifier-roles-v1)**
+> [!IMPORTANT]
+> **This repository hosts Roles v3, which is not yet released for production.** The contracts, the `zodiac-roles-sdk` in `packages/sdk` and the docs here may change in breaking ways.
+>
+> **Roles v2**, the version in production today, and its tooling (including the `zodiac-roles-sdk` 4.x releases on npm) live at **[zodiaceco/zodiac-modifier-roles-v2](https://github.com/zodiaceco/zodiac-modifier-roles-v2)**.
 
 ---
 
-# Zodiac Roles Modifier
+# Zodiac Roles Modifier v3
 
-[![Build Status](https://github.com/gnosisguild/zodiac-modifier-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/gnosisguild/zodiac-modifier-roles/actions/workflows/ci.yml)
+[![Build Status](https://github.com/zodiaceco/zodiac-modifier-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/zodiaceco/zodiac-modifier-roles/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/gnosis/zodiac-modifier-roles/badge.svg?branch=main&cache_bust=1)](https://coveralls.io/github/gnosis/zodiac-modifier-roles?branch=main)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](https://github.com/gnosisguild/CODE_OF_CONDUCT)
 
@@ -20,7 +23,7 @@ Modules that have been granted a role are able to unilaterally make calls to any
 
 The interface mirrors the relevant parts of the Safe's interface, so this contract can be placed between Safe modules and the Safe itself to enforce role-based permissions.
 
-The contracts have been developed with [Solidity 0.8.21](https://github.com/ethereum/solidity/releases/tag/v0.8.21) targeting evm version shanghai.
+The contracts have been developed with [Solidity 0.8.37](https://github.com/ethereum/solidity/releases/tag/v0.8.37) targeting evm version cancun.
 
 ### Features
 
@@ -38,46 +41,15 @@ The contracts have been developed with [Solidity 0.8.21](https://github.com/ethe
 
 ### Deployments
 
-#### Chains
+Roles v3 is not yet deployed for production. The first release targets Ethereum, Optimism, Gnosis, Arbitrum, Base and Sepolia; Zodiac deploys it to further chains.
 
-- [Mainnet](https://etherscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Optimism](https://optimistic.etherscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Gnosis](https://gnosisscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Polygon](https://www.polygonscan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Polygon zkEVM](https://zkevm.polygonscan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Arbitrum One](https://arbiscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Avalanche C-Chain](https://snowtrace.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5/contract/43114/code)
-- [BSC](https://bscscan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Base](https://basescan.org/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Celo](https://celoscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Sonic](https://sonicscan.org/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Katana](https://katanascan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Berachain](https://berascan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [HyperEVM](https://www.hyperscan.com/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [World Chain](https://worldscan.org/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [MegaETH](https://mega.etherscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Base Sepolia](https://sepolia.basescan.org/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-- [Sepolia](https://sepolia.etherscan.io/address/0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5#code)
-
-#### Contracts
-
-| Contract                | Description                                                                     | Address                                      |
-| ----------------------- | ------------------------------------------------------------------------------- | -------------------------------------------- |
-| Roles                   | Main roles modifier contract                                                    | `0xF2964CE6161ce0e75964Fe7927cE114cb0B283D5` |
-| Integrity               | Library contract for condition integrity checks                                 | `0x6a6Af4b16458Bc39817e4019fB02BD3b26d41049` |
-| Packer                  | Library contract for optimized condition storage                                | `0x869718c939652084bc491fbc5ce0d3c1d5b309f0` |
-| MultiSendUnwrapper      | Transaction unwrapper for Safe's MultiSend                                      | `0xB4Cd4bb764C089f20DA18700CE8bc5e49F369efD` |
-| AvatarIsOwnerOfERC721   | Custom condition useful for permissioned interaction with Uniswap NFT positions | `0x91B1bd7BCC5E623d5CE76b0152253499a9C819d1` |
-
-#### Subgraphs
-
-- [https://gnosisguild.squids.live/roles:production/api/graphql](https://gnosisguild.squids.live/roles:production/api/graphql)
+The production **Roles v2** contracts, their addresses and the chains they are deployed on are listed at [zodiaceco/zodiac-modifier-roles-v2](https://github.com/zodiaceco/zodiac-modifier-roles-v2#deployments).
 
 ### Development environment setup
 
-1. For each package were a `.env.sample` file is present, copy the content of the file into a `.env` file at the same location and populate it with your keys, etc.
+1. For each package where a `.env.sample` file is present (`packages/evm`), copy it to a `.env` file at the same location and fill in your keys.
 2. From the repo root run `yarn`
-3. From the repo root run `yarn prepare`
+3. From the repo root run `yarn build`
 
 After that, you can start working on the different packages.
 
@@ -85,20 +57,15 @@ After that, you can start working on the different packages.
 
 This monorepo uses [yarn workspaces](https://yarnpkg.com/features/workspaces) and is comprised of:
 
-- **evm**: Roles mod smart contracts
-- **subgraph**: a subgraph indexing deployed Roles mod instances:
-- **sdk**: a TypeScript SDK for managing roles: `zodiac-roles-sdk`
-- **deployments**: a TypeScript package that lists all supported chains and offers functions to fetch roles from the subgraph: `zodiac-roles-deployments`
-- **app**: a webapp for viewing roles: https://roles.gnosisguild.org
-- **docs**: the documentation page: https://docs.roles.gnosisguild.org
+- **evm**: the Roles v3 smart contracts, with tests and the formal verification (`packages/evm/formal`)
+- **sdk**: a TypeScript SDK for managing roles, `zodiac-roles-sdk` (the v3 version is unreleased; the published 4.x releases come from [zodiac-modifier-roles-v2](https://github.com/zodiaceco/zodiac-modifier-roles-v2))
+- **app**: a webapp for viewing roles, https://roles.gnosisguild.org (uses the published `zodiac-roles-sdk` 4.x)
+- **docs**: the documentation page, https://docs.roles.gnosisguild.org
+- **integration-tests**: tests of the contracts together with the SDK, currently for message signing (`personal_sign`, EIP-712)
 
 ### Audits
 
-Audits have been performed by the [G0 group](https://github.com/g0-group) and [Omniscia](https://omniscia.io).
-
-All identified issues have been resolved as of commit [a19c0ebda97f7d645335f2c386818546641f832b](https://github.com/gnosisguild/zodiac-modifier-roles/tree/a19c0ebda97f7d645335f2c386818546641f832b/packages/evm/contracts)
-
-All audit reports are available at [packages/evm/docs](packages/evm/docs).
+Roles v3 has been audited by Côme du Crest (October 2026): [report](packages/evm/docs/Audit05_Roles-V3_Oct2026_ComeDuCrest.pdf).
 
 ### Security and Liability
 
