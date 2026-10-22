@@ -1,8 +1,6 @@
 import { Encoding, Condition, Operator } from "../../types"
 
-// rawConditionId is injective; the packed conditionId is not (compValues are
-// concatenated without lengths), so it must not be used to decide equality.
-import { rawConditionId as conditionId } from "../conditionId"
+import { conditionId } from "../conditionId"
 import { canReorderAnd, charges, isStructural, writesSlots } from "./effects"
 
 /** push OR conditions as far down the tree as possible without changing semantics */

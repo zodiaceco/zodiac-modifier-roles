@@ -547,12 +547,12 @@ describe("subtractCondition", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.EqualTo,
-            compValue: "0xALICE",
+            compValue: "0x0a11ce",
           },
           {
             paramType: Encoding.Static,
             operator: Operator.EqualTo,
-            compValue: "0xBOB",
+            compValue: "0x0b0b",
           }
         ),
         { paramType: Encoding.Static, operator: Operator.Pass }
@@ -563,7 +563,7 @@ describe("subtractCondition", () => {
         {
           paramType: Encoding.Static,
           operator: Operator.EqualTo,
-          compValue: "0xALICE",
+          compValue: "0x0a11ce",
         },
         { paramType: Encoding.Static, operator: Operator.Pass }
       )
@@ -576,7 +576,7 @@ describe("subtractCondition", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.EqualTo,
-            compValue: "0xBOB",
+            compValue: "0x0b0b",
           },
           { paramType: Encoding.Static, operator: Operator.Pass }
         )

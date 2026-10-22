@@ -417,7 +417,7 @@ def pushDownOr (f : Cond → Cond) (c : Cond) : Cond :=
 
 /-! ## `sortBranchesCanonical`
 
-The order: `BigInt(conditionId)`, ties broken by `rawConditionId` (JSON). -/
+The order: shorter `conditionId` first, then by its bytes. -/
 
 mutual
   def nodeCount : Cond → Nat
@@ -433,44 +433,32 @@ def bfsGo : Nat → List (Cond × Nat) → Array (Nat × Cond) → Array (Nat ×
   | _, [], acc => acc
   | n + 1, (c, p) :: q, acc => bfsGo n (q ++ c.ch.map (·, acc.size)) (acc.push (p, c))
 
-def bytesBE (n : Nat) : List Nat :=
-  if n < 256 then [n] else bytesBE (n / 256) ++ [n % 256]
-termination_by n
-decreasing_by omega
-
-/-- `packCondition`: `toBeHex(parent << 8 | paramType << 5 | operator, parent < 256 ? 2 : undefined)`. -/
-def packHeader (p : Nat) (c : Cond) : List Nat :=
-  let v := p * 256 + c.enc * 32 + c.op
-  if p < 256 then [v / 256, v % 256] else bytesBE v
-
-def conditionIdBytes (c : Cond) : List Nat :=
-  ((bfsGo (nodeCount c) [(c, 0)] #[]).toList.map fun (p, x) => packHeader p x ++ x.cv).flatten
-
-def conditionIdNat (c : Cond) : Nat :=
-  (conditionIdBytes c).foldl (fun acc b => acc * 256 + b) 0
-
 def hexDigit (n : Nat) : Char :=
   if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
 
 def hexOf (bs : List Nat) : String :=
   "0x" ++ String.ofList (bs.flatMap fun b => [hexDigit (b / 16), hexDigit (b % 16)])
 
+/-- `toBeHex(n, w)`: `w` bytes, big endian. -/
+def beBytes (w n : Nat) : List Nat :=
+  (List.range w).reverse.map fun i => n / 256 ^ i % 256
+
 mutual
-  /-- `rawConditionId`: `JSON.stringify({paramType, operator, compValue, children})`. -/
-  def rawId : Cond → String
+  /-- `conditionId`, pre-order: paramType (1 byte), operator (1), number of
+  children (4), compValue length (4), compValue, then the children. -/
+  def idBytes : Cond → List Nat
     | ⟨e, o, v, ch⟩ =>
-      "{\"paramType\":" ++ toString e ++ ",\"operator\":" ++ toString o ++
-      ",\"compValue\":\"" ++ hexOf v ++ "\",\"children\":[" ++ rawIdL ch ++ "]}"
-  def rawIdL : List Cond → String
-    | [] => ""
-    | [x] => rawId x
-    | x :: xs => rawId x ++ "," ++ rawIdL xs
+      beBytes 1 e ++ beBytes 1 o ++ beBytes 4 ch.length ++ beBytes 4 v.length ++ v ++ idBytesL ch
+  def idBytesL : List Cond → List Nat
+    | [] => []
+    | x :: xs => idBytes x ++ idBytesL xs
 end
 
+/-- Ids are lowercase hex, so for equal lengths the string order is the byte order. -/
 def sortLe (a b : Cond) : Bool :=
-  let ia := conditionIdNat a
-  let ib := conditionIdNat b
-  ia < ib || (ia == ib && !decide (rawId b < rawId a))
+  let ia := idBytes a
+  let ib := idBytes b
+  ia.length < ib.length || (ia.length == ib.length && !decide (ib < ia))
 
 def canReorder (c : Cond) : Bool :=
   if c.op == 1 then canReorderAnd c.ch else canReorderOr c.ch
