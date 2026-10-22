@@ -8,7 +8,7 @@
 # Zodiac Roles Modifier v3
 
 [![Build Status](https://github.com/zodiaceco/zodiac-modifier-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/zodiaceco/zodiac-modifier-roles/actions/workflows/ci.yml)
-[![Coverage Status](https://coveralls.io/repos/github/gnosis/zodiac-modifier-roles/badge.svg?branch=main&cache_bust=1)](https://coveralls.io/github/gnosis/zodiac-modifier-roles?branch=main)
+[![Coverage Status](https://coveralls.io/repos/github/zodiaceco/zodiac-modifier-roles/badge.svg?branch=main)](https://coveralls.io/github/zodiaceco/zodiac-modifier-roles?branch=main)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](https://github.com/gnosisguild/CODE_OF_CONDUCT)
 
 The Roles Modifier belongs to the [Zodiac](https://github.com/gnosisguild/zodiac) collection of tools, which can be accessed through the Zodiac App available on [Safe](https://safe.global/).
