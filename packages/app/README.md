@@ -26,6 +26,12 @@ yarn dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## SDK version
+
+The app uses the **published** `zodiac-roles-sdk` from npm (`"zodiac-roles-sdk": "npm:^4.1.3"` in `package.json`), not the SDK in `packages/sdk`. The local SDK gets breaking changes for Roles v3, while the 4.x line keeps being published from [zodiaceco/zodiac-modifier-roles-v2](https://github.com/zodiaceco/zodiac-modifier-roles-v2).
+
+The `npm:` protocol, together with `enableTransparentWorkspaces: false` in `.yarnrc.yml`, keeps Yarn from linking the local workspace. To move to a newer release, change the range and run `yarn` in the repo root.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
