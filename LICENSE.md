@@ -7,10 +7,10 @@ License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
 
 Parameters
 
-Licensor:             GG DAO LLC
+Licensor:             Zodiac Labs GmbH
 
 Licensed Work:        Zodiac Roles Modifier v3
-                      The Licensed Work is (c) 2026 GG DAO LLC
+                      The Licensed Work is (c) 2026 Zodiac Labs GmbH
 
 Additional Use Grant: None
 
