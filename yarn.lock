@@ -16016,7 +16016,7 @@ __metadata:
     vitest: ^3.0.9
     wagmi: ^3.5.0
     zod: ^3.23.8
-    zodiac-roles-sdk: "npm:4.0.0"
+    zodiac-roles-sdk: "npm:^4.1.3"
   languageName: unknown
   linkType: soft
 
@@ -16083,9 +16083,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"zodiac-roles-sdk@npm:4.0.0":
-  version: 4.0.0
-  resolution: "zodiac-roles-sdk@npm:4.0.0"
+"zodiac-roles-sdk@npm:^4.1.3":
+  version: 4.1.3
+  resolution: "zodiac-roles-sdk@npm:4.1.3"
   dependencies:
     "@cowprotocol/sdk-config": ^0.6.3
     "@cowprotocol/sdk-order-book": ^0.5.1
@@ -16101,7 +16101,7 @@ __metadata:
       optional: true
     openapi-types:
       optional: true
-  checksum: 28b0ef7fd0eb13e41f615c1a1aead8f16d01cbaaaf4854b5a2b5c41179155051e999d5725c7bf9477d7b7852b0b31e08dc012b7a2392e3afc186dbdd29833c55
+  checksum: 048f77dd0ca19c114fd7a84ea07501fdf3397bc9c55040ea1497f350d6401e3b7908e461b59cf586b63974f3a43b32255347872b94dc01447de03c0d0bee9ca1
   languageName: node
   linkType: hard
 

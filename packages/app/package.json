@@ -37,7 +37,7 @@
     "viem": "^2.47.0",
     "wagmi": "^3.5.0",
     "zod": "^3.23.8",
-    "zodiac-roles-sdk": "npm:4.0.0"
+    "zodiac-roles-sdk": "npm:^4.1.3"
   },
   "installConfig": {
     "hoistingLimits": "workspaces"
