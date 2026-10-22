@@ -62,11 +62,12 @@ const zipEvery = (...fields: Condition[]): Condition => ({
 suite(
   "normalizeCondition() keeps semantics with effects and id collisions",
   () => {
-    it("does not merge Or branches whose packed ids collide", () => {
-      // the packed id concatenates headers and compValues without lengths
+    it("does not merge Or branches whose packed bytes are the same", () => {
+      // concatenating headers and compValues without lengths gives the same
+      // bytes for these, conditionId must not
       const t1 = tuple(bytesEq("0xaa"), bytesEq("0xbb0050cc"))
       const t2 = tuple(bytesEq("0xaa0050bb"), bytesEq("0xcc"))
-      expect(conditionId(t1)).toBe(conditionId(t2))
+      expect(conditionId(t1)).not.toBe(conditionId(t2))
 
       const result = normalizeCondition(
         or(calldata(t1, eq(1)), calldata(t2, eq(2)))

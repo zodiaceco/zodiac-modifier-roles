@@ -1,5 +1,5 @@
 import { Condition, Operator } from "../types"
-import { rawConditionId as conditionId } from "./conditionId"
+import { conditionId } from "./conditionId"
 
 /**
  * Removes an independently satisfiable path from a condition.

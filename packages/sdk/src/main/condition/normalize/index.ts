@@ -1,6 +1,6 @@
 import { Encoding, Condition, Operator } from "../../types"
 
-import { conditionId, rawConditionId } from "../conditionId"
+import { conditionId } from "../conditionId"
 import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
 import {
@@ -125,7 +125,7 @@ const dedupeChildren = (condition: Condition): Condition => {
     const isAnd = condition.operator === Operator.And
     const seen = new Set<string>()
     const uniqueChildren = condition.children?.filter((child) => {
-      const id = rawConditionId(child)
+      const id = conditionId(child)
       if (seen.has(id)) return isAnd && charges(child)
 
       seen.add(id)
@@ -171,18 +171,15 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
     const sorted = condition.children
       .map((c) => ({
         condition: c,
-        id: BigInt(conditionId(c)),
-        raw: rawConditionId(c),
+        id: conditionId(c),
       }))
-      // conditionId is not injective: break ties with the raw id
+      // shorter ids first, then by content
       .sort((a, b) =>
-        a.id !== b.id
-          ? a.id < b.id
+        a.id.length !== b.id.length
+          ? a.id.length - b.id.length
+          : a.id < b.id
             ? -1
-            : 1
-          : a.raw < b.raw
-            ? -1
-            : a.raw > b.raw
+            : a.id > b.id
               ? 1
               : 0
       )
