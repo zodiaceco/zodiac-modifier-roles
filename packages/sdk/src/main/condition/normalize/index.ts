@@ -1,8 +1,15 @@
 import { Encoding, Condition, Operator } from "../../types"
 
-import { conditionId, rawConditionId } from "../conditionId"
+import { conditionId } from "../conditionId"
 import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
+import {
+  canReorderAnd,
+  canReorderOr,
+  charges,
+  isStructural,
+  writesSlots,
+} from "./effects"
 
 /**
  * Normalizes a condition by transforming its structure without altering its semantics.
@@ -13,8 +20,23 @@ import { pushDownOr } from "./pushDownOr"
  * deduplicated storage. In particular, the Roles contract stores conditions as bytecode
  * at addresses derived from hashing the condition data — so structurally consistent
  * representations help avoid redundant storage.
+ *
+ * That the rewrites keep the meaning is proven in Lean, against a
+ * transcription of this code (packages/evm/formal/Normalize); effects.ts
+ * holds the rules for reordering and removing children.
  */
 export function normalizeCondition(condition: Condition): Condition {
+  // A Pluck's array and a Zip's fields must keep their types exactly (the
+  // contract checks that each Zip field matches the plucked element type),
+  // so their subtrees are left as written.
+  if (
+    condition.operator === Operator.Pluck ||
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+  ) {
+    return condition
+  }
+
   let result: Condition = {
     ...condition,
     children: condition.children?.map((child) => normalizeCondition(child)),
@@ -34,7 +56,10 @@ export function normalizeCondition(condition: Condition): Condition {
   return result
 }
 
-/** Removes trailing Pass nodes from Matches on AbiEncoded and dynamic tuples (as long as the tuple stays marked dynamic) */
+/**
+ * Removes trailing Pass nodes from Matches on AbiEncoded and dynamic tuples (as long as the tuple stays marked dynamic).
+ * Non-structural children (e.g. CallWithinAllowance) read no parameter, so Pass nodes before them are trailing too.
+ */
 const prunePassNodes = (condition: Condition): Condition => {
   if (!condition.children) return condition
   if (condition.operator !== Operator.Matches) return condition
@@ -47,36 +72,35 @@ const prunePassNodes = (condition: Condition): Condition => {
 
   if (!canPrune) return condition
 
+  // CallWithinAllowance children read no parameter and are moved to the end,
+  // unless that could change the evaluation (see canReorderAnd)
   const isGlobalAllowance = (child: Condition) =>
-    child.operator === Operator.CallWithinAllowance
+    child.operator === Operator.CallWithinAllowance && !isStructural(child)
+  const children = canReorderAnd(condition.children)
+    ? [
+        ...condition.children.filter((child) => !isGlobalAllowance(child)),
+        ...condition.children.filter(isGlobalAllowance),
+      ]
+    : condition.children
 
-  // keep all children nodes with Encoding.None
-  // (CallWithinAllowance conditions appear as children of AbiEncoded.Matches)
-  const tailChildren = condition.children.filter(isGlobalAllowance)
-  const prunableChildren = condition.children.filter(
-    (child) => !isGlobalAllowance(child)
-  )
-
-  // Start from the end and prune all trailing Pass nodes.
   // Always keep the first child, even if it is a Pass, because children must not be empty.
   // For tuples keep all children up to the first dynamic child.
-  let keepChildrenUntil = 0
-  if (isDynamicTuple) {
-    keepChildrenUntil = prunableChildren.findIndex(isDynamicParamType)
-  }
-  let prunedChildren: Condition[] = prunableChildren.slice(
-    0,
-    keepChildrenUntil + 1
-  )
-  for (let i = prunableChildren.length - 1; i > keepChildrenUntil; i--) {
-    const child = prunableChildren[i]
-    if (child.operator !== Operator.Pass) {
-      prunedChildren = prunableChildren.slice(0, i + 1)
-      break
-    }
+  const keepChildrenUntil = isDynamicTuple
+    ? children.findIndex(isDynamicParamType)
+    : 0
+
+  // the trailing run of Pass and non-structural children
+  let cut = children.length
+  for (let i = children.length - 1; i > keepChildrenUntil; i--) {
+    const child = children[i]
+    if (child.operator !== Operator.Pass && isStructural(child)) break
+    cut = i
   }
 
-  condition.children = [...prunedChildren, ...tailChildren]
+  condition.children = [
+    ...children.slice(0, cut),
+    ...children.slice(cut).filter((child) => child.operator !== Operator.Pass),
+  ]
   return condition
 }
 
@@ -97,16 +121,23 @@ const flattenNestedBranches = (condition: Condition): Condition => {
   return condition
 }
 
-/** remove duplicate child branches in AND/OR */
+/**
+ * remove duplicate child branches in AND/OR
+ * (an AND keeps duplicates that charge an allowance: each copy charges again;
+ * nothing is removed next to children that write Pluck slots, since a later
+ * copy may read slots a sibling wrote in between)
+ */
 const dedupeChildren = (condition: Condition): Condition => {
   if (
     condition.operator === Operator.And ||
     condition.operator === Operator.Or
   ) {
+    if (condition.children?.some(writesSlots)) return condition
+    const isAnd = condition.operator === Operator.And
     const seen = new Set<string>()
     const uniqueChildren = condition.children?.filter((child) => {
-      const id = rawConditionId(child)
-      if (seen.has(id)) return false
+      const id = conditionId(child)
+      if (seen.has(id)) return isAnd && charges(child)
 
       seen.add(id)
       return true
@@ -130,7 +161,11 @@ const unwrapSingleChild = (condition: Condition): Condition => {
   return condition
 }
 
-/** enforce a canonical order of AND/OR branches */
+/**
+ * enforce a canonical order of AND/OR branches
+ * (unless reordering would change which allowance is charged or which
+ * Pluck slots are written before they are read, see ./effects)
+ */
 const sortBranchesCanonical = (condition: Condition): Condition => {
   if (
     condition.operator === Operator.And ||
@@ -138,12 +173,27 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
   ) {
     if (!condition.children) return condition
 
+    const canReorder =
+      condition.operator === Operator.And
+        ? canReorderAnd(condition.children)
+        : canReorderOr(condition.children)
+    if (!canReorder) return condition
+
     const sorted = condition.children
       .map((c) => ({
         condition: c,
         id: conditionId(c),
       }))
-      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
+      // shorter ids first, then by content
+      .sort((a, b) =>
+        a.id.length !== b.id.length
+          ? a.id.length - b.id.length
+          : a.id < b.id
+            ? -1
+            : a.id > b.id
+              ? 1
+              : 0
+      )
       .map(({ condition }) => condition)
 
     // in case of mixed-type children (dynamic & abiEncoded), those with children must come first
@@ -172,6 +222,7 @@ const cleanEmptyFields = (condition: Condition): Condition => {
 const isDynamicParamType = (condition: Condition): boolean => {
   switch (condition.paramType) {
     case Encoding.Static:
+    case Encoding.EtherValue:
       return false
     case Encoding.Dynamic:
     case Encoding.Array:

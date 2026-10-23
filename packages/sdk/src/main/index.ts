@@ -48,6 +48,15 @@ export {
   type ConditionFlat,
 } from "./condition/flattenCondition"
 export { normalizeCondition } from "./condition/normalize"
+export {
+  checkStored,
+  checkStoredConditions,
+  toFlatNodes,
+  type Verdict,
+  type Ty as ConditionType,
+  type FlatNode,
+} from "./condition/checkStored"
+export { packConditions, checkAndPack } from "./condition/packConditions"
 
 /*
  *

@@ -1,4 +1,4 @@
-import { Condition, Operator } from "../../types"
+import { Condition, Encoding, Operator } from "../../types"
 import {
   createTypeTree,
   isArray,
@@ -7,6 +7,7 @@ import {
   TypeTree,
   typeTreeId,
 } from "../typeTree"
+import { isInlined, isStructural } from "./effects"
 
 export function padToMatchTypeTree(condition: Condition): Condition {
   /*
@@ -19,6 +20,11 @@ export function padToMatchTypeTree(condition: Condition): Condition {
   }
 
   const isPaddeable = (c: Condition) => isLogical(c) || isComplex(c)
+
+  // type trees are only defined for nodes with populated children
+  if (!(condition.children || []).filter(isPaddeable).every(hasTypeTree)) {
+    return condition
+  }
 
   const typeTreeIds = new Set(
     (condition.children || [])
@@ -48,10 +54,11 @@ export function padToMatchTypeTree(condition: Condition): Condition {
     for (let j = 0; j < nextChildren.length; j++) {
       if (j == i || !isPaddeable(nextChildren[j])) continue
 
-      nextChildren[i] = extendWithPassNodes(
-        nextChildren[i],
-        createTypeTree(nextChildren[j])!
-      )
+      // a logical node whose first child reads no parameter has no type tree
+      const typeTree = createTypeTree(nextChildren[j])
+      if (!typeTree) continue
+
+      nextChildren[i] = extendWithPassNodes(nextChildren[i], typeTree, true)
     }
   }
 
@@ -73,49 +80,82 @@ export function padToMatchTypeTree(condition: Condition): Condition {
  */
 function extendWithPassNodes(
   condition: Condition | undefined | null,
-  typeTree: TypeTree
+  typeTree: TypeTree,
+  variant = false
 ): Condition {
-  if (!condition) {
-    condition = {
-      operator: Operator.Pass,
-      paramType: typeTree.paramType,
-    }
-  }
+  if (!condition) return passFor(typeTree)
 
   if (isLogical(condition)) {
     return {
       ...condition,
       children: condition.children!.map((child) =>
-        extendWithPassNodes(child, typeTree)
+        extendWithPassNodes(child, typeTree, variant)
       ),
     }
   }
 
-  if (isComplex(condition)) {
+  // A call interpretation that is itself a variant needs no padding (the
+  // contract accepts calldata variants of different types), and padding it
+  // with another interpretation's parameters would make it require them.
+  if (variant && condition.paramType === Encoding.AbiEncoded) {
+    return condition
+  }
+
+  // only extend a node with a type tree of its own encoding: appending
+  // children to, e.g., an array would change what it checks. And never an
+  // inlined tuple: more fields make it longer, so every later parameter would
+  // be read at a different place.
+  if (
+    isComplex(condition) &&
+    condition.paramType === typeTree.paramType &&
+    !isInlined(condition)
+  ) {
     const children = (condition.children || []) as Condition[]
 
     /*
-     * Merge the padded children with the original children array.
-     * - If condition has fewer children than typeTree: extends with padded nodes
-     * - If condition has more children than typeTree: preserves extra nodes at the end
-     * - Overlapping positions: recursively pad existing nodes with typeTree structure
+     * Only structural children read a field, and the type tree lists only
+     * those: pair them in order, keep the others in place, and append Pass
+     * nodes for the fields the condition has no child for.
      */
+    let field = 0
+    const extended = children.map((child) =>
+      isStructural(child) && field < typeTree.children.length
+        ? extendWithPassNodes(child, typeTree.children[field++], false)
+        : child
+    )
     return {
       ...condition,
-      children: mergeArrays(
-        children,
-        typeTree.children.map((childTypeTree, index) =>
-          extendWithPassNodes(children[index], childTypeTree)
-        )
-      ),
+      children: [
+        ...extended,
+        ...typeTree.children
+          .slice(field)
+          .map((childTypeTree) =>
+            extendWithPassNodes(undefined, childTypeTree)
+          ),
+      ],
     }
   }
 
   return condition
 }
 
-function mergeArrays<T>(a: T[], b: T[]): T[] {
-  if (a.length <= b.length) return b
+/** A Pass node that only describes the type tree. */
+function passFor(typeTree: TypeTree): Condition {
+  const node: Condition = {
+    operator: Operator.Pass,
+    paramType: typeTree.paramType,
+  }
+  return isComplex(node)
+    ? { ...node, children: typeTree.children.map(passFor) }
+    : node
+}
 
-  return [...b, ...a.slice(b.length)]
+/** createTypeTree succeeds on every node below (and including) `condition` */
+function hasTypeTree(condition: Condition): boolean {
+  const children = condition.children || []
+  if (isLogical(condition) || isComplex(condition)) {
+    if (children.length === 0) return false
+    if (isArray(condition) && !createTypeTree(children[0])) return false
+  }
+  return children.every(hasTypeTree)
 }

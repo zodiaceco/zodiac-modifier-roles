@@ -12,7 +12,7 @@ import { encodeKey } from "../../keys"
 
 const DUMMY_COMP = (id: number) => ({
   paramType: Encoding.Static,
-  operator: Operator.Custom,
+  operator: Operator.EqualTo, // side-effect free (a Custom adapter may charge allowances)
   compValue: abiEncode(["uint256"], [id]),
 })
 
@@ -358,35 +358,15 @@ suite("normalizeCondition()", () => {
     expect(normalizeCondition(condition)).to.deep.equal(condition)
   })
 
-  it("adds trailing Pass nodes to make logical branches' type trees compatible", () => {
-    expect(
-      normalizeCondition({
-        paramType: Encoding.None,
-        operator: Operator.Or,
-        children: [
-          {
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [DUMMY_COMP(3)],
-          },
-          {
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [DUMMY_COMP(0), DUMMY_COMP(1)],
-          },
-        ],
-      })
-    ).to.deep.equal({
+  it("adds no trailing Pass nodes to call variants: the contract accepts them as they are", () => {
+    const condition = {
       paramType: Encoding.None,
       operator: Operator.Or,
       children: [
         {
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
-          children: [
-            DUMMY_COMP(3),
-            { paramType: Encoding.Static, operator: Operator.Pass },
-          ],
+          children: [DUMMY_COMP(3)],
         },
         {
           paramType: Encoding.AbiEncoded,
@@ -394,7 +374,8 @@ suite("normalizeCondition()", () => {
           children: [DUMMY_COMP(0), DUMMY_COMP(1)],
         },
       ],
-    })
+    }
+    expect(normalizeCondition(condition)).to.deep.equal(condition)
   })
 
   it("pushes down ORs in function variants differing only in a single param scoping", () => {

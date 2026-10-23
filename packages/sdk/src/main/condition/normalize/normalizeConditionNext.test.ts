@@ -332,33 +332,31 @@ describe("normalizeCondition", () => {
     })
 
     it("preserves semantics through complex transformations", () => {
-      // Test case that should exercise branch type compatibility
+      // static tuples of different lengths are different types: padding
+      // would change what the shorter one reads
       const input = OR(
         MATCHES(Encoding.Tuple, COMP(1)),
         MATCHES(Encoding.Tuple, COMP(2), COMP(3), COMP(4))
       )
 
-      const result = normalizeCondition(input)
-
-      // Should pad the first branch to match the second
-      expect(result).toEqual(
-        OR(
-          MATCHES(Encoding.Tuple, COMP(1), PASS(), PASS()),
-          MATCHES(Encoding.Tuple, COMP(2), COMP(3), COMP(4))
-        )
-      )
+      expect(normalizeCondition(input)).toEqual(input)
     })
     it("push down + pad", () => {
+      // inside a parameter (not a call variant), the shorter branch is padded
+      // and the Or pushed down to the field that differs
+      const DYN: Condition = {
+        paramType: Encoding.Dynamic,
+        operator: Operator.EqualTo,
+        compValue: "0x12",
+      }
       const input = OR(
-        MATCHES(Encoding.AbiEncoded, COMP(1), COMP(2)),
-        MATCHES(Encoding.AbiEncoded, COMP(1))
+        MATCHES(Encoding.Tuple, DYN, COMP(2)),
+        MATCHES(Encoding.Tuple, DYN)
       )
 
       const result = normalizeCondition(input)
 
-      expect(result).toEqual(
-        MATCHES(Encoding.AbiEncoded, COMP(1), OR(PASS(), COMP(2)))
-      )
+      expect(result).toEqual(MATCHES(Encoding.Tuple, DYN, OR(PASS(), COMP(2))))
     })
   })
 
