@@ -778,9 +778,16 @@ export const checkStored = (
   fs: readonly FlatNode[],
   s = true
 ): Verdict | undefined => {
+  // the Lean model has natural numbers here: a fractional or negative parent
+  // would attach the node nowhere, and the check would skip it
+  const nat = (x: number) => Number.isInteger(x) && x >= 0
   if (
     !fs.every(
-      (f) => 0 <= f.paramType && f.paramType <= 6 && OP_CODES.has(f.operator)
+      (f) =>
+        nat(f.parent) &&
+        nat(f.paramType) &&
+        f.paramType <= 6 &&
+        OP_CODES.has(f.operator)
     )
   ) {
     return undefined
