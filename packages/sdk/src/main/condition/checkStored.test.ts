@@ -60,6 +60,19 @@ suite("checkStored()", () => {
     expect(verdict(call([pass(Enc.Static), eqWord(1000)]))).toBe("C4(S,S)")
   })
 
+  it("rejects parents and encodings that are not natural numbers", () => {
+    const fs = flat(call([pass(Enc.Static), eqWord(1000)]))
+    expect(checkStored(fs)).toBeDefined()
+    for (const bad of [-1, 0.5]) {
+      expect(
+        checkStored(fs.map((f, i) => (i === 2 ? { ...f, parent: bad } : f)))
+      ).toBeUndefined()
+    }
+    expect(
+      checkStored(fs.map((f, i) => (i === 1 ? { ...f, paramType: 1.5 } : f)))
+    ).toBeUndefined()
+  })
+
   it("accepts a root that reads no calldata", () => {
     expect(verdict({ e: Enc.EtherValue, o: Op.LessThan, cv: word(10) })).toBe(
       "noCalldata"
