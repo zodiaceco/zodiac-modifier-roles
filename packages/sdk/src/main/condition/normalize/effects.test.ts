@@ -166,25 +166,67 @@ suite(
     })
 
     it("pads the parameter a type tree child describes, past non-structural children", () => {
-      // f((uint), (uint,uint)) with an ether value check first, and
-      // g((uint), (uint,uint,uint)): the type tree lists parameters only
+      // two checks of one dynamic struct ((bytes,uint), (bytes,uint,uint,uint)),
+      // the first with an ether value check in front: the type tree lists
+      // fields only
       const ether: Condition = {
         paramType: Encoding.EtherValue,
         operator: Operator.LessThan,
         compValue: word(10),
       }
+      const dyn = pass(Encoding.Dynamic)
       const result = normalizeCondition(
         or(
-          calldata(ether, tuple(eq(1)), tuple(eq(2), eq(3))),
-          calldata(tuple(eq(4)), tuple(eq(5), eq(6), eq(7)))
+          tuple(ether, tuple(dyn, eq(1)), tuple(dyn, eq(2), eq(3))),
+          tuple(tuple(dyn, eq(4)), tuple(dyn, eq(5), eq(6), eq(7)))
         )
       )
       const f = result.children!.find(
         (b) => b.children![0].paramType === Encoding.EtherValue
       )!
-      // the first tuple keeps its one field, the second gets the third one
-      expect(f.children![1].children).toHaveLength(1)
-      expect(f.children![2].children).toHaveLength(3)
+      // the first field keeps its two, the second gets the fourth one
+      expect(f.children![1].children).toHaveLength(2)
+      expect(f.children![2].children).toHaveLength(4)
+    })
+
+    it("never pads a static tuple: later parameters would move", () => {
+      // call variants f((uint), uint) and g((uint, uint)) of one bytes value:
+      // padding f's tuple to two fields would read f's second parameter
+      // where g's tuple ends
+      const input = or(
+        calldata(tuple(eq(1)), eq(2)),
+        calldata(tuple(eq(3), eq(4)))
+      )
+      const f = normalizeCondition(input).children!.find(
+        (b) => b.children!.length === 2
+      )!
+      expect(f.children![0].children).toHaveLength(1)
+    })
+
+    it("does not pad call variants with each other's parameters", () => {
+      const input = or(calldata(eq(1)), calldata(eq(2), bytesEq("0x1234")))
+      const result = normalizeCondition(input)
+      expect(result.children!.map((b) => b.children!.length).sort()).toEqual([
+        1, 2,
+      ])
+    })
+
+    it("leaves Pluck and Zip subtrees as written", () => {
+      const plucked = pluckArray(1)
+      const zip = zipEvery(pass(Encoding.Dynamic), pass(Encoding.Static))
+      const input = and(calldata(plucked), zip)
+      const result = normalizeCondition(input)
+      expect(result.children).toContainEqual(zip)
+    })
+
+    it("does not merge Or branches whose differing parameters have different types", () => {
+      // Matches(x, (uint)) | Matches(x, (uint,uint)): Or[(uint), (uint,uint)]
+      // is not a node the contract accepts
+      const input = or(
+        calldata(eq(1), tuple(eq(2))),
+        calldata(eq(1), tuple(eq(3), eq(4)))
+      )
+      expect(normalizeCondition(input).operator).toBe(Operator.Or)
     })
   }
 )

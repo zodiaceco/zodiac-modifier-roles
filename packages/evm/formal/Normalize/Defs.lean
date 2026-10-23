@@ -159,6 +159,16 @@ mutual
     | x :: xs => isDyn x || isDynL xs
 end
 
+mutual
+  /-- `isInlined` (the contract's `Topology.isInlined`): no `Dynamic`,
+      `Array` or `AbiEncoded` encoding in the subtree. -/
+  def isInl : Cond → Bool
+    | ⟨e, _, _, ch⟩ => !(e == 2 || e == 4 || e == 5) && isInlL ch
+  def isInlL : List Cond → Bool
+    | [] => true
+    | x :: xs => isInl x && isInlL xs
+end
+
 /-! ## `prunePassNodes` -/
 
 def cutIdx (ch : List Cond) (keep : Nat) : Nat :=
@@ -216,13 +226,11 @@ instance : DecidableEq TT := TT.decEq
 
 mutual
   /-- `createTypeTree` (`none` for `null`; on the inputs where it throws,
-      `hasTT` is false and padding is skipped). -/
+      `hasTT` is false and padding is skipped). An `And`/`Or` has the type of
+      its first structural child. -/
   def createTT : Cond → Option TT
     | ⟨e, o, _, ch⟩ =>
-      if o == 1 || o == 2 then
-        match ch with
-        | [] => none
-        | x :: _ => createTT x
+      if o == 1 || o == 2 then createTTFirst ch
       else if e == 4 then
         match ch with
         | [] => none
@@ -236,6 +244,11 @@ mutual
     | x :: xs => match createTT x with
       | some t => t :: createTTL xs
       | none => createTTL xs
+  /-- A logical node's type: its first structural child's (as the contract's
+      `TypeTree.resolve`). -/
+  def createTTFirst : List Cond → Option TT
+    | [] => none
+    | x :: xs => if isStruct x then createTT x else createTTFirst xs
 end
 
 mutual
@@ -264,10 +277,12 @@ mutual
 end
 
 mutual
-  /-- `extendWithPassNodes` on an existing node. -/
-  def extendC (c : Cond) (t : TT) : Cond :=
-    if isLogical c then { c with ch := extendAll c.ch t }
-    else if isComplex c && c.enc == t.enc then { c with ch := extendS c.ch t.ch }
+  /-- `extendWithPassNodes` on an existing node; `v`: the node is a variant
+      (a child of the padded node, through logical nodes). -/
+  def extendC (c : Cond) (t : TT) (v : Bool) : Cond :=
+    if isLogical c then { c with ch := extendAll c.ch t v }
+    else if v && c.enc == 5 then c
+    else if isComplex c && c.enc == t.enc && !isInl c then { c with ch := extendS c.ch t.ch }
     else c
   termination_by (sizeOf t, sizeOf c)
   decreasing_by
@@ -281,10 +296,10 @@ mutual
       omega
 
   /-- `children.map(child => extendWithPassNodes(child, t))` -/
-  def extendAll (cs : List Cond) (t : TT) : List Cond :=
+  def extendAll (cs : List Cond) (t : TT) (v : Bool) : List Cond :=
     match cs with
     | [] => []
-    | x :: xs => extendC x t :: extendAll xs t
+    | x :: xs => extendC x t v :: extendAll xs t v
   termination_by (sizeOf t, sizeOf cs)
   decreasing_by
     all_goals apply Prod.Lex.right; simp only [List.cons.sizeOf_spec]; omega
@@ -296,7 +311,7 @@ mutual
     | [], ts => passForL ts
     | x :: xs, [] => x :: extendS xs []
     | x :: xs, t :: ts =>
-      if isStruct x then extendC x t :: extendS xs ts else x :: extendS xs (t :: ts)
+      if isStruct x then extendC x t false :: extendS xs ts else x :: extendS xs (t :: ts)
   termination_by (sizeOf ts, sizeOf cs)
   decreasing_by
     all_goals first
@@ -314,7 +329,7 @@ def padLoop (cs : List Cond) : List Cond :=
       if j == i || !isPaddeable acc[j]! then acc else
       match createTT acc[j]! with
       | none => acc
-      | some t => acc.set i (extendC acc[i]! t)) acc) cs
+      | some t => acc.set i (extendC acc[i]! t true)) acc) cs
 
 /-- Padding applies: every paddeable child has a type tree, and they differ. -/
 def padOk (cs : List Cond) : Bool :=
@@ -357,6 +372,74 @@ def orNode (hs : List Cond) : Cond := ⟨0, 2, [], hs⟩
 def replaceAt (l : List Cond) (h : Nat) (x : Cond) : List Cond :=
   if h < l.length then l.take h ++ x :: l.drop (h + 1) else l
 
+/-- The type layout of Integrity's `TypeTree.resolve` (encoding, structural
+    children); equal layouts have equal type hashes. -/
+inductive Lay where
+  | mk (enc : Nat) (ch : List Lay)
+
+mutual
+  def Lay.decEq : (a b : Lay) → Decidable (a = b)
+    | .mk e1 c1, .mk e2 c2 =>
+      if h : e1 = e2 then
+        match Lay.decEqList c1 c2 with
+        | isTrue hc => isTrue (h ▸ hc ▸ rfl)
+        | isFalse hc => isFalse fun e => by cases e; exact hc rfl
+      else isFalse fun e => by cases e; exact h rfl
+  def Lay.decEqList : (a b : List Lay) → Decidable (a = b)
+    | [], [] => isTrue rfl
+    | [], _ :: _ | _ :: _, [] => isFalse fun e => by cases e
+    | a :: as, b :: bs =>
+      match Lay.decEq a b, Lay.decEqList as bs with
+      | isTrue h1, isTrue h2 => isTrue (h1 ▸ h2 ▸ rfl)
+      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
+      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+end
+
+instance : DecidableEq Lay := Lay.decEq
+
+/-- Type hash 0: encoding `None` without structural children. -/
+def Lay.zero : Lay → Bool
+  | .mk e ch => e == 0 && ch.isEmpty
+
+/-- `isVariant` in `effects.ts` (`TypeTree._isVariant`), from the first
+    nonzero layout `prev`. -/
+def isVarGo : Lay → List Lay → Bool
+  | _, [] => false
+  | prev, l :: ls =>
+    if (if prev.zero then l else prev).zero || l.zero then isVarGo (if prev.zero then l else prev) ls
+    else if (if prev.zero then l else prev) != l then true
+    else isVarGo (if prev.zero then l else prev) ls
+
+mutual
+  /-- `layout` in `effects.ts`. -/
+  def lay : Cond → Lay
+    | ⟨e, o, _, ch⟩ =>
+      if (o == 1 || o == 2) && !isVarGo (.mk 0 []) (layL ch) then
+        ((layL ch).find? fun l => !l.zero).getD (.mk 0 [])
+      else .mk (if e == 6 then 0 else e)
+        (if e == 4 && !isVarGo (.mk 0 []) (layL ch) then ((layL ch).filter fun l => !l.zero).take 1
+         else (layL ch).filter fun l => !l.zero)
+  def layL : List Cond → List Lay
+    | [] => []
+    | x :: xs => lay x :: layL xs
+end
+
+def Lay.dynish : Lay → Bool
+  | .mk e _ => e == 2 || e == 5 || e == 0
+
+/-- `compatibleSiblings` loop, from the first nonzero layout `prev`. -/
+def compatGo : Lay → List Lay → Bool
+  | _, [] => true
+  | prev, l :: ls =>
+    if l.zero then compatGo (if prev.zero then l else prev) ls
+    else ((if prev.zero then l else prev) == l ||
+        ((if prev.zero then l else prev).dynish && l.dynish)) &&
+      compatGo (if prev.zero then l else prev) ls
+
+/-- `compatibleSiblings` in `effects.ts`: Integrity accepts these as children
+    of one `And`/`Or`. -/
+def sameType (hs : List Cond) : Bool := compatGo (.mk 0 []) (hs.map lay)
+
 /-- `findMatchesHingeIndex` (with the equal-length rule). -/
 def hingeM (first : Cond) (chs : List Cond) : Option Nat :=
   if first.ch.isEmpty || chs.any (·.ch.isEmpty) then none else
@@ -374,6 +457,7 @@ def mergeMatches (first : Cond) (chs : List Cond) : Option (List Cond) :=
   | none => none
   | some h =>
     if !(chs.map (·.ch[h]!)).all (fun x => isStruct x == isStruct (chs.map (·.ch[h]!)).head!) then none
+    else if !sameType (chs.map (·.ch[h]!)) then none
     else if (chs.map (·.ch[h]!)).any charges then none
     else some (replaceAt first.ch h (orNode (chs.map (·.ch[h]!))))
 
@@ -397,6 +481,7 @@ def mergeAnd (first : Cond) (chs : List Cond) : Option (List Cond) :=
   if !chs.all (fun x => canReorderAnd x.ch) then none else
   if !hingeOk chs then none else
   if (chs.map fun o => o.ch[hingeOf chs o]!).any charges then none
+  else if !sameType (chs.map fun o => o.ch[hingeOf chs o]!) then none
   else some (replaceAt first.ch (hingeOf chs first) (orNode (chs.map fun o => o.ch[hingeOf chs o]!)))
 
 /-- The merged node, if the `Or` can be pushed down. -/
@@ -475,9 +560,13 @@ def sortB (c : Cond) : Cond :=
 The TypeScript recursion is unbounded (`pushDownOr` normalizes the merged
 node again); `fuel` bounds it, and out of fuel the input is returned. -/
 
+/-- `Pluck` (14) and `Zip` (10, 11) subtrees are left as written. -/
+def keepsAsWritten (c : Cond) : Bool := c.op == 14 || c.op == 10 || c.op == 11
+
 def normalize : Nat → Cond → Cond
   | 0, c => c
   | n + 1, c =>
+    if keepsAsWritten c then c else
     let c1 := { c with ch := c.ch.map (normalize n) }
     sortB (pushDownOr (normalize n) (unwrap (dedupe (flatten (pad (prune c1))))))
 

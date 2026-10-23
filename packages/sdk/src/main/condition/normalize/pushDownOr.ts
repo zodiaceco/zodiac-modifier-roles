@@ -1,7 +1,13 @@
 import { Encoding, Condition, Operator } from "../../types"
 
 import { conditionId } from "../conditionId"
-import { canReorderAnd, charges, isStructural, writesSlots } from "./effects"
+import {
+  canReorderAnd,
+  charges,
+  compatibleSiblings,
+  isStructural,
+  writesSlots,
+} from "./effects"
 
 /** push OR conditions as far down the tree as possible without changing semantics */
 export function pushDownOr(
@@ -85,6 +91,11 @@ function matches(children: Condition[]): Condition[] {
     return children
   }
 
+  // the merged Or must be a node the contract accepts
+  if (!compatibleSiblings(hinges)) {
+    return children
+  }
+
   // the merged Or commits to the first passing hinge child; the original
   // could backtrack into the next branch when a later sibling exceeds an
   // allowance this child charged
@@ -130,6 +141,10 @@ function and(children: Condition[]): Condition[] {
 
   // see matches(): the merged Or must not commit to a charging child
   if (children.some((c, i) => charges(c.children![hingeIndices[i]]))) {
+    return children
+  }
+
+  if (!compatibleSiblings(children.map((c, i) => c.children![hingeIndices[i]]))) {
     return children
   }
 

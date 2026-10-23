@@ -1,4 +1,5 @@
 import { Encoding, Condition, Operator } from "../types"
+import { isStructural } from "./normalize/effects"
 
 export type TypeTree = {
   paramType: Encoding
@@ -25,8 +26,10 @@ export function createTypeTree(condition: Condition): TypeTree | null {
   }
 
   if (isLogical(condition)) {
-    const [child] = atLeastOne()
-    return createTypeTree(child)
+    // the type of the first child that reads the parameter, as the
+    // contract's TypeTree resolves it (an ether value check reads none)
+    const child = atLeastOne().find(isStructural)
+    return child ? createTypeTree(child) : null
   }
 
   if (isArray(condition)) {

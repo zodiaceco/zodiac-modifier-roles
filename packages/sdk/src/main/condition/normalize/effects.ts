@@ -64,3 +64,90 @@ export const isStructural = (c: Condition): boolean =>
   c.operator === Operator.And || c.operator === Operator.Or
     ? (c.children ?? []).some(isStructural)
     : c.paramType !== Encoding.None && c.paramType !== Encoding.EtherValue
+
+/**
+ * The node's encoding has a fixed size and sits in its parent's head (the
+ * contract's Topology.isInlined): no Dynamic, Array or AbiEncoded encoding
+ * in the subtree. Appending children to an inlined tuple grows it and moves
+ * every later parameter.
+ */
+export const isInlined = (c: Condition): boolean =>
+  c.paramType !== Encoding.Dynamic &&
+  c.paramType !== Encoding.Array &&
+  c.paramType !== Encoding.AbiEncoded &&
+  (c.children ?? []).every(isInlined)
+
+/**
+ * The type layout the contract derives from a condition (Integrity's
+ * `TypeTree.resolve`), as a string: equal strings for equal type hashes.
+ * And/Or take the type of their first structural child, unless their
+ * structural children differ (a variant: encoding None, all of them); an
+ * array takes its first structural child as element type, unless its
+ * children differ. Every other node lists its structural children,
+ * including the child of a Slice.
+ */
+type Layout = { encoding: Encoding; children: Layout[] }
+
+const isZero = (l: Layout) =>
+  l.encoding === Encoding.None && l.children.length === 0
+const layoutKey = (l: Layout): string =>
+  l.children.length === 0
+    ? `${l.encoding}`
+    : `${l.encoding}(${l.children.map(layoutKey).join(",")})`
+
+const isVariant = (layouts: Layout[]): boolean => {
+  let prev: Layout | undefined
+  for (const l of layouts) {
+    if (!prev || isZero(prev)) prev = l
+    if (isZero(l)) continue
+    if (layoutKey(prev) !== layoutKey(l)) return true
+  }
+  return false
+}
+
+const layout = (c: Condition): Layout => {
+  const children = (c.children ?? []).map(layout)
+  const variant = isVariant(children)
+  if ((c.operator === Operator.And || c.operator === Operator.Or) && !variant) {
+    return (
+      children.find((l) => !isZero(l)) ?? {
+        encoding: Encoding.None,
+        children: [],
+      }
+    )
+  }
+  const structural = children.filter((l) => !isZero(l))
+  return {
+    encoding:
+      c.paramType === Encoding.EtherValue ? Encoding.None : c.paramType,
+    children:
+      c.paramType === Encoding.Array && !variant
+        ? structural.slice(0, 1)
+        : structural,
+  }
+}
+
+const isDynamicish = (l: Layout) =>
+  l.encoding === Encoding.Dynamic ||
+  l.encoding === Encoding.AbiEncoded ||
+  l.encoding === Encoding.None
+
+/**
+ * Integrity accepts these conditions as children of one And/Or
+ * (`_validateVariantTypes`): every structural one has the type of the first,
+ * or both are bytes-like (Dynamic, AbiEncoded or a variant).
+ */
+export const compatibleSiblings = (siblings: readonly Condition[]): boolean => {
+  let prev: Layout | undefined
+  for (const next of siblings.map(layout)) {
+    if (!prev || isZero(prev)) prev = next
+    if (isZero(next)) continue
+    if (
+      layoutKey(prev) !== layoutKey(next) &&
+      !(isDynamicish(prev) && isDynamicish(next))
+    ) {
+      return false
+    }
+  }
+  return true
+}

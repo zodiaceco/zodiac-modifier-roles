@@ -31,6 +31,20 @@
  * that share of trees (operator, encoding, compValue length or a boundary
  * byte) to probe the operator rules; mutated trees are only compared on
  * accept/reject.
+ *
+ * `GAP_NORMALIZE=1` also runs the SDK's `normalizeCondition` on every tree
+ * Integrity accepts and evaluates the result on the same calldata. The
+ * normalized tree must be accepted by Integrity and give the same verdict as
+ * the input tree (and as the reference, where it knows the answer); that is
+ * the only assertion in this mode. The value-level proof of normalization
+ * (formal/Normalize) does not see calldata layout; this does.
+ *
+ * `GAP_EVAL=<n>` runs a separate test: `n` generated trees (with allowance
+ * checks added) on generated calldata (corrupted in half the cases), with
+ * random allowance balances and `msg.value`. For every tree Integrity
+ * accepts, the Lean model of `evaluate` (formal/Evaluate, driver query `ev`)
+ * must give the contract's exact status and consumptions
+ * (`MockEvaluator.evaluateWith`).
  */
 import { expect } from "chai";
 import {
@@ -54,6 +68,7 @@ import {
   toFlatNodes,
   tyKey,
 } from "../../../sdk/src/main/condition/checkStored.js";
+import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
 import { Encoding, Operator, flattenCondition } from "../utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
@@ -62,6 +77,14 @@ const CLEAN = process.env.GAP_CLEAN === "1";
 const REPORT = process.env.GAP_REPORT;
 const CHECK = process.env.GAP_CHECK === "1";
 const MUTATE = Number(process.env.GAP_MUTATE ?? 0);
+const NORMALIZE = process.env.GAP_NORMALIZE === "1";
+const STRAY = "normalized-passes-stray-interpretation";
+const EVAL = Number(process.env.GAP_EVAL ?? 0);
+/** Allowance keys used in `GAP_EVAL` mode. */
+const KEYS = [
+  "0x" + "a1".repeat(32),
+  "0x" + "b2".repeat(32),
+];
 const LEAN_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../formal/.lake/build/bin/roles-model",
@@ -271,10 +294,37 @@ function randTy(depth: number, variants = true): Ty {
   if (r === 3) return { k: "array", e: randTy(depth - 1, variants) };
   if (r === 4) return randCall(depth - 1, variants);
   const call = () => randCall(depth - 1, variants);
+  if (NORMALIZE && chance(0.4)) {
+    const a = call();
+    return { k: "variant", alts: [a, nearCall(a)] };
+  }
   return {
     k: "variant",
     alts: chance(0.5) ? [{ k: "bytes" }, call()] : [call(), call()],
   };
+}
+
+/** A call type close to `t`: one tuple gets a field more or less, or the
+ *  last argument is dropped or one added (normalization pads such variants). */
+function nearCall(t: Ty): Ty {
+  const c = structuredClone(t) as Extract<Ty, { k: "call" }>;
+  const tuples: Extract<Ty, { k: "tuple" }>[] = [];
+  const walk = (x: Ty) => {
+    if (x.k === "tuple") {
+      tuples.push(x);
+      x.cs.forEach(walk);
+    }
+    if (x.k === "array") walk(x.e);
+  };
+  c.args.forEach(walk);
+  const r = int(3);
+  if (r === 0 && tuples.length) {
+    const tp = pick(tuples);
+    if (tp.cs.length > 1 && chance(0.5)) tp.cs.pop();
+    else tp.cs.push(randTy(0, false));
+  } else if (r === 1 && c.args.length > 1) c.args.pop();
+  else c.args.push(randTy(1, false));
+  return c;
 }
 
 const randCall = (depth: number, variants = true): Ty => ({
@@ -496,6 +546,20 @@ function sliceNode(paramType: Encoding, bs: Uint8Array): Node {
 /** A non-positional node: an EtherValue check, Empty, or a logical node of
  *  those. Never a Zip (Zips are placed by `withZip`). */
 function genNP(depth = 1): Node {
+  if (EVAL && chance(0.3))
+    return chance(0.5)
+      ? {
+          paramType: Encoding.None,
+          operator: Operator.CallWithinAllowance,
+          compValue: pick(KEYS),
+          np: true,
+        }
+      : {
+          paramType: Encoding.EtherValue,
+          operator: Operator.WithinAllowance,
+          compValue: pick(KEYS),
+          np: true,
+        };
   const r = int(10);
   if (r < 7) {
     const op = pick([
@@ -557,6 +621,12 @@ function genBase(t: Ty, v: any, depth: number): Node {
   switch (t.k) {
     case "word": {
       const w = encodeAt(t, v);
+      if (EVAL && chance(0.15))
+        return {
+          paramType: Encoding.Static,
+          operator: Operator.WithinAllowance,
+          compValue: pick(KEYS),
+        };
       const r = int(10);
       if (r < 2) return { paramType: Encoding.Static, operator: Operator.Pass };
       if (r < 6) return compareNode(Encoding.Static, w);
@@ -1096,7 +1166,7 @@ describe("Integrity gaps (fuzz)", function () {
     let outOfGas = 0;
     let compared = 0;
     type Mismatch = {
-      kind: "bypass" | "false-reject";
+      kind: string;
       tags: string;
       status: string;
       sig: string;
@@ -1114,6 +1184,7 @@ describe("Integrity gaps (fuzz)", function () {
       if (CHECK && MUTATE > 0 && chance(MUTATE)) mutated = mutate(flat);
       return {
         ...cs,
+        suffix: chance(0.4) ? bytes(32 * (1 + int(3))) : undefined,
         tags: mutated ? new Set([...tags, `mut: ${mutated}`]) : new Set(tags),
         flat,
         mutated,
@@ -1126,6 +1197,9 @@ describe("Integrity gaps (fuzz)", function () {
     const onlyIntegrity = new Map<string, number>();
     const onlyCheck = new Map<string, number>();
     const examples = new Map<string, string>();
+    const normThrows = new Map<string, number>();
+    let normCompared = 0;
+    const normMismatches: Mismatch[] = [];
     const bump = (m: Map<string, number>, k: string, flat?: any[]) => {
       m.set(k, (m.get(k) ?? 0) + 1);
       if (flat && !examples.has(k))
@@ -1144,7 +1218,10 @@ describe("Integrity gaps (fuzz)", function () {
       if (c % 200 === 0) await fresh();
       const { t, v, root, flat } = cases[c];
       tags = cases[c].tags;
-      const data = hexlify(raw(t, v));
+      // trailing bytes are valid calldata; a misplaced read may land there
+      const data = hexlify(
+        cat(raw(t, v), NORMALIZE && cases[c].suffix ? cases[c].suffix : new Uint8Array()),
+      );
       const tagKey = [...tags].sort().join(" ") || "(none)";
 
       if (checked[c] && !cases[c].mutated) {
@@ -1215,6 +1292,51 @@ describe("Integrity gaps (fuzz)", function () {
       accepted++;
       if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey, flat);
       if (cases[c].mutated) continue;
+      if (NORMALIZE) {
+        const expN = ref(root, t, v, { slots: new Map() });
+        let normalized: any;
+        try {
+          normalized = normalizeCondition(strip(root));
+        } catch (e: any) {
+          bump(normThrows, String(e.message ?? e).slice(0, 60));
+        }
+        if (normalized) {
+          normCompared++;
+          const nflat = flattenCondition(normalized).map((f) => ({ ...f }));
+          let nStatus: string;
+          let nOk = false;
+          try {
+            const s = Number(
+              await evaluator.evaluate(data, nflat, { gasLimit: 16_000_000 }),
+            );
+            nOk = s === 0;
+            nStatus = nOk ? "Ok" : `status ${s}`;
+          } catch (e: any) {
+            nStatus = `revert ${errName(e, evaluator.interface)}`;
+          }
+          const integrityN = /^revert [A-Z][A-Za-z]+$/.test(nStatus) &&
+            !nStatus.endsWith("Panic") && nStatus !== "revert out of gas";
+          if (integrityN || nOk !== ok || (expN !== "unk" && (expN === "ok") !== nOk))
+            normMismatches.push({
+              kind: integrityN
+                ? "normalized-rejected"
+                : nOk && !ok && expN === "unk"
+                  ? STRAY
+                  : nOk && !ok
+                    ? "normalize-widens"
+                  : nOk !== ok
+                    ? "normalize-narrows"
+                    : "normalize-vs-ref",
+              tags: tagKey,
+              status: `${status} -> ${nStatus} (ref ${expN})`,
+              sig: sig(t),
+              tree: `${show(root)}\n        normd  ${show(normalized)}`,
+              size: count(root),
+              data,
+              flat: nflat,
+            });
+        }
+      }
       if (process.env.GAP_DEBUG)
         console.log(`OK  size ${count(root)} depth ${depth(root)}`);
       for (const tg of tags) {
@@ -1276,6 +1398,40 @@ describe("Integrity gaps (fuzz)", function () {
           2,
         ),
       );
+    if (NORMALIZE) {
+      console.log(
+        `\n      normalize: ${normCompared} normalized and evaluated, ${normMismatches.length} mismatches`,
+      );
+      for (const [k, n] of [...normThrows].sort((a, b) => b[1] - a[1]))
+        console.log(`      SDK threw ${n}× ${k}`);
+      const ng = new Map<string, Mismatch[]>();
+      for (const m of normMismatches) {
+        const k = `${m.kind} | ${m.tags}`;
+        ng.set(k, [...(ng.get(k) ?? []), m]);
+      }
+      for (const [k, ms] of [...ng].sort((a, b) => b[1].length - a[1].length)) {
+        const m = ms.reduce((a, b) => (b.size < a.size ? b : a));
+        console.log(`\n      ${ms.length}× ${k}`);
+        console.log(`        sig    ${m.sig}`);
+        console.log(`        tree   ${m.tree}`);
+        console.log(`        status ${m.status}`);
+      }
+      if (REPORT)
+        writeFileSync(
+          REPORT,
+          JSON.stringify(
+            normMismatches,
+            (_, x) => (typeof x === "bigint" ? x.toString() : x),
+            2,
+          ),
+        );
+      // A pruned branch no longer decodes the trailing parameters it does not
+      // check, so it can pass calldata of another interpretation that lacks
+      // them (see formal/README.md, Normalization findings). Reported, not
+      // failed: such calldata does not have the branch's type.
+      expect(normMismatches.filter((m) => m.kind !== STRAY).length).to.equal(0);
+      return;
+    }
     if (CHECK) {
       console.log(
         `\n      check: ${checkAccepted} accepted, ${checkCompared} compared without Integrity, ${checkMismatches.length} mismatches`,
@@ -1297,5 +1453,138 @@ describe("Integrity gaps (fuzz)", function () {
       return;
     }
     expect(mismatches.length).to.equal(0);
+  });
+
+  it(`the Lean model of evaluate agrees with the contract (${EVAL} cases)`, async function () {
+    if (EVAL <= 0) this.skip();
+    rand = mulberry32(SEED);
+    let connection: Awaited<ReturnType<typeof network.create>> | undefined;
+    let evaluator: any;
+    const fresh = async () => {
+      await connection?.close();
+      connection = await network.create();
+      const { ethers } = connection;
+      const [signer] = await ethers.getSigners();
+      const lib = async (name: string) => {
+        const { bytecode } = await hre.artifacts.readArtifact(name);
+        const c = await new ContractFactory([], bytecode, signer).deploy();
+        return c.getAddress();
+      };
+      evaluator = await (
+        await ethers.getContractFactory("MockEvaluator", {
+          libraries: {
+            CustomConditionChecker: await lib("CustomConditionChecker"),
+            WithinRatioChecker: await lib("WithinRatioChecker"),
+          },
+        })
+      ).deploy();
+    };
+    /** Flips, cuts or extends the calldata. */
+    const corrupt = (data: Uint8Array): Uint8Array => {
+      const d = Uint8Array.from(data);
+      const r = int(4);
+      if (r === 0 && d.length) d[int(d.length)] ^= 1 << int(8);
+      else if (r === 1 && d.length) {
+        // a length or offset word: make it large or off by one word
+        const at = 4 + 32 * int(Math.max(1, (d.length - 4) >> 5));
+        if (at + 32 <= d.length) d[at + 31 - int(2)] ^= pick([0x20, 0x01, 0x80]);
+        return d;
+      } else if (r === 2) return d.slice(0, int(d.length + 1));
+      else return cat(d, bytes(32 * int(3)));
+      return d;
+    };
+    const hexNo0x = (h: string) => h.slice(2).toLowerCase();
+
+    type Q = { line: string; data: string; flat: any[]; value: number; bal: bigint[] };
+    const queries: Q[] = [];
+    for (let c = 0; c < EVAL; c++) {
+      const { t, v, root } = genCase();
+      let data = raw(t, v);
+      if (chance(0.5)) data = corrupt(data);
+      const flat = flattenCondition(strip(root)).map((f) => ({ ...f }));
+      const value = pick([0, 1, 2, 500]);
+      const bal = KEYS.map(() => pick([0n, 1n, 2n, 1000n, 2n ** 128n - 1n]));
+      const nodes = flat
+        .map(
+          (f) =>
+            `${f.parent}:${f.paramType}:${f.operator}:${hexNo0x(f.compValue ?? "0x")}`,
+        )
+        .join("|");
+      const allowances = KEYS.map((k, i) => `${hexNo0x(k)}:${bal[i]}`).join(",");
+      queries.push({
+        line: `ev ${value} ${allowances} ${hexlify(data)} ${nodes}`,
+        data: hexlify(data),
+        flat,
+        value,
+        bal,
+      });
+    }
+    // The contract first: cases that run out of gas (a corrupted array
+    // length makes AbiLocation loop) are not sent to the model.
+    let rejected = 0;
+    let oog = 0;
+    const chain: (string | undefined)[] = [];
+    for (let c = 0; c < queries.length; c++) {
+      if (c % 200 === 0) await fresh();
+      const q = queries[c];
+      try {
+        const [status, cons] = await evaluator.evaluateWith.staticCall(
+          q.data,
+          q.flat,
+          q.value,
+          KEYS,
+          q.bal,
+          { gasLimit: 16_000_000 },
+        );
+        const cs = (cons as any[]).map(
+          (x) => `${hexNo0x(x.allowanceKey)}:${x.balance}:${x.consumed}`,
+        );
+        chain.push(`${Number(status)} ${cs.length ? cs.join(",") : "-"}`);
+      } catch (e: any) {
+        const name = errName(e, evaluator.interface);
+        if (name === "out of gas") {
+          oog++;
+          chain.push(undefined);
+        } else if (/^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic") {
+          rejected++;
+          chain.push(undefined);
+        } else chain.push("255 -");
+      }
+    }
+    const asked = queries.filter((_, c) => chain[c] !== undefined);
+    if (REPORT) {
+      writeFileSync(REPORT, asked.map((q) => q.line).join("\n") + "\n");
+      writeFileSync(
+        REPORT + ".chain",
+        chain.filter((x) => x !== undefined).join("\n") + "\n",
+      );
+    }
+    const res = spawnSync(LEAN_BIN, {
+      input: asked.map((q) => q.line).join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const lean = String(res.stdout).trim().split("\n");
+    expect(lean.length).to.equal(asked.length);
+
+    const statuses = new Map<string, number>();
+    const diffs: string[] = [];
+    const answers = chain.filter((x): x is string => x !== undefined);
+    const compared = answers.length;
+    answers.forEach((ch, k) => {
+      const st = ch.split(" ")[0];
+      statuses.set(st, (statuses.get(st) ?? 0) + 1);
+      if (ch !== lean[k])
+        diffs.push(`chain ${ch}\n        lean  ${lean[k]}\n        ${asked[k].line.slice(0, 600)}`);
+    });
+    await connection?.close();
+    console.log(
+      `      ${EVAL} cases: ${compared} compared, ${rejected} rejected by Integrity, ${oog} out of gas, ${diffs.length} differences`,
+    );
+    console.log(
+      `      statuses ${[...statuses].sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, n]) => `${k}:${n}`).join(" ")}`,
+    );
+    for (const d of diffs.slice(0, 8)) console.log(`      ${d}`);
+    expect(diffs.length).to.equal(0);
   });
 });

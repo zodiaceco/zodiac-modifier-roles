@@ -21,7 +21,10 @@ theorem normalize_same (hW : W.Ok step) : ∀ (n : Nat) (c : Cond), Same W (norm
     have ih := normalize_same hW n
     have h1 : Same W { c with ch := c.ch.map (normalize n) } c :=
       same_congr c (Pw.of_map fun x _ => ih x)
-    simp only [normalize]
+    rw [normalize]
+    by_cases hk : keepsAsWritten c = true
+    · rw [if_pos hk]; exact Same.refl c
+    rw [if_neg hk]
     exact (sortB_same hW _).trans <| (pushDownOr_same hW ih _).trans <| (unwrap_same _).trans <|
       (dedupe_same hW _).trans <| (flatten_same _).trans <| (pad_same hW _).trans <|
       (prune_same hW _).trans h1
