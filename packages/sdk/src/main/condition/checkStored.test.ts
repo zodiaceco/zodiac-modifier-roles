@@ -56,8 +56,9 @@ const zip = (slots: number[], fields: N[]): N => ({
 
 suite("checkStored()", () => {
   it("accepts a typed call and returns its type", () => {
-    // transfer(address to, uint256 amount) with amount == 1000
-    expect(verdict(call([pass(Enc.Static), eqWord(1000)]))).toBe("C4(S,S)")
+    // transfer(address to, uint256 amount) with amount == 1000 (`..`: open,
+    // a `Matches` reads the first arguments, there may be more)
+    expect(verdict(call([pass(Enc.Static), eqWord(1000)]))).toBe("C4(S,S,..)")
   })
 
   it("rejects parents and encodings that are not natural numbers", () => {
@@ -88,7 +89,7 @@ suite("checkStored()", () => {
       o: Op.And,
       ch: [call(plucks), zip([0, 1], fields)],
     }
-    expect(verdict(ok)).toBe("C4(A(S),A(S))")
+    expect(verdict(ok)).toBe("C4(A(S),A(S),..)")
 
     const bypass = call([
       pluck(Enc.Array, 0, arr()),
@@ -147,14 +148,15 @@ suite("checkStored()", () => {
       ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
     }
     const tree = call([{ e: Enc.None, o: Op.And, ch: [slice, eqWord(1)] }])
-    expect(verdict(tree)).toBe("C4(S)")
+    expect(verdict(tree)).toBe("C4(S,..)")
   })
 
   it("accepts variants only with s = true", () => {
     const a = call([pass(Enc.Static)], "0x000411111111")
     const b = call([pass(Enc.Dynamic)], "0x000422222222")
     const tree = call([{ e: Enc.None, o: Op.Or, ch: [a, b] }])
-    expect(verdict(tree, true)).toBe("C4(D)")
+    // with s = true any bytes value has every call type: the first one
+    expect(verdict(tree, true)).toBe("C4(C4(S,..),..)")
     expect(verdict(tree, false)).toBe("rejected")
   })
 

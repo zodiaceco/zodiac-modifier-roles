@@ -10,7 +10,9 @@ These are the hypotheses of the theorems. They follow the structural rules
 stronger.
 
 * Containers (`Tuple`, `Array`, `AbiEncoded`) need structural children.
-* `Tuple` / `AbiEncoded` children describe the fields / arguments pointwise.
+* `Tuple` / `AbiEncoded` children describe the first fields / arguments
+  pointwise (trailing ones may be left out, for a tuple only if it is not
+  inlined: that is what pruning trailing `Pass` nodes does).
 * `Array` children: `children[0]` is the layout template for every element
   (as `AbiLocation` uses it); child `i` describes element `i` (for
   `Matches`), and the last children describe the last elements (for
@@ -44,6 +46,17 @@ def isNavOp : Operator → Bool
   | .And | .Or | .Matches | .ArraySome | .ArrayEvery | .ArrayTailMatches
   | .Slice | .ZipSome | .ZipEvery => true
   | _ => false
+
+mutual
+  /-- No node of the subtree navigates: a type description, as the
+      children of an operator that reads its whole value (`EqualTo` on a
+      tuple, ...) are. Their sizes give the length of the value read. -/
+  def noNav : Condition → Bool
+    | ⟨_, op, cs, _, _, _, _⟩ => !isNavOp op && noNavAll cs
+  def noNavAll : List Condition → Bool
+    | [] => true
+    | c :: cs => noNav c && noNavAll cs
+end
 
 /-- Values encoded as `bytes`: plain bytes, or nested calldata. -/
 def IsBytesLike : Val → Prop
@@ -145,9 +158,14 @@ mutual
         c.encoding = .Dynamic → c.operator = .Slice → c.children = [ch] →
         1 ≤ sliceSize c.compValue → sliceSize c.compValue ≤ 32 → Win ch →
         IsBytesLike u → Desc s c u
+    /-- The children describe the first fields; fewer children than fields
+        only for a tuple that is not inlined (a shorter inlined tuple would
+        move what follows it). -/
     | tuple {c : Condition} {vs : List Val} :
-        c.encoding = .Tuple → vs ≠ [] → DescAll s c.children vs →
-        (isNavOp c.operator = false ∨ c.operator = .Matches) →
+        c.encoding = .Tuple → c.children ≠ [] → c.children.length ≤ vs.length →
+        DescAll s c.children (vs.take c.children.length) →
+        (c.children.length < vs.length → isInlined c = false ∧ c.operator = .Matches) →
+        ((isNavOp c.operator = false ∧ noNavAll c.children = true) ∨ c.operator = .Matches) →
         Desc s c (.tuple vs)
     | array {c : Condition} {vs : List Val} (c0 : Condition) (cs : List Condition) :
         c.encoding = .Array → c.children = c0 :: cs →
@@ -156,13 +174,16 @@ mutual
           DescS s c.children[i] vs[i]) →
         (∀ j (hj : j < c.children.length) (hk : c.children.length ≤ vs.length),
           DescS s c.children[j] (vs[vs.length - c.children.length + j]'(by omega))) →
-        (isNavOp c.operator = false ∨ c.operator = .Matches ∨ c.operator = .ArraySome ∨
-          c.operator = .ArrayEvery ∨ c.operator = .ArrayTailMatches) →
+        ((isNavOp c.operator = false ∧ noNavAll c.children = true) ∨ c.operator = .Matches ∨
+          c.operator = .ArraySome ∨ c.operator = .ArrayEvery ∨ c.operator = .ArrayTailMatches) →
         Desc s c (.array vs)
+    /-- The children describe the first arguments (all of them under `Pass`). -/
     | call {c : Condition} {pre : Bytes} {args : List Val} :
-        c.encoding = .AbiEncoded → c.leadingBytes = pre.length → args ≠ [] →
-        DescAll s c.children args →
-        (c.operator = .Matches ∨ c.operator = .Pass) →
+        c.encoding = .AbiEncoded → c.leadingBytes = pre.length → c.children ≠ [] →
+        c.children.length ≤ args.length →
+        DescAll s c.children (args.take c.children.length) →
+        (c.operator = .Matches ∨
+          (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true)) →
         Desc s c (.call pre args)
     | logical {c : Condition} {u : Val} (ch0 : Condition) :
         c.encoding = .None → (c.operator = .And ∨ c.operator = .Or) →

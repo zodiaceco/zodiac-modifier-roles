@@ -1312,22 +1312,42 @@ describe("Integrity gaps (fuzz)", function () {
         } catch (e: any) {
           bump(normThrows, String(e.message ?? e).slice(0, 60));
         }
-        if (normalized) {
+        // the SDK stores the normalized tree with a `...Packed` setter: it
+        // must pass the SDK check (not Integrity) whenever the tree as
+        // written does, and is evaluated without Integrity
+        const checkedAsWritten = (() => {
+          try {
+            return checkStoredConditions(flat as any) !== undefined;
+          } catch {
+            return false;
+          }
+        })();
+        if (normalized && checkedAsWritten) {
           normCompared++;
           const nflat = flattenCondition(normalized).map((f) => ({ ...f }));
           let nStatus: string;
           let nOk = false;
+          let integrityN = false;
+          let nChecked = false;
           try {
-            const s = Number(
-              await evaluator.evaluate(data, nflat, { gasLimit: 16_000_000 }),
-            );
-            nOk = s === 0;
-            nStatus = nOk ? "Ok" : `status ${s}`;
-          } catch (e: any) {
-            nStatus = `revert ${errName(e, evaluator.interface)}`;
+            nChecked = checkStoredConditions(nflat as any) !== undefined;
+          } catch {
+            nChecked = false;
           }
-          const integrityN = /^revert [A-Z][A-Za-z]+$/.test(nStatus) &&
-            !nStatus.endsWith("Panic") && nStatus !== "revert out of gas";
+          if (!nChecked) {
+            integrityN = true;
+            nStatus = "rejected by the SDK check";
+          } else {
+            try {
+              const s = Number(
+                await evaluator.evaluateUnchecked(data, nflat, { gasLimit: 16_000_000 }),
+              );
+              nOk = s === 0;
+              nStatus = nOk ? "Ok" : `status ${s}`;
+            } catch (e: any) {
+              nStatus = `revert ${errName(e, evaluator.interface)}`;
+            }
+          }
           if (integrityN || nOk !== ok || (expN !== "unk" && (expN === "ok") !== nOk))
             normMismatches.push({
               kind: integrityN

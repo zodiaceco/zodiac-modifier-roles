@@ -434,12 +434,15 @@ theorem sortB_same (hW : W.Ok step) (c : Cond) : Same W (sortB c) c := by
     · funext v
       rcases hl' with h | h
       · rw [sem_and (c := { c with ch := sortCh c.ch }) h, sem_and h]
-        have hr : canReorderAnd c.ch = true := by simpa [canReorder, h] using hc.2
+        have hr : canReorderAnd c.ch = true := by
+          simp [canReorder, h] at hc; exact hc.2.1
         have := seqT_perm hW (W := W) (l := c.ch.map (·, v)) (l' := (sortCh c.ch).map (·, v))
           (hperm.symm.map _) (by simpa [List.map_map, Function.comp_def] using hr)
         simpa [List.map_map, Function.comp_def] using this.symm
       · rw [sem_or (c := { c with ch := sortCh c.ch }) h, sem_or h]
-        have hr : canReorderOr c.ch = true := by simpa [canReorder, h] using hc.2
+        have hr : canReorderOr c.ch = true := by
+          have h1 : ¬ c.op = 1 := by omega
+          simp [canReorder, h, h1] at hc; exact hc.2.1
         exact (orT_perm hW hperm.symm hr v).symm
     · rw [struct_log (c := { c with ch := sortCh c.ch }) hl', struct_log hl']
       exact any_perm hperm

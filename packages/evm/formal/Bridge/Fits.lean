@@ -15,8 +15,10 @@ with the `size` a `Slice` gives its child), reads calldata as the layout
 `m` says: every structural node has `m`'s `inlined` and `size`, containers
 list their children as `m` does (a `Matches` on calldata or a dynamic tuple
 may leave out trailing ones), and operators that read a whole value
-(comparisons, `Custom`, `Pluck`) see exactly `m`'s type. Zips are not
-covered.
+(comparisons, `Custom`, `Pluck`) see exactly `m`'s type. At a variant
+layout (`isVarLay`: the call types a `bytes` value may have, keyed by their
+leading bytes) a call branch fits its candidate (`varAbi`) and a check on
+the plain bytes fits `dynLay` (`varDyn`). Zips are not covered.
 
 `Decodable data m l`: decoding the calldata with layout `m` at `l` does not
 overflow, all the way down.
@@ -119,6 +121,14 @@ inductive PDesc : Cond → Condition → Prop
   | arr {c m x} : c.op = 0 → c.enc = 4 → c.ch = [x] → m.encoding = .Array → PDesc x (tmpl m) →
       LayEq (D avatar c) m → isInl c = (D avatar c).inlined → PDesc c m
 
+/-- The layout of a plain `bytes` value. -/
+def dynLay : Condition := ⟨.Dynamic, .Pass, [], false, 0, 0, []⟩
+
+/-- No other candidate's key is a prefix of `k`'s or the other way round:
+    calldata starts with at most one key. -/
+def KeyUnique (m k : Condition) : Prop :=
+  ∀ k' ∈ m.children, k' ≠ k → ¬ k'.compValue <+: k.compValue ∧ ¬ k.compValue <+: k'.compValue
+
 inductive Fits : Cond → Condition → Condition → Prop
   | pass {c d m} : c.op = 0 → Node avatar c d → isStruct c = true → LayEq d m → Plain c →
       isInl c = (D avatar c).inlined → (d = D avatar c → PDesc avatar c m) → Fits c d m
@@ -145,6 +155,29 @@ inductive Fits : Cond → Condition → Condition → Prop
       c.enc ≠ 5 → (c.op = 16 → isInl c = m.inlined) → Plain c → isInl c = (D avatar c).inlined →
       (∀ i (h : i < c.ch.length), PDesc avatar c.ch[i] (m.children.getD i default)) →
       (c.enc = 4 → c.ch ≠ []) → (c.enc = 1 ∨ c.enc = 2 → c.ch = []) → c.enc ≤ 5 → Fits c d m
+  /-- A call interpretation of a variant: it fits its candidate, the one
+      keyed by its leading bytes. -/
+  | varAbi {c d m k} : c.op = 5 → c.enc = 5 → d = D avatar c → isVarLay m = true → LayEq d m →
+      k ∈ m.children → k.encoding = .AbiEncoded → k.compValue = prefixOf 5 c.cv →
+      KeyUnique m k → Fits c (D avatar c) k → Fits c d m
+  /-- A check of the plain `bytes` value of a variant. -/
+  | varDyn {c d m} : isVarLay m = true → c.enc = 2 → LayEq d m → Fits c d dynLay → Fits c d m
+
+theorem Fits.dyn_op {c : Cond} {d m : Condition} (h : Fits avatar c d m) :
+    c.enc = 2 → c.op ≠ 1 ∧ c.op ≠ 2 := by
+  induction h with
+  | pass hop _ _ _ _ _ _ => intro; omega
+  | ns hs hns _ => intro; rcases hns with ⟨h, _, _⟩ | ⟨_, h, _⟩ <;> omega
+  | logical _ h _ _ _ _ _ => intro; omega
+  | tup _ h _ _ _ _ _ _ _ _ => intro; omega
+  | arr _ h _ _ _ _ _ _ _ => intro; omega
+  | slice hop _ _ _ _ _ _ _ _ => intro; omega
+  | leaf hop _ _ _ _ _ _ _ _ _ _ _ =>
+    intro
+    unfold leafOp at hop; simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true,
+      decide_eq_true_eq] at hop; omega
+  | varAbi _ h _ _ _ _ _ _ _ _ => intro; omega
+  | varDyn _ _ _ _ ih => exact ih
 
 /-- `decodeAt` with the encoding taken from the layout. -/
 def decodeL (data : Calldata) (m : Condition) (l : Nat) : Option (List Nat) :=
@@ -152,7 +185,12 @@ def decodeL (data : Calldata) (m : Condition) (l : Nat) : Option (List Nat) :=
 
 inductive Decodable (data : Calldata) : Condition → Nat → Prop
   | leaf {m l} : m.encoding ≠ .Tuple → m.encoding ≠ .AbiEncoded → m.encoding ≠ .Array →
-      Decodable data m l
+      isVarLay m = false → Decodable data m l
+  /-- A variant: the calldata decodes as the candidate whose key it starts
+      with (the other branches fail on their leading bytes). -/
+  | var {m l} : isVarLay m = true →
+      (∀ k ∈ m.children, (leadingCheck data (adjust 5 l) k.compValue).isNone = true →
+        Decodable data k l) → Decodable data m l
   | tup {m l} (locs : List Nat) : (m.encoding = .Tuple ∨ m.encoding = .AbiEncoded) →
       decodeL data m l = some locs →
       (∀ i (hi : i < locs.length), Decodable data (m.children.getD i default) locs[i]) →

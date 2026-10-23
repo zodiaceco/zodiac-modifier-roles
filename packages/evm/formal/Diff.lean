@@ -134,14 +134,16 @@ def showUnpacked (buf : Bytes) : String :=
           :: go fuel (idx + 1) (queue ++ c.children.map fun ch => (idx, ch))
     s!"{maxPluck} " ++ "|".intercalate (go 100000 0 [(0, root)])
 
-/-- The type as `S`, `D`, `T(..)`, `A(..)`, `C<lb>(..)` (as `tyKey` in the
+/-- The type as `S`, `D`, `T(..)`, `A(..)`, `C<lb>(..)`, open types with a
+    trailing `..` field (as `tyKey` in the
     SDK's checkStored.ts). -/
 partial def tyKey : ConditionCheck.Ty → String
   | .static => "S"
   | .dynamic => "D"
-  | .tuple ts => "T(" ++ ",".intercalate (ts.map tyKey) ++ ")"
+  | .tuple ts o => "T(" ++ ",".intercalate (ts.map tyKey ++ (if o then [".."] else [])) ++ ")"
   | .array t => "A(" ++ tyKey t ++ ")"
-  | .call lb ts => s!"C{lb}(" ++ ",".intercalate (ts.map tyKey) ++ ")"
+  | .call lb ts o =>
+    s!"C{lb}(" ++ ",".intercalate (ts.map tyKey ++ (if o then [".."] else [])) ++ ")"
 
 /-- An SDK condition tree from flat nodes `parent:enc:op:cv` (BFS order). -/
 partial def buildCond (ns : Array Flat) (i : Nat) : Normalize.Cond :=

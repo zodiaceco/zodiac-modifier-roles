@@ -1,7 +1,6 @@
 import { Encoding, Condition, Operator } from "../../types"
 
 import { conditionId } from "../conditionId"
-import { padToMatchTypeTree } from "./padToMatchTypeTree"
 import { pushDownOr } from "./pushDownOr"
 import {
   canReorderAnd,
@@ -44,7 +43,6 @@ export function normalizeCondition(condition: Condition): Condition {
 
   result = cleanEmptyFields(result) // Remove undefined fields
   result = prunePassNodes(result) // Trim trailing Pass nodes
-  result = padToMatchTypeTree(result) // Ensure TypeTree compatibility
 
   result = flattenNestedBranches(result) // Collapse nested AND/OR
   result = dedupeChildren(result) // Remove duplicate branches
@@ -178,6 +176,15 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
         ? canReorderAnd(condition.children)
         : canReorderOr(condition.children)
     if (!canReorder) return condition
+    // a Zip must stay after the child that describes the value (the
+    // logical node's size is its first child's that fits)
+    if (
+      condition.children.some(
+        (c) =>
+          c.operator === Operator.ZipSome || c.operator === Operator.ZipEvery
+      )
+    )
+      return condition
 
     const sorted = condition.children
       .map((c) => ({

@@ -1,3 +1,5 @@
+import ConditionCheck.Check
+import ConditionPacking.Model
 /-!
 # The SDK's `normalizeCondition`, transcribed
 
@@ -194,150 +196,6 @@ def pruneCh (c : Cond) : List Cond :=
 def prune (c : Cond) : Cond :=
   if c.op == 5 && (c.enc == 5 || dynTuple c) then { c with ch := pruneCh c } else c
 
-/-! ## `padToMatchTypeTree` -/
-
-inductive TT where
-  | mk (enc : Nat) (ch : List TT)
-  deriving Inhabited
-
-def TT.enc : TT → Nat | .mk e _ => e
-def TT.ch : TT → List TT | .mk _ ch => ch
-
-mutual
-  def TT.decEq : (a b : TT) → Decidable (a = b)
-    | .mk e1 c1, .mk e2 c2 =>
-      if h : e1 = e2 then
-        match TT.decEqList c1 c2 with
-        | isTrue hc => isTrue (h ▸ hc ▸ rfl)
-        | isFalse hc => isFalse fun e => by cases e; exact hc rfl
-      else isFalse fun e => by cases e; exact h rfl
-
-  def TT.decEqList : (a b : List TT) → Decidable (a = b)
-    | [], [] => isTrue rfl
-    | [], _ :: _ | _ :: _, [] => isFalse fun e => by cases e
-    | a :: as, b :: bs =>
-      match TT.decEq a b, TT.decEqList as bs with
-      | isTrue h1, isTrue h2 => isTrue (h1 ▸ h2 ▸ rfl)
-      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
-      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
-end
-
-instance : DecidableEq TT := TT.decEq
-
-mutual
-  /-- `createTypeTree` (`none` for `null`; on the inputs where it throws,
-      `hasTT` is false and padding is skipped). An `And`/`Or` has the type of
-      its first structural child. -/
-  def createTT : Cond → Option TT
-    | ⟨e, o, _, ch⟩ =>
-      if o == 1 || o == 2 then createTTFirst ch
-      else if e == 4 then
-        match ch with
-        | [] => none
-        | x :: _ => (createTT x).map fun t => .mk 4 [t]
-      else if e == 3 || e == 5 then some (.mk e (createTTL ch))
-      else if e == 1 || e == 2 then some (.mk e [])
-      else none
-  /-- `children.map(createTypeTree).filter(t => !!t)` -/
-  def createTTL : List Cond → List TT
-    | [] => []
-    | x :: xs => match createTT x with
-      | some t => t :: createTTL xs
-      | none => createTTL xs
-  /-- A logical node's type: its first structural child's (as the contract's
-      `TypeTree.resolve`). -/
-  def createTTFirst : List Cond → Option TT
-    | [] => none
-    | x :: xs => if isStruct x then createTT x else createTTFirst xs
-end
-
-mutual
-  /-- `hasTypeTree`. -/
-  def hasTT : Cond → Bool
-    | ⟨e, o, _, ch⟩ =>
-      (if o == 1 || o == 2 || e == 3 || e == 4 || e == 5 then
-        !ch.isEmpty && (if e == 4 then
-          (match ch with
-           | [] => false
-           | x :: _ => (createTT x).isSome)
-        else true)
-      else true) && hasTTL ch
-  def hasTTL : List Cond → Bool
-    | [] => true
-    | x :: xs => hasTT x && hasTTL xs
-end
-
-mutual
-  /-- A fresh `Pass` node shaped like `t` (`extendWithPassNodes(undefined, t)`). -/
-  def passFor : TT → Cond
-    | .mk e ch => ⟨e, 0, [], if e == 3 || e == 4 || e == 5 then passForL ch else []⟩
-  def passForL : List TT → List Cond
-    | [] => []
-    | t :: ts => passFor t :: passForL ts
-end
-
-mutual
-  /-- `extendWithPassNodes` on an existing node; `v`: the node is a variant
-      (a child of the padded node, through logical nodes). -/
-  def extendC (c : Cond) (t : TT) (v : Bool) : Cond :=
-    if isLogical c then { c with ch := extendAll c.ch t v }
-    else if v && c.enc == 5 then c
-    else if isComplex c && c.enc == t.enc && !isInl c then { c with ch := extendS c.ch t.ch }
-    else c
-  termination_by (sizeOf t, sizeOf c)
-  decreasing_by
-    · apply Prod.Lex.right
-      rcases c with ⟨e, o, v, ch⟩
-      simp only [Cond.mk.sizeOf_spec]
-      omega
-    · apply Prod.Lex.left
-      rcases t with ⟨te, tch⟩
-      simp only [TT.ch, TT.mk.sizeOf_spec]
-      omega
-
-  /-- `children.map(child => extendWithPassNodes(child, t))` -/
-  def extendAll (cs : List Cond) (t : TT) (v : Bool) : List Cond :=
-    match cs with
-    | [] => []
-    | x :: xs => extendC x t v :: extendAll xs t v
-  termination_by (sizeOf t, sizeOf cs)
-  decreasing_by
-    all_goals apply Prod.Lex.right; simp only [List.cons.sizeOf_spec]; omega
-
-  /-- Structural children paired with the type tree's children in order,
-      the rest kept, `Pass` nodes appended for the remaining fields. -/
-  def extendS (cs : List Cond) (ts : List TT) : List Cond :=
-    match cs, ts with
-    | [], ts => passForL ts
-    | x :: xs, [] => x :: extendS xs []
-    | x :: xs, t :: ts =>
-      if isStruct x then extendC x t false :: extendS xs ts else x :: extendS xs (t :: ts)
-  termination_by (sizeOf ts, sizeOf cs)
-  decreasing_by
-    all_goals first
-      | (apply Prod.Lex.right; simp only [List.cons.sizeOf_spec]; omega)
-      | (apply Prod.Lex.left; simp only [List.cons.sizeOf_spec]; omega)
-end
-
-def isPaddeable (c : Cond) : Bool := isLogical c || isComplex c
-
-/-- The cumulative padding loop of `padToMatchTypeTree`. -/
-def padLoop (cs : List Cond) : List Cond :=
-  (List.range cs.length).foldl (fun acc i =>
-    if !isPaddeable acc[i]! then acc else
-    (List.range cs.length).foldl (fun acc j =>
-      if j == i || !isPaddeable acc[j]! then acc else
-      match createTT acc[j]! with
-      | none => acc
-      | some t => acc.set i (extendC acc[i]! t true)) acc) cs
-
-/-- Padding applies: every paddeable child has a type tree, and they differ. -/
-def padOk (cs : List Cond) : Bool :=
-  (cs.filter isPaddeable).all hasTT && !(((cs.filter isPaddeable).map createTT).eraseDups.length ≤ 1)
-
-def pad (c : Cond) : Cond :=
-  if (isLogical c || c.enc == 4) && padOk c.ch then { c with ch := padLoop c.ch } else c
-
 /-! ## `flattenNestedBranches`, `dedupeChildren`, `unwrapSingleChild` -/
 
 def flattenCh (op : Nat) (cs : List Cond) : List Cond :=
@@ -372,73 +230,35 @@ def orNode (hs : List Cond) : Cond := ⟨0, 2, [], hs⟩
 def replaceAt (l : List Cond) (h : Nat) (x : Cond) : List Cond :=
   if h < l.length then l.take h ++ x :: l.drop (h + 1) else l
 
-/-- The type layout of Integrity's `TypeTree.resolve` (encoding, structural
-    children); equal layouts have equal type hashes. -/
-inductive Lay where
-  | mk (enc : Nat) (ch : List Lay)
-
 mutual
-  def Lay.decEq : (a b : Lay) → Decidable (a = b)
-    | .mk e1 c1, .mk e2 c2 =>
-      if h : e1 = e2 then
-        match Lay.decEqList c1 c2 with
-        | isTrue hc => isTrue (h ▸ hc ▸ rfl)
-        | isFalse hc => isFalse fun e => by cases e; exact hc rfl
-      else isFalse fun e => by cases e; exact h rfl
-  def Lay.decEqList : (a b : List Lay) → Decidable (a = b)
-    | [], [] => isTrue rfl
-    | [], _ :: _ | _ :: _, [] => isFalse fun e => by cases e
-    | a :: as, b :: bs =>
-      match Lay.decEq a b, Lay.decEqList as bs with
-      | isTrue h1, isTrue h2 => isTrue (h1 ▸ h2 ▸ rfl)
-      | isFalse h, _ => isFalse fun e => by cases e; exact h rfl
-      | _, isFalse h => isFalse fun e => by cases e; exact h rfl
+  /-- An SDK condition as the raw tree the SDK check classifies (`nodeOf`
+      in checkStored.ts), or `none` for an unknown code. -/
+  def toCheck : Cond → Option DecoderFaithfulness.Roles.Condition
+    | ⟨e, o, cv, ch⟩ =>
+      match ConditionPacking.encOf? e, ConditionPacking.opOf? o, toCheckL ch with
+      | some en, some op, some cs =>
+        let bs : DecoderFaithfulness.Bytes := cv.map fun n => ⟨n % 256, Nat.mod_lt _ (by decide)⟩
+        some ⟨en, op, cs, false, 0,
+          if e = 5 then (if cv = [] then 4 else DecoderFaithfulness.wordVal (bs.take 2)) else 0,
+          if e = 5 then bs.drop 2 else bs⟩
+      | _, _, _ => none
+  def toCheckL : List Cond → Option (List DecoderFaithfulness.Roles.Condition)
+    | [] => some []
+    | x :: xs => match toCheck x, toCheckL xs with
+      | some c, some cs => some (c :: cs)
+      | _, _ => none
 end
 
-instance : DecidableEq Lay := Lay.decEq
-
-/-- Type hash 0: encoding `None` without structural children. -/
-def Lay.zero : Lay → Bool
-  | .mk e ch => e == 0 && ch.isEmpty
-
-/-- `isVariant` in `effects.ts` (`TypeTree._isVariant`), from the first
-    nonzero layout `prev`. -/
-def isVarGo : Lay → List Lay → Bool
-  | _, [] => false
-  | prev, l :: ls =>
-    if (if prev.zero then l else prev).zero || l.zero then isVarGo (if prev.zero then l else prev) ls
-    else if (if prev.zero then l else prev) != l then true
-    else isVarGo (if prev.zero then l else prev) ls
-
-mutual
-  /-- `layout` in `effects.ts`. -/
-  def lay : Cond → Lay
-    | ⟨e, o, _, ch⟩ =>
-      if (o == 1 || o == 2) && !isVarGo (.mk 0 []) (layL ch) then
-        ((layL ch).find? fun l => !l.zero).getD (.mk 0 [])
-      else .mk (if e == 6 then 0 else e)
-        (if e == 4 && !isVarGo (.mk 0 []) (layL ch) then ((layL ch).filter fun l => !l.zero).take 1
-         else (layL ch).filter fun l => !l.zero)
-  def layL : List Cond → List Lay
-    | [] => []
-    | x :: xs => lay x :: layL xs
-end
-
-def Lay.dynish : Lay → Bool
-  | .mk e _ => e == 2 || e == 5 || e == 0
-
-/-- `compatibleSiblings` loop, from the first nonzero layout `prev`. -/
-def compatGo : Lay → List Lay → Bool
-  | _, [] => true
-  | prev, l :: ls =>
-    if l.zero then compatGo (if prev.zero then l else prev) ls
-    else ((if prev.zero then l else prev) == l ||
-        ((if prev.zero then l else prev).dynish && l.dynish)) &&
-      compatGo (if prev.zero then l else prev) ls
-
-/-- `compatibleSiblings` in `effects.ts`: Integrity accepts these as children
-    of one `And`/`Or`. -/
-def sameType (hs : List Cond) : Bool := compatGo (.mk 0 []) (hs.map lay)
+/-- `compatibleSiblings` in `effects.ts` (`siblingsCompatible` in
+    checkStored.ts): the SDK check accepts these as the children of one
+    `And`/`Or` (`logicalTy`, strict flag `s = true`). The merged `Or` of
+    `pushDownOr` must be such a node. -/
+def sameType (hs : List Cond) : Bool :=
+  match toCheckL hs with
+  | some cs => match ConditionCheck.classifyAll true cs with
+    | some ks => (ConditionCheck.logicalTy true ks).isSome
+    | none => false
+  | none => false
 
 /-- `findMatchesHingeIndex` (with the equal-length rule). -/
 def hingeM (first : Cond) (chs : List Cond) : Option Nat :=
@@ -545,8 +365,12 @@ def sortLe (a b : Cond) : Bool :=
   let ib := idBytes b
   ia.length < ib.length || (ia.length == ib.length && !decide (ib < ia))
 
+/-- A Zip child stays where it is: it must come after the child that
+    describes the value (the logical node's size is its first child's that
+    fits, and a Zip's size has nothing to do with the value). -/
 def canReorder (c : Cond) : Bool :=
-  if c.op == 1 then canReorderAnd c.ch else canReorderOr c.ch
+  (if c.op == 1 then canReorderAnd c.ch else canReorderOr c.ch) &&
+    !c.ch.any (fun x => x.op == 10 || x.op == 11)
 
 /-- Sorted, with the calldata (`AbiEncoded`) children first. -/
 def sortCh (cs : List Cond) : List Cond :=
@@ -568,6 +392,6 @@ def normalize : Nat → Cond → Cond
   | n + 1, c =>
     if keepsAsWritten c then c else
     let c1 := { c with ch := c.ch.map (normalize n) }
-    sortB (pushDownOr (normalize n) (unwrap (dedupe (flatten (pad (prune c1))))))
+    sortB (pushDownOr (normalize n) (unwrap (dedupe (flatten (prune c1)))))
 
 end Normalize

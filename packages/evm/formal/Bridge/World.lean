@@ -112,6 +112,32 @@ def decodeAt (data : Calldata) (e : Nat) (m : Condition) (l : Nat) : Option (Lis
 def prefixOf (e : Nat) (cv : List Nat) : Bytes :=
   if e = 5 then (toBytes cv).drop 2 else toBytes cv
 
+/-- A *variant* layout: the call types one `bytes` value may have, at a
+    position its parent reads as a dynamic value (`Dynamic`, not inlined).
+    Its children are the candidates, each with its key (the leading bytes a
+    call of that type starts with) as compValue. -/
+def isVarLay (m : Condition) : Bool := m.operator == .Or && m.encoding == .Dynamic
+
+/-- The candidate of a variant layout whose key the calldata at `l` starts
+    with (any other layout is itself). A call interpretation is decoded with
+    it: the branch whose leading bytes match is read as its own type. -/
+def pick (data : Calldata) (m : Condition) (l : Nat) : Condition :=
+  if isVarLay m then
+    (m.children.find? fun k => (leadingCheck data (adjust 5 l) k.compValue).isNone).getD m
+  else m
+
+/-- The layout `Matches` on encoding `e` decodes `v` with. -/
+def layAt (data : Calldata) (e : Nat) (v : Condition × Nat) : Condition :=
+  if e = 5 then pick data v.1 v.2 else v.1
+
+theorem pick_of_ne {data : Calldata} {m : Condition} (l : Nat) (h : m.encoding ≠ .Dynamic) :
+    pick data m l = m := by
+  unfold pick isVarLay; simp [h]
+
+theorem layAt_of_ne {data : Calldata} (e : Nat) {m : Condition} (l : Nat) (h : m.encoding ≠ .Dynamic) :
+    layAt data e (m, l) = m := by
+  unfold layAt; split <;> simp [pick_of_ne l h]
+
 /-- The value `__input` reads. -/
 def inputAt (data : Calldata) (e : Nat) (m : Condition) (l : Nat) : Input :=
   if e = 0 ∨ e = 6 then .etherValue else input data l m
@@ -257,12 +283,12 @@ def extW (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) (e o : Nat) (c
 
 /-- The contract as a normalization world. -/
 def contractWorld (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) : World Val' Slots CM where
-  fields e v := match decodeAt data e v.1 v.2 with
-    | some locs => v.1.children.zip locs
+  fields e v := match decodeAt data e (layAt data e v) v.2 with
+    | some locs => (layAt data e v).children.zip locs
     | none => []
   dflt := (default, 0)
   gate e cv v := (leadingCheck data (adjust e v.2) (prefixOf e cv)).isNone &&
-    (decodeAt data e v.1 v.2).isSome
+    (decodeAt data e (layAt data e v) v.2).isSome
   ext := extW avatar env data n
 
 end Bridge

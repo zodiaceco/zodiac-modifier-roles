@@ -53,6 +53,8 @@ theorem Fits.layEq {x : Cond} {d m : Condition} (h : Fits avatar x d m) (hs : is
   | arr _ _ _ _ hl _ _ _ _ => exact hl
   | slice _ _ _ hl _ _ _ _ _ => exact hl
   | leaf _ _ _ ht _ _ _ _ _ _ _ _ => exact ht.layEq
+  | varAbi _ _ _ _ hl _ _ _ _ _ => exact hl
+  | varDyn _ _ hl _ => exact hl
 
 theorem cvOf_plain {c : Cond} (h15 : c.op ≠ 15) (h16 : c.op ≠ 16) (h5 : c.enc ≠ 5) :
     cvOf avatar c = toBytes c.cv := by
@@ -292,9 +294,13 @@ theorem tup_rel {c : Cond} {m : Condition} (f l : Nat) (cons : List Consumption)
   have hnarr : m.encoding ≠ .Array := by
     rw [← hm, hDe]; rcases he with h | h <;> simp [h, encN, ConditionPacking.encOf?]
   have hnarrD : (D avatar c).encoding ≠ .Array := by rw [hm]; exact hnarr
+  have hndyn : m.encoding ≠ .Dynamic := by
+    rw [← hm, hDe]; rcases he with h | h <;> simp [h, encN, ConditionPacking.encOf?]
+  have hlayAt : layAt data c.enc (m, l) = m := layAt_of_ne c.enc l hndyn
   rw [hadj, D_compValue, prefixOf_cvOf avatar h5 he]
   show Rel _ (if ((leadingCheck data (adjust c.enc l) (prefixOf c.enc c.cv)).isNone &&
-      (decodeAt data c.enc m l).isSome) = true then _ else _)
+      (decodeAt data c.enc (layAt data c.enc (m, l)) l).isSome) = true then _ else _)
+  rw [hlayAt]
   rcases leadingCheck_cases data (adjust c.enc l) (prefixOf c.enc c.cv) hcv with h | h | h
   · rw [h]
     simp only [Option.isNone_none, Bool.true_and]
@@ -302,6 +308,8 @@ theorem tup_rel {c : Cond} {m : Condition} (f l : Nat) (cons : List Consumption)
     | leaf h1 h2 _ =>
       exfalso; rw [← hm, hDe] at h1 h2; rcases he with h | h <;> simp_all [encN, ConditionPacking.encOf?]
     | arr _ h1 _ _ => exact absurd h1 hnarr
+    | var hv _ =>
+      exfalso; unfold isVarLay at hv; simp at hv; exact hndyn hv.2
     | tup locsM _ hdl hdch =>
       have hde : decodeAt data c.enc m l = some locsM := by
         have : (if m.encoding = .AbiEncoded then 5 else 3) = c.enc := by
@@ -326,10 +334,10 @@ theorem tup_rel {c : Cond} {m : Condition} (f l : Nat) (cons : List Consumption)
         rw [hDch]; simp; omega
       rw [if_neg (by rw [hlen]; exact fun h => h rfl)]
       have hfields : (W avatar env data n).fields c.enc (m, l) = m.children.zip locsM := by
-        show (match decodeAt data c.enc m l with
-          | some locs => m.children.zip locs
+        show (match decodeAt data c.enc (layAt data c.enc (m, l)) l with
+          | some locs => (layAt data c.enc (m, l)).children.zip locs
           | none => []) = _
-        rw [hde]
+        rw [hlayAt, hde]
       rw [hfields, assign_struct _ c.ch _ _ hs (by simp; omega)]
       refine seqLoop_rel env data _ _ (Corr.of_idx env data n f _ _ (by simp [hDch]; omega) ?_) cons sl
       intro i h1 h2 cons' sl'
@@ -420,6 +428,7 @@ theorem Decodable.arr_locs {data : Calldata} {m : Condition} {l : Nat} (hm : m.e
   | leaf _ _ h3 => exact absurd hm h3
   | tup _ h1 _ _ => rcases h1 with h1 | h1 <;> rw [hm] at h1 <;> exact absurd h1 (by decide)
   | arr locs _ h2 h3 => exact ⟨locs, h2, h3⟩
+  | var hv _ => unfold isVarLay at hv; simp [hm] at hv
 
 include henv in
 theorem iter_rel {c : Cond} {m : Condition} (f l : Nat) (cons : List Consumption) (sl : Slots)
@@ -602,6 +611,175 @@ theorem struct_enc {c : Cond} (hs : isStruct c = true) (h1 : c.op ≠ 1) (h2 : c
   simp only [Bool.false_eq_true, ite_false, Bool.not_eq_true', Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hs
   exact hs
 
+/-! ## Variants -/
+
+theorem prefix_of_leading_none {data : Calldata} {loc : Nat} {a : Bytes}
+    (h : (leadingCheck data loc a).isNone = true) : a <+: data.drop loc := by
+  unfold leadingCheck at h
+  split at h
+  · rename_i h0; rw [List.eq_nil_of_length_eq_zero h0]; exact List.nil_prefix
+  · split at h
+    · simp at h
+    · split at h
+      · simp at h
+      · split at h
+        · rename_i heq; rw [← heq]; exact List.take_prefix _ _
+        · simp at h
+
+/-- The candidate whose key the calldata starts with is the one `pick`
+    chooses: no other key is comparable with it. -/
+theorem pick_eq {data : Calldata} {m k : Condition} {l : Nat} (hv : isVarLay m = true)
+    (hm : k ∈ m.children) (hu : KeyUnique m k)
+    (hk : (leadingCheck data (adjust 5 l) k.compValue).isNone = true) : pick data m l = k := by
+  unfold pick; rw [if_pos hv]
+  cases hf : m.children.find? (fun k => (leadingCheck data (adjust 5 l) k.compValue).isNone) with
+  | none =>
+    rw [List.find?_eq_none] at hf
+    exact absurd hk (hf k hm)
+  | some k' =>
+    simp only [Option.getD_some]
+    by_cases hne : k' = k
+    · exact hne
+    exfalso
+    have hk' := List.find?_some hf
+    have hm' := List.mem_of_find?_eq_some hf
+    have p1 := prefix_of_leading_none hk
+    have p2 := prefix_of_leading_none hk'
+    obtain ⟨n1, n2⟩ := hu k' hm' hne
+    rcases Nat.le_total k'.compValue.length k.compValue.length with hl | hl
+    · exact n1 (List.prefix_of_prefix_length_le p2 p1 hl)
+    · exact n2 (List.prefix_of_prefix_length_le p1 p2 hl)
+
+theorem assign_indep {V : Type} (dd : V) : ∀ (cs : List Cond) (fs : List V) (v v' : V),
+    (∀ x ∈ cs, isStruct x = true) → assign dd cs fs v = assign dd cs fs v'
+  | [], _, _, _, _ => rfl
+  | c :: cs, fs, v, v', hs => by
+    simp only [assign, hs c (by simp), ite_true]
+    rw [assign_indep dd cs fs.tail v v' (fun x hx => hs x (by simp [hx]))]
+
+/-- A `Matches` with structural children depends on the value only through
+    the layout it decodes with (when its leading bytes match). -/
+theorem matchesT_layAt (e : Nat) (cv : List Nat) (ch : List Cond) (v1 v2 : Condition) (l : Nat)
+    (hs : ∀ x ∈ ch, isStruct x = true)
+    (h : (leadingCheck data (adjust e l) (prefixOf e cv)).isNone = true →
+      layAt data e (v1, l) = layAt data e (v2, l)) :
+    matchesT (W avatar env data n) e cv ch (v1, l) = matchesT (W avatar env data n) e cv ch (v2, l) := by
+  funext sl cs
+  unfold matchesT
+  by_cases hL : (leadingCheck data (adjust e l) (prefixOf e cv)).isNone = true
+  · have hla := h hL
+    show (if ((leadingCheck data (adjust e l) (prefixOf e cv)).isNone &&
+        (decodeAt data e (layAt data e (v1, l)) l).isSome) = true then _ else _) =
+      (if ((leadingCheck data (adjust e l) (prefixOf e cv)).isNone &&
+        (decodeAt data e (layAt data e (v2, l)) l).isSome) = true then _ else _)
+    rw [hla]
+    split
+    · congr 1
+      show List.map _ (assign _ ch (match decodeAt data e (layAt data e (v1, l)) l with
+          | some locs => (layAt data e (v1, l)).children.zip locs | none => []) (v1, l)) =
+        List.map _ (assign _ ch (match decodeAt data e (layAt data e (v2, l)) l with
+          | some locs => (layAt data e (v2, l)).children.zip locs | none => []) (v2, l))
+      rw [hla, assign_indep _ ch _ (v1, l) (v2, l) hs]
+    · rfl
+  · show (if ((leadingCheck data (adjust e l) (prefixOf e cv)).isNone && _) = true then _ else _) =
+      (if ((leadingCheck data (adjust e l) (prefixOf e cv)).isNone && _) = true then _ else _)
+    simp only [Bool.not_eq_true] at hL
+    simp [hL]
+
+theorem sem_matches_eq {c : Cond} (h5 : c.op = 5) (he : c.enc = 3 ∨ c.enc = 5) (v : Val') :
+    sem (W avatar env data n) c v = matchesT (W avatar env data n) c.enc c.cv c.ch v := by
+  have h0 : ¬ c.op = 0 := by omega
+  have h1 : ¬ c.op = 1 := by omega
+  have h2 : ¬ c.op = 2 := by omega
+  rw [sem_eq, ite_neg' h0, ite_neg' h1, ite_neg' h2, ite_pos' ⟨h5, he⟩]
+
+/-- A call interpretation whose leading bytes the calldata does not have:
+    both sides fail at the leading-bytes check. -/
+theorem lead_fail_rel {c : Cond} (f l : Nat) (cons : List Consumption) (sl : Slots) (v : Val')
+    (h5 : c.op = 5) (he : c.enc = 5) (hl : v.2 = l)
+    (hL : (leadingCheck data (adjust 5 l) (prefixOf 5 c.cv)).isNone = false)
+    (hcv : (prefixOf c.enc c.cv).length ≤ 32) :
+    Rel (evalC env data n (f + 1) l (D avatar c) cons sl)
+      (sem (W avatar env data n) c v sl (toMap cons)) := by
+  have hDe := D_encoding_of avatar (c := c) (by omega)
+  rw [evalC_matches env data n f l _ cons sl (by rw [D_operator, h5]; rfl),
+    sem_matches_eq avatar env data n h5 (.inr he)]
+  have hadj : (if l > 0 ∧ (D avatar c).encoding = .AbiEncoded then l + 32 else l) = adjust 5 l := by
+    rw [hDe]; unfold adjust; simp [he, encN, ConditionPacking.encOf?]
+  rw [hadj, D_compValue, prefixOf_cvOf avatar h5 (.inr he)]
+  rw [he] at hcv
+  unfold matchesT
+  rcases v with ⟨v1, v2⟩
+  simp only at hl; subst hl
+  rw [he]
+  show Rel _ (if ((leadingCheck data (adjust 5 v2) (prefixOf 5 c.cv)).isNone && _) = true then _ else _)
+  rcases leadingCheck_cases data (adjust 5 v2) (prefixOf 5 c.cv) hcv with h | h | h
+  · rw [h] at hL; simp at hL
+  · rw [h]; simpa using Rel.violation (by decide) (by decide) sl
+  · rw [h]; simpa using Rel.violation (by decide) (by decide) sl
+
+/-- What the operators read of a plain `bytes` layout: the encoding,
+    `inlined` and `size`. -/
+theorem input_dyn {m m' : Condition} (l : Nat) (he : m.encoding = .Dynamic) (he' : m'.encoding = .Dynamic)
+    (hs : m.size = m'.size) : input data l m = input data l m' := by
+  have hsz : Roles.size data l m = Roles.size data l m' := by
+    rw [DecoderFaithfulness.size_eq, DecoderFaithfulness.size_eq, he, he']; simp
+  unfold input
+  rw [he, he', hs, hsz]
+
+theorem extW_dyn {m m' : Condition} (o : Nat) (cv : List Nat) (ss : List (Val' → T)) (l : Nat)
+    (he : m.encoding = .Dynamic) (he' : m'.encoding = .Dynamic)
+    (hi : m.inlined = m'.inlined) (hs : m.size = m'.size) :
+    extW avatar env data n 2 o cv ss (m, l) = extW avatar env data n 2 o cv ss (m', l) := by
+  have hin : inputAt data 2 m l = inputAt data 2 m' l := by
+    unfold inputAt; simp only [show ¬ ((2 : Nat) = 0 ∨ (2 : Nat) = 6) by omega, ite_false]
+    exact input_dyn data l he he' hs
+  have hcs : customSize data 2 m l = customSize data 2 m' l := by
+    unfold customSize
+    simp only [show ¬ ((2 : Nat) = 0 ∨ (2 : Nat) = 6) by omega, ite_false]
+    rw [hs, show Roles.size data l m = Roles.size data l m' by
+      rw [DecoderFaithfulness.size_eq, DecoderFaithfulness.size_eq, he, he']; simp]
+  unfold extW
+  split
+  all_goals first
+    | rfl
+    | (simp only [iterT, tailT, matchesArrT, sliceT, cmpOk, bitmaskOk,
+        allowanceCharge, cmpValue, hin, hi, hs]; done)
+    | (unfold pluckT; simp only [hin]; done)
+    | (unfold customCharges; simp only [hcs]; done)
+
+
+theorem sem_dyn {c : Cond} (henc : c.enc = 2) (h1 : c.op ≠ 1) (h2 : c.op ≠ 2) {m m' : Condition} (l : Nat)
+    (he : m.encoding = .Dynamic) (he' : m'.encoding = .Dynamic)
+    (hi : m.inlined = m'.inlined) (hs : m.size = m'.size) :
+    sem (W avatar env data n) c (m, l) = sem (W avatar env data n) c (m', l) := by
+  rw [sem_eq, sem_eq]
+  by_cases h0 : c.op = 0
+  · simp [h0]
+  simp only [h0, h1, h2, ite_false]
+  rw [ite_neg' (by omega), ite_neg' (by omega)]
+  show extW avatar env data n c.enc c.op c.cv _ (m, l) = extW avatar env data n c.enc c.op c.cv _ (m', l)
+  rw [henc]
+  exact extW_dyn avatar env data n c.op c.cv _ l he he' hi hs
+
+/-- A `Matches` on calldata that fits a call layout has structural
+    children. -/
+theorem Fits.matches_struct {c : Cond} {d k : Condition} (h : Fits avatar c d k)
+    (h5 : c.op = 5) (he : c.enc = 5) (hk : k.encoding = .AbiEncoded) :
+    ∀ x ∈ c.ch, isStruct x = true := by
+  cases h with
+  | tup _ _ _ _ _ _ hs _ _ _ => exact hs
+  | pass hop _ _ _ _ _ _ => omega
+  | ns hs _ _ => rw [isStruct_eq] at hs; simp [h5, he] at hs
+  | logical hop _ _ _ _ _ _ => omega
+  | arr _ h _ _ _ _ _ _ _ => omega
+  | slice hop _ _ _ _ _ _ _ _ => omega
+  | leaf hop _ _ _ _ _ _ _ _ _ _ _ =>
+    unfold leafOp at hop; simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true,
+      decide_eq_true_eq] at hop; omega
+  | varAbi _ _ _ hv _ _ _ _ _ _ => unfold isVarLay at hv; simp [hk] at hv
+  | varDyn _ h _ _ => omega
+
 include henv in
 /-- **Adequacy.** The evaluator transcription computes the contract world's
     meaning, for every tree whose layout fits `m`, on calldata that decodes
@@ -684,8 +862,50 @@ theorem adequacy {c : Cond} {d m : Condition} (hfit : Fits avatar c d m) :
     rw [cvOk_eq] at hcv'
     exact slice_rel avatar env henv data n f l cons sl hop he hnode hlay hch
       (fun sz l' cons sl => ih sz f l' cons sl (by have := height_mem hx; omega) (hcv.child hx)
-        (.leaf (by simp [winMeta]) (by simp [winMeta]) (by simp [winMeta])))
+        (.leaf (by simp [winMeta]) (by simp [winMeta]) (by simp [winMeta])
+          (by simp [winMeta, isVarLay])))
       (hcv'.2.1 hop)
+  | @varAbi c d m k h5 he hd hv _ hmem hkenc hkey hu hf ih =>
+    intro fuel l cons sl hh hcv hdec
+    obtain ⟨f, rfl, -⟩ := fuel_succ hh
+    subst hd
+    have hcv' := hcv
+    rw [cvOk_eq] at hcv'
+    have hlen : (prefixOf c.enc c.cv).length ≤ 32 := hcv'.1 h5
+    have hs := Fits.matches_struct avatar hf h5 he hkenc
+    have hkd : k.encoding ≠ .Dynamic := by rw [hkenc]; decide
+    -- the variant decodes as the candidate whenever its leading bytes match
+    have hsem : sem (W avatar env data n) c (m, l) = sem (W avatar env data n) c (k, l) := by
+      rw [sem_matches_eq avatar env data n h5 (.inr he), sem_matches_eq avatar env data n h5 (.inr he), he]
+      refine matchesT_layAt avatar env data n 5 c.cv c.ch m k l hs fun hL => ?_
+      unfold layAt
+      simp only [ite_true]
+      rw [pick_eq hv hmem hu (by rw [hkey]; exact hL), pick_of_ne l hkd]
+    cases hL : (leadingCheck data (adjust 5 l) (prefixOf 5 c.cv)).isNone
+    · exact lead_fail_rel avatar env data n f l cons sl (m, l) h5 he rfl hL hlen
+    · have hdk : Decodable data k l := by
+        cases hdec with
+        | var _ h => exact h k hmem (by rw [hkey]; exact hL)
+        | leaf _ _ _ hnv => rw [hv] at hnv; cases hnv
+        | tup _ h1 _ _ =>
+          unfold isVarLay at hv; simp at hv; rcases h1 with h1 | h1 <;> rw [hv.2] at h1 <;> cases h1
+        | arr _ h1 _ _ => unfold isVarLay at hv; simp at hv; rw [hv.2] at h1; cases h1
+      rw [hsem]; exact ih (f + 1) l cons sl hh hcv hdk
+  | @varDyn c d m hv he2 hl hf ih =>
+    intro fuel l cons sl hh hcv _
+    have hops := Fits.dyn_op avatar hf he2
+    have hst : isStruct c = true := by
+      rw [isStruct_eq]
+      have : (c.op == 1 || c.op == 2) = false := by simp [hops.1, hops.2]
+      rw [this]; simp [he2]
+    have hld := Fits.layEq avatar hf hst
+    have hme : m.encoding = .Dynamic := by unfold isVarLay at hv; simp at hv; exact hv.2
+    have hsem : sem (W avatar env data n) c (m, l) = sem (W avatar env data n) c (dynLay, l) :=
+      sem_dyn avatar env data n he2 hops.1 hops.2 l hme rfl
+        (by rw [← hl.1, hld.1]) (by rw [← hl.2, hld.2])
+    rw [hsem]
+    exact ih fuel l cons sl hh hcv
+      (.leaf (by simp [dynLay]) (by simp [dynLay]) (by simp [dynLay]) (by simp [dynLay, isVarLay]))
   | @leaf c d m hop hs hnode hty henc hinl _ _ _ _ _ _ =>
     intro fuel l cons sl hh hcv _
     obtain ⟨f, rfl, -⟩ := fuel_succ hh

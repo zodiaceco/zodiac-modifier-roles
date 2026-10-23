@@ -10,7 +10,7 @@ import Bridge.Normalize
 import Bridge.Plain
 import Bridge.Meta
 import Bridge.Preserve
-import Bridge.PadFits
+import Bridge.NormalizeFits
 import Bridge.CvOkPres
 import Bridge.Final
 import Bridge.Pipeline

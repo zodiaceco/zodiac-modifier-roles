@@ -1,9 +1,8 @@
 import { Condition, Operator, Encoding } from "../types"
 
 export const checkRootConditionIntegrity = (condition: Condition): void => {
-  const rootType = checkConsistentChildrenTypes(condition)
-  // a root may also read no calldata at all (e.g. an allowance alone)
-  if (rootType !== Encoding.AbiEncoded && rootType !== Encoding.None) {
+  const rootType = scopedType(condition)
+  if (rootType !== Encoding.AbiEncoded) {
     throw new Error(
       `Root param type must be \`AbiEncoded\`, got \`${Encoding[rootType]}\``
     )
@@ -12,15 +11,16 @@ export const checkRootConditionIntegrity = (condition: Condition): void => {
 }
 
 export const checkConditionIntegrity = (condition: Condition): void => {
-  checkConsistentChildrenTypes(condition)
   checkConditionIntegrityRecursive(condition)
 }
 
 /**
- * Validates that logical condition children have consistent types.
- * Since the children conditions address the very same value it does not make sense for them to declare incompatible param types.
- * */
-const checkConsistentChildrenTypes = (condition: Condition): Encoding => {
+ * The encoding a condition reads: its own, or for a logical node that of its
+ * first child reading a parameter. Whether the children of one And/Or fit
+ * together is the SDK check's job (`checkStored`, with prefix and variant
+ * rules the v2 contracts did not have).
+ */
+export const scopedType = (condition: Condition): Encoding => {
   // EtherValue checks and Zips read no parameter of their own
   if (condition.paramType === Encoding.EtherValue) return Encoding.None
   if (
@@ -29,44 +29,12 @@ const checkConsistentChildrenTypes = (condition: Condition): Encoding => {
   ) {
     return Encoding.None
   }
-  if (condition.paramType !== Encoding.None) {
-    return condition.paramType
+  if (condition.paramType !== Encoding.None) return condition.paramType
+  for (const child of condition.children ?? []) {
+    const t = scopedType(child)
+    if (t !== Encoding.None) return t
   }
-
-  const childTypes = (condition.children || []).map(
-    checkConsistentChildrenTypes
-  )
-  const expectedType =
-    childTypes.find((t) => t !== Encoding.None) ?? Encoding.None
-
-  childTypes.forEach((childType) => {
-    checkParameterTypeCompatibility(expectedType, childType)
-  })
-
-  return expectedType
-}
-
-export const checkParameterTypeCompatibility = (
-  left: Encoding,
-  right: Encoding
-): void => {
-  if (right === Encoding.None) return
-
-  if (right === left) return
-
-  if (right === Encoding.Dynamic && left === Encoding.AbiEncoded) {
-    return
-  }
-
-  if (right === Encoding.AbiEncoded && left === Encoding.Dynamic) {
-    throw new Error(
-      `Mixed children types: \`${Encoding[right]}\` must appear before \`${Encoding[left]}\``
-    )
-  }
-
-  throw new Error(
-    `Inconsistent children types (\`${Encoding[left]}\` and \`${Encoding[right]}\`)`
-  )
+  return Encoding.None
 }
 
 const checkConditionIntegrityRecursive = (condition: Condition): void => {

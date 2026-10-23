@@ -35,7 +35,7 @@ def memo : Bytes := [0x68, 0x69]  -- "hi"
 def args : List Val := [.word (word 1000), .bytes memo]
 
 theorem root_desc : Desc false root (.call selector args) :=
-  .call rfl rfl (by simp [args])
+  .call rfl rfl (by simp [root, node]) (by simp [root, node, args])
     (.cons (.desc (.word rfl rfl rfl (length_word _)))
       (.cons (.desc (.bytes rfl rfl rfl trivial)) .nil)) (.inl rfl)
 
@@ -92,11 +92,12 @@ def xVal : Val := .word (word 0x1234)
 def args2 : List Val := [dataVal, xVal]
 
 theorem interpA_desc : Desc true interpA dataVal :=
-  .call rfl rfl (by simp) (.cons (.desc (.word rfl rfl rfl (length_word _))) .nil) (.inl rfl)
+  .call rfl rfl (by simp [interpA, node]) (by simp [interpA, node, dataVal])
+    (.cons (.desc (.word rfl rfl rfl (length_word _))) .nil) (.inl rfl)
 
 /-- `interpA` describes `data`; `interpB` does not fit (and needs `s = true`). -/
 theorem root2_desc : Desc true root2 (.call selector args2) :=
-  .call rfl rfl (by simp [args2])
+  .call rfl rfl (by simp [root2, node]) (by simp [root2, node, args2])
     (.cons (.desc (.logical interpA rfl (.inr rfl) (by simp [orNode, node]) (.desc interpA_desc)
         (by
           intro ch hm
@@ -227,7 +228,7 @@ theorem pluck_desc {s : Bool} (pk : Condition) (hpk : pk = pluckA ∨ pk = pluck
     obtain ⟨w, rfl, hw⟩ := hvs v hv
     exact .desc (.word rfl rfl rfl hw)
   rcases hpk with rfl | rfl <;>
-  · refine .array (node .Static .Pass []) [] rfl rfl leaf ?_ ?_ (.inl rfl)
+  · refine .array (node .Static .Pass []) [] rfl rfl leaf ?_ ?_ (.inl ⟨rfl, rfl⟩)
     · intro i hi hv
       have : i = 0 := by simp [pluckA, pluckB, node] at hi; omega
       subst this
@@ -239,7 +240,7 @@ theorem pluck_desc {s : Bool} (pk : Condition) (hpk : pk = pluckA ∨ pk = pluck
 
 theorem root3_desc {s : Bool} : Desc s root3 (.call selector args3) := by
   have hargs : Desc s args3Node (.call selector args3) := by
-    refine .call rfl rfl (by simp [args3]) ?_ (.inl rfl)
+    refine .call rfl rfl (by simp [args3Node, node]) (by simp [args3Node, node, args3]) ?_ (.inl rfl)
     refine .cons (.desc (pluck_desc _ (.inl rfl) _ ?_)) (.cons (.desc (pluck_desc _ (.inr rfl) _ ?_)) .nil)
     all_goals
       intro v hv

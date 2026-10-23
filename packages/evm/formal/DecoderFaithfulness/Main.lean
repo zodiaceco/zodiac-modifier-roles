@@ -65,12 +65,12 @@ theorem Desc.plain_encoding {s : Bool} {c : Condition} {u : Val} (hD : Desc s c 
       (annotate c).operator ≠ .Or) :
     c.encoding ≠ .AbiEncoded ∧ c.encoding ≠ .None ∧ c.encoding ≠ .EtherValue := by
   match hD with
-  | .word he _ _ _ | .bytes he _ _ _ | .tuple he _ _ _ | .array _ _ he _ _ _ _ _ =>
+  | .word he _ _ _ | .bytes he _ _ _ | .tuple he _ _ _ _ _ | .array _ _ he _ _ _ _ _ =>
     rw [he]; decide
   | .sliceWord _ h _ _ _ _ _ | .sliceBytes _ h _ _ _ _ _ =>
     exact absurd (annotate_op_eq h (by decide)) hop.1
-  | .call _ _ _ _ h =>
-    rcases h with h | h
+  | .call _ _ _ _ _ h =>
+    rcases h with h | ⟨h, -⟩
     · exact absurd (annotate_op_eq h (by decide)) hop.2.1
     · exact absurd (annotate_op_eq h (by decide)) hop.2.2.1
   | .logical _ _ h _ _ _ _ =>
@@ -91,14 +91,14 @@ theorem NonStruct.not_bytesLike : ∀ {c}, NonStruct c → BytesLike c → False
 theorem NonStruct.not_desc {s : Bool} : ∀ {c u}, NonStruct c → Desc s c u → False
   | _, _, .leaf he _ _, .word h _ _ _ | _, _, .leaf he _ _, .sliceWord h _ _ _ _ _ _
   | _, _, .leaf he _ _, .bytes h _ _ _ | _, _, .leaf he _ _, .sliceBytes h _ _ _ _ _ _
-  | _, _, .leaf he _ _, .tuple h _ _ _ | _, _, .leaf he _ _, .array _ _ h _ _ _ _ _
-  | _, _, .leaf he _ _, .call h _ _ _ _ => by
+  | _, _, .leaf he _ _, .tuple h _ _ _ _ _ | _, _, .leaf he _ _, .array _ _ h _ _ _ _ _
+  | _, _, .leaf he _ _, .call h _ _ _ _ _ => by
     rcases he with he | he <;> rw [he] at h <;> cases h
   | _, _, .leaf _ hch _, .logical _ _ _ hm0 _ _ _ => by rw [hch] at hm0; simp at hm0
   | _, _, .logical he _ _, .word h _ _ _ | _, _, .logical he _ _, .sliceWord h _ _ _ _ _ _
   | _, _, .logical he _ _, .bytes h _ _ _ | _, _, .logical he _ _, .sliceBytes h _ _ _ _ _ _
-  | _, _, .logical he _ _, .tuple h _ _ _ | _, _, .logical he _ _, .array _ _ h _ _ _ _ _
-  | _, _, .logical he _ _, .call h _ _ _ _ => by rw [he] at h; cases h
+  | _, _, .logical he _ _, .tuple h _ _ _ _ _ | _, _, .logical he _ _, .array _ _ h _ _ _ _ _
+  | _, _, .logical he _ _, .call h _ _ _ _ _ => by rw [he] at h; cases h
   | _, _, .logical _ _ hall, .logical ch0 _ _ hm0 h0 _ _ =>
     match h0 with
     | .desc d => NonStruct.not_desc (hall ch0 hm0) d
@@ -399,29 +399,32 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hnav; simp [isNavOp] at hnav)
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hop'; cases hop')
-    | .tuple _ _ _ hnav | .array _ _ _ _ _ _ _ hnav =>
+    | .tuple _ _ _ _ _ hnav | .array _ _ _ _ _ _ _ hnav =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hnav; simp [isNavOp] at hnav)
-    | .call _ _ _ _ hop' =>
+    | .call _ _ _ _ _ hop' =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hop'; simp at hop')
   | matchesChild locs i hi hop hch hcount hvis ih =>
     intro c u hc hD hp _
     subst hc
     have hop0 := annotate_op_of hop (by decide)
     match hD with
-    | .tuple (vs := vs) he hne hall _ =>
+    | .tuple (vs := vs) he hne hk hall _ _ =>
       rw [matchesLoc_plain (.inl he)] at hch
       obtain ⟨locs', hl, hlen', hpl⟩ :=
-        children_tuple hlen (by rw [annotate_encoding, he]; simp) hall
+        children_tuple hlen (by rw [annotate_encoding, he]; simp) hk hall
           (by simpa [Placed, enc_tuple] using hp)
       rw [hl] at hch; cases hch
       have hiv : i < vs.length := by omega
-      have hic : i < c.children.length := by rw [DescAll.length_eq hall]; exact hiv
+      have hic : i < c.children.length := by omega
+      have hall' : DescS s c.children[i] vs[i] := by
+        have := DescAll.get hall i hic
+        simpa [List.getElem_take] using this
       have hgetD : (annotate c).children.getD i default = annotate c.children[i] := by
         rw [annotate_children]; simp [hic]
       rw [hgetD] at ih hvis
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
       exact Reached.step (fun q => Val.sub_tuple vs i hiv q) (List.getElem_mem hic)
-        (DescAll.get hall i hic) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
+        hall' hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .array (vs := vs) c0 cs he hcs h0 hpos _ _ =>
       rw [matchesLoc_plain (.inr he)] at hch
       obtain ⟨locs', hl, hlen', hpl⟩ :=
@@ -437,19 +440,22 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
       exact Reached.step (fun q => Val.sub_array vs i hiv q) (List.getElem_mem hic)
         (hpos i hic hiv) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
-    | .call (pre := pre) (args := vs) he hL hne hall _ =>
+    | .call (pre := pre) (args := vs) he hL hne hk hall _ =>
       have hat := call_args_At he hL hp
       obtain ⟨locs', hl, hlen', hpl⟩ :=
-        children_tuple hlen (by rw [annotate_encoding, he]; simp) hall hat
+        children_tuple hlen (by rw [annotate_encoding, he]; simp) hk hall hat
       rw [hl] at hch; cases hch
       have hiv : i < vs.length := by omega
-      have hic : i < c.children.length := by rw [DescAll.length_eq hall]; exact hiv
+      have hic : i < c.children.length := by omega
+      have hall' : DescS s c.children[i] vs[i] := by
+        have := DescAll.get hall i hic
+        simpa [List.getElem_take] using this
       have hgetD : (annotate c).children.getD i default = annotate c.children[i] := by
         rw [annotate_children]; simp [hic]
       rw [hgetD] at ih hvis
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
       exact Reached.step (fun q => Val.sub_call pre vs i hiv q) (List.getElem_mem hic)
-        (DescAll.get hall i hic) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
+        hall' hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ => rw [hop0] at hop'; cases hop'
     | .logical _ _ hop' _ _ _ _ => rw [hop0] at hop'; simp at hop'
@@ -469,11 +475,11 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       have hpc := child_placed (c := c0) (hpl i hi hiv)
       exact Reached.step (fun q => Val.sub_array vs i hiv q) (by rw [hcs]; simp)
         (h0 _ (List.getElem_mem hiv)) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
-    | .word _ _ hnav _ | .bytes _ _ hnav _ | .tuple _ _ _ hnav =>
+    | .word _ _ hnav _ | .bytes _ _ hnav _ | .tuple _ _ _ _ _ hnav =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hnav; simp [isNavOp] at hnav)
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hop'; cases hop')
-    | .call _ _ _ _ hop' =>
+    | .call _ _ _ _ _ hop' =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hop'; simp at hop')
     | .logical _ _ hop' _ _ _ _ =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hop'; simp at hop')
@@ -505,8 +511,8 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
         hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ => rw [hop0] at hop'; cases hop'
-    | .tuple _ _ _ hnav => rcases hnav with h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
-    | .call _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
+    | .tuple _ _ _ _ _ hnav => rcases hnav with ⟨h, -⟩ | h <;> (rw [hop0] at h; simp [isNavOp] at h)
+    | .call _ _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
     | .logical _ _ hop' _ _ _ _ => rw [hop0] at hop'; simp at hop'
   | @slice _ loc p _ _ hop hb hbound hvis _ =>
     intro c u hc hD hp hr
@@ -551,17 +557,41 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       exact Or.inr (Or.inr (Or.inl ⟨d0, bs', u, hd, hw0, hat0, h1', h32', Val.sub_nil u,
         hiw.trans (IsWindow.window hbound)⟩))
     | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
-    | .tuple _ _ _ hnav => rcases hnav with h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
+    | .tuple _ _ _ _ _ hnav => rcases hnav with ⟨h, -⟩ | h <;> (rw [hop0] at h; simp [isNavOp] at h)
     | .array _ _ _ _ _ _ _ hnav =>
-      rcases hnav with h | h | h | h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
-    | .call _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
+      rcases hnav with ⟨h, -⟩ | h | h | h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
+    | .call _ _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
     | .logical _ _ hop' _ _ _ _ => rw [hop0] at hop'; simp at hop'
 
 /-! ## `__input` -/
 
+theorem isNavOp_annotate (c : Condition) : isNavOp (annotate c).operator = isNavOp c.operator := by
+  rw [annotate_operator]; split <;> simp_all [isNavOp]
+
+/-- A described node that does not navigate has a subtree that does not. -/
+theorem Desc.noNav_of {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
+    (hn : isNavOp c.operator = false) : noNav c = true := by
+  rw [noNav_eq, hn]
+  match hD with
+  | .word _ hch _ _ | .bytes _ hch _ _ => simp [hch, noNavAll]
+  | .sliceWord _ h _ _ _ _ _ | .sliceBytes _ h _ _ _ _ _ => rw [h] at hn; simp [isNavOp] at hn
+  | .tuple _ _ _ _ _ h =>
+    rcases h with ⟨_, h⟩ | h
+    · simp [h]
+    · rw [h] at hn; simp [isNavOp] at hn
+  | .array _ _ _ _ _ _ _ h =>
+    rcases h with ⟨_, h⟩ | h | h | h | h
+    · simp [h]
+    all_goals (rw [h] at hn; simp [isNavOp] at hn)
+  | .call _ _ _ _ _ h =>
+    rcases h with h | ⟨_, _, h⟩
+    · rw [h] at hn; simp [isNavOp] at hn
+    · simp [h]
+  | .logical _ _ h _ _ _ _ => rcases h with h | h <;> (rw [h] at hn; simp [isNavOp] at hn)
+
 theorem Desc.input_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {c : Condition}
     {u : Val} {l : Nat} (hD : Desc s c u) (hat : At data l (enc u))
-    (hne : (annotate c).encoding ≠ .None) :
+    (hne : (annotate c).encoding ≠ .None) (hn : isNavOp c.operator = false) :
     input data l (annotate c) = expectInput (enc u) := by
   have hmeta := hD.annotate_meta
   have hge := hD.enc_ge
@@ -571,7 +601,7 @@ theorem Desc.input_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {
     rw [hmeta.2]
     cases hs : u.isStatic
     · simp only [Bool.false_eq_true, ite_false]
-      simp [Desc.size_eq hlen hD hat]
+      simp [Desc.size_eq hlen hD (hD.noNav_of hn) hat]
     · simp only [ite_true]
       rw [ite_eq_left (by omega)]
   unfold input
@@ -876,6 +906,7 @@ theorem decoder_input {s : Bool}
       refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> intro h <;> rw [h] at hop <;> simp [readsInput] at hop)
     exact Desc.input_eq hlen hD0 (Placed.to_At_of_root hp hr henc.1 henc.2.1)
       (by rw [annotate_encoding, ite_eq_right henc.2.2]; exact henc.2.1)
+      (by rw [← isNavOp_annotate]; cases h : (annotate d0).operator <;> simp_all [readsInput, isNavOp])
   · right; right; left
     unfold input
     rw [annotate_encoding]
@@ -920,7 +951,7 @@ theorem decoder_custom_operand {s : Bool}
     rw [hmeta.2]
     cases hs : u.isStatic
     · simp only [Bool.false_eq_true, ite_false]
-      simp [Desc.size_eq hlen hD0 key]
+      simp [Desc.size_eq hlen hD0 (hD0.noNav_of (by rw [← isNavOp_annotate, hop]; rfl)) key]
     · simp only [ite_true]
       rw [ite_eq_left (by omega)]
   · right; right; left
@@ -947,28 +978,29 @@ theorem Desc.children_ok {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool
     ∃ locs, children data
       ((if loc > 0 ∧ (annotate c).encoding = .AbiEncoded then loc + 32 else loc) +
         (annotate c).leadingBytes) (annotate c) = some locs ∧
-      locs.length = u.components.length := by
+      locs.length ≤ u.components.length := by
   match hD with
-  | .tuple he _ hall _ =>
+  | .tuple he _ hk hall _ _ =>
     rw [matchesLoc_plain (.inl he)]
     obtain ⟨locs, hl, hlen', _⟩ := children_tuple hlen (by rw [annotate_encoding, he]; simp)
-      hall (by simpa [Placed, enc_tuple] using hp)
-    exact ⟨locs, hl, hlen'⟩
+      hk hall (by simpa [Placed, enc_tuple] using hp)
+    exact ⟨locs, hl, by rw [hlen']; simpa [Val.components] using hk⟩
   | .array c0 _ he hcs h0 _ _ _ =>
     rw [matchesLoc_plain (.inr he)]
     obtain ⟨locs, hl, hlen', _⟩ := children_array hlen (by rw [annotate_encoding, he]; simp)
       hcs h0 (by simpa [Placed] using hp)
-    exact ⟨locs, hl, hlen'⟩
-  | .call he hL _ hall _ =>
+    exact ⟨locs, hl, by rw [hlen']; simp [Val.components]⟩
+  | .call he hL _ hk hall _ =>
     obtain ⟨locs, hl, hlen', _⟩ := children_tuple hlen (by rw [annotate_encoding, he]; simp)
-      hall (call_args_At he hL hp)
-    exact ⟨locs, hl, hlen'⟩
+      hk hall (call_args_At he hL hp)
+    exact ⟨locs, hl, by rw [hlen']; simpa [Val.components] using hk⟩
   | .word he _ _ _ | .bytes he _ _ _ | .sliceWord he _ _ _ _ _ _ | .sliceBytes he _ _ _ _ _ _
   | .logical _ he _ _ _ _ _ =>
     rcases hcont with h | h | h <;> rw [he] at h <;> cases h
 
 /-- **No false rejections: containers.** Every visited container decodes its
-    children without overflow, one location per component. -/
+    children without overflow, one location per component it describes (a
+    `Matches` may leave out trailing fields). -/
 theorem decoder_children {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
@@ -978,7 +1010,7 @@ theorem decoder_children {s : Bool}
     (∃ u, (Val.call pre args).sub p = some u ∧
       ∃ locs, children (calldata pre args suffix)
         ((if l > 0 ∧ d.encoding = .AbiEncoded then l + 32 else l) + d.leadingBytes) d =
-          some locs ∧ locs.length = u.components.length) ∨
+          some locs ∧ locs.length ≤ u.components.length) ∨
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, _⟩ | ⟨d0, rfl, hns⟩ | ⟨d0, bs, u, rfl, hw, _⟩ | hst
@@ -1042,10 +1074,10 @@ theorem Desc.slice_facts {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
   | .sliceWord he _ _ _ _ _ hw => exact Or.inl ⟨he, _, rfl, hw⟩
   | .sliceBytes he _ _ _ _ _ hu => exact Or.inr ⟨he, hu⟩
   | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
-  | .tuple _ _ _ hnav => rcases hnav with h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
+  | .tuple _ _ _ _ _ hnav => rcases hnav with ⟨h, -⟩ | h <;> (rw [hop0] at h; simp [isNavOp] at h)
   | .array _ _ _ _ _ _ _ hnav =>
-    rcases hnav with h | h | h | h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
-  | .call _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
+    rcases hnav with ⟨h, -⟩ | h | h | h | h <;> (rw [hop0] at h; simp [isNavOp] at h)
+  | .call _ _ _ _ _ hop' => rw [hop0] at hop'; simp at hop'
   | .logical _ _ hop' _ _ _ _ => rw [hop0] at hop'; simp at hop'
 
 /-- The length `_slice` checks against, for a `Slice` node describing `u`. -/

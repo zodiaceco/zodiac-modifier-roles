@@ -174,8 +174,22 @@ unmutated and mutated runs, every difference fell into one of these classes.
   `MockEvaluator` read the following parameter correctly. The decoder proof
   doesn't model it, so the check rejects it; the SDK has no reason to produce
   it.
+- a navigating node (`Matches`, `And`, `Or`, ...) below an operator that reads
+  its whole value (`EqualTo`, a comparison or `Custom` on a tuple or array,
+  or below a `Pass` container). The operator hashes or passes the whole
+  value; the children only describe its type, through their sizes. `Desc`
+  requires such a type description (`noNav`): a pruned `Matches` there would
+  give a shorter size. The SDK only produces `Pass` descriptions.
 
 **Integrity rejects, but the tree is read correctly; the check accepts:**
+
+- Checks of a prefix of one dynamic tuple or call in an `And`/`Or`, or as
+  the elements of one array: `Or[Matches:Tuple[D, EqualTo], Matches:Tuple[D,
+  Pass, EqualTo]]` on `(bytes, uint, uint)`, as pruning trailing `Pass`
+  nodes leaves them. Integrity compares type hashes exactly; each check reads
+  the fields it lists where they are (`Desc` allows a `Matches` to describe
+  the first fields of a value, `Ty` has open tuple and call types ordered by
+  prefix, `Ty.sub`). This is why `normalizeCondition` no longer pads.
 
 - `Slice` next to plain checks in an `And`/`Or` (item 4,
   `UnsuitableChildTypeTree`).

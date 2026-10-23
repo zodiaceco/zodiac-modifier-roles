@@ -715,6 +715,43 @@ function targetedCases(): Case[] {
       ),
     );
 
+  // prefix siblings: checks of the first fields of one tuple or call
+  // (pruned Matches), next to longer, closed or static ones
+  const ptup = (o: number, ...ch: N[]) => node(E.Tuple, o, ch);
+  const pcall = (o: number, ...ch: N[]) => node(E.Abi, o, ch);
+  const eqS = () => node(E.Static, O.EqualTo, [], bytes(32));
+  for (const lop of [O.And, O.Or]) {
+    const lg = (...ch: N[]) => node(E.None, lop, ch);
+    // dynamic tuples: (bytes, uint) and (bytes, uint, uint)
+    both(() => lg(ptup(O.Matches, D(), eqS()), ptup(O.Matches, D(), S(), eqS())));
+    both(() => lg(ptup(O.Matches, D()), ptup(O.EqualTo, D(), S())));
+    both(() => lg(ptup(O.EqualTo, D(), S()), ptup(O.Matches, D())));
+    both(() => lg(ptup(O.EqualTo, D()), ptup(O.EqualTo, D(), S())));
+    // static tuples of different lengths (inlined: never prefixes)
+    both(() => lg(ptup(O.Matches, eqS()), ptup(O.Matches, S(), eqS())));
+    // a dynamic prefix of a tuple that is static
+    both(() => lg(ptup(O.Matches, D()), ptup(O.Matches, D(), S())));
+    // calls with the same and different leading bytes
+    both(() => lg(pcall(O.Matches, eqS()), pcall(O.Matches, S(), D())));
+    both(() => lg(pcall(O.Matches, eqS()), pcall(O.Pass, S(), D())));
+    // nested: the field of a tuple is a prefix
+    both(() =>
+      lg(
+        ptup(O.Matches, ptup(O.Matches, D()), S()),
+        ptup(O.Matches, ptup(O.Matches, D(), eqS()), S()),
+      ),
+    );
+  }
+  // array elements: the template must be the most specific
+  for (const op of [O.Matches, O.ArraySome, O.ArrayEvery, O.ArrayTailMatches]) {
+    both(() => node(E.Array, op, [ptup(O.Matches, D(), eqS()), ptup(O.Matches, D())]));
+    both(() => node(E.Array, op, [ptup(O.Matches, D()), ptup(O.Matches, D(), eqS())]));
+  }
+  // navigation below an operator that reads its whole value
+  both(() => node(E.Tuple, O.EqualTo, [ptup(O.Matches, S())], bytes(32)));
+  both(() => node(E.Tuple, O.EqualTo, [node(E.None, O.Or, [S()])], bytes(32)));
+  both(() => node(E.Abi, O.Pass, [ptup(O.Matches, D())]));
+
   // inlined sizes around 8191 bytes, and child counts around 1023
   const statics = (k: number) => Array.from({ length: k }, S);
   for (const k of [255, 256])

@@ -134,9 +134,10 @@ theorem toInt_spec (x : Nat) :
     unless it reads a `Slice` window, the ether value, or sits in an
     interpretation that does not fit (only with `s = true`). -/
 theorem checked_equalTo {keccak : Bytes → Nat} (hk : KeyInjective keccak) (value : Nat)
-    {s : Bool} {fs : List ConditionPacking.Flat} {lb : Nat} {ts : List Ty}
-    (h : checkStored s fs = some (.typed (.call lb ts))) (avatar : Bytes)
-    {pre : Bytes} {args : List Val} (hpre : pre.length = lb) (hargs : HasTAll s args ts)
+    {s : Bool} {fs : List ConditionPacking.Flat} {lb : Nat} {ts : List Ty} {o : Bool}
+    (h : checkStored s fs = some (.typed (.call lb ts o))) (avatar : Bytes)
+    {pre : Bytes} {args : List Val} (hpre : pre.length = lb)
+    (hargs : if o then HasTPre s args ts else HasTAll s args ts)
     (suffix : Bytes) (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
     (hv : Eval (calldata pre args suffix) (annotate (ConditionPacking.rawTree avatar fs 0)) p d l)
@@ -150,7 +151,7 @@ theorem checked_equalTo {keccak : Bytes → Nat} (hk : KeyInjective keccak) (val
     InStray s (calldata pre args suffix) (.call pre args) p d l := by
   have hs := checkStored_sound h avatar (fun _ => 0) (fun _ => 0)
   obtain ⟨_, _, _, hr, hz, hd⟩ := hs
-  have hD := hd pre args (.inr ⟨lb, ts, rfl, .inl ⟨hpre, hargs⟩⟩) ⟨pre, args, rfl, hpre, hargs⟩
+  have hD := hd pre args (.inr ⟨lb, ts, o, rfl, .inl ⟨hpre, hargs⟩⟩) ⟨pre, args, rfl, hpre, hargs⟩
   rcases decoder_input _ pre args suffix hD hr hz hlen hv (by rw [hop]; rfl) with
     ⟨u, hsub, hin⟩ | hw | he | hst
   · left

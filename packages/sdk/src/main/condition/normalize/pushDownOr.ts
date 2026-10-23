@@ -144,7 +144,9 @@ function and(children: Condition[]): Condition[] {
     return children
   }
 
-  if (!compatibleSiblings(children.map((c, i) => c.children![hingeIndices[i]]))) {
+  if (
+    !compatibleSiblings(children.map((c, i) => c.children![hingeIndices[i]]))
+  ) {
     return children
   }
 

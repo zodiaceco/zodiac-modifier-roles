@@ -129,6 +129,29 @@ theorem Win.meta : ∀ {c}, Win c → isInlined c = true ∧ inlinedSize c = 32
 
 /-! ## Structural nodes -/
 
+theorem allStatic_take_drop : ∀ (vs : List Val) (k : Nat),
+    Val.allStatic vs = (Val.allStatic (vs.take k) && Val.allStatic (vs.drop k))
+  | [], k => by cases k <;> simp [Val.allStatic]
+  | v :: vs, 0 => by simp [Val.allStatic]
+  | v :: vs, k + 1 => by
+    simp only [Val.allStatic, List.take_succ_cons, List.drop_succ_cons]
+    rw [allStatic_take_drop vs k, Bool.and_assoc]
+
+theorem headLen_take_le : ∀ (vs : List Val) (k : Nat), headLen (vs.take k) ≤ headLen vs
+  | [], k => by cases k <;> simp [headLen]
+  | v :: vs, 0 => by simp [headLen]
+  | v :: vs, k + 1 => by
+    simp only [List.take_succ_cons, headLen]
+    have := headLen_take_le vs k
+    omega
+
+theorem take_ne_nil_of_descAll {s : Bool} {cs vs : List _} {k : Nat}
+    (h : DescAll s cs (vs.take k)) (hne : cs ≠ []) : vs.take k ≠ [] := by
+  intro he
+  rw [he] at h
+  cases h
+  exact hne rfl
+
 mutual
   theorem Desc.meta {s : Bool} : ∀ {c u}, Desc s c u →
       isInlined c = u.isStatic ∧ (u.isStatic = true → inlinedSize c = (enc u).length)
@@ -142,15 +165,24 @@ mutual
       simp [isInlinedAll, (Win.meta hw).1, Val.isStatic, enc, hlen]
     | c, _, .sliceBytes he _ _ _ _ _ hu => by
       rw [isInlined_eq, he, isStatic_bytesLike hu]; simp
-    | c, _, .tuple (vs := vs) he _ hall _ => by
-      rw [isInlined_eq, inlinedSize_eq, he]
-      have := DescAll.meta hall
-      simp [Val.isStatic, this.1]
-      intro hst
-      rw [this.2 hst, enc_tuple, encTuple_length_static vs hst]
+    | c, _, .tuple (vs := vs) he _ hk hall hinl _ => by
+      have m := DescAll.meta hall
+      by_cases hlt : c.children.length < vs.length
+      · have hi := (hinl hlt).1
+        have hall' : isInlinedAll c.children = false := by
+          rw [isInlined_eq, he] at hi; simpa using hi
+        have hst : Val.allStatic vs = false := by
+          rw [allStatic_take_drop vs c.children.length, ← m.1, hall']; simp
+        exact ⟨by rw [hi]; simp [Val.isStatic, hst], by simp [Val.isStatic, hst]⟩
+      · have heq : vs.take c.children.length = vs := List.take_of_length_le (by omega)
+        rw [heq] at m
+        rw [isInlined_eq, inlinedSize_eq, he]
+        simp [Val.isStatic, m.1]
+        intro hst
+        rw [m.2 hst, enc_tuple, encTuple_length_static vs hst]
     | c, _, .array _ _ he _ _ _ _ _ => by
       rw [isInlined_eq, he]; simp [Val.isStatic]
-    | c, _, .call he _ _ _ _ => by
+    | c, _, .call he _ _ _ _ _ => by
       rw [isInlined_eq, he]; simp [Val.isStatic]
     | c, u, .logical ch0 he _ hm0 h0 hall _ => by
       have hns : ∀ ch, ch ∈ c.children →
@@ -222,11 +254,12 @@ mutual
     | _, _, .bytes _ _ _ hu => by rw [enc_bytesLike hu, length_encBytes]; omega
     | _, _, .sliceWord _ _ _ _ _ _ hw => by simp [enc, hw]
     | _, _, .sliceBytes _ _ _ _ _ _ hu => by rw [enc_bytesLike hu, length_encBytes]; omega
-    | _, _, .tuple _ hne hall _ => by
+    | _, _, .tuple (vs := vs) _ hne _ hall _ _ => by
       rw [enc_tuple]
-      exact Nat.le_trans (DescAll.headLen_ge hall hne) (encTuple_length_ge _)
+      exact Nat.le_trans (DescAll.headLen_ge hall (take_ne_nil_of_descAll hall hne))
+        (Nat.le_trans (headLen_take_le vs _) (encTuple_length_ge _))
     | _, _, .array _ _ _ _ _ _ _ _ => by simp [enc_array]
-    | _, _, .call _ _ _ _ _ => by simp [enc_call, length_encBytes]
+    | _, _, .call _ _ _ _ _ _ => by simp [enc_call, length_encBytes]
     | _, _, .logical _ _ _ _ h0 _ _ => DescS.enc_ge h0
 
   theorem DescAll.headLen_ge {s : Bool} : ∀ {cs vs}, DescAll s cs vs → vs ≠ [] →

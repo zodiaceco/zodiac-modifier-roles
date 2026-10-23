@@ -298,7 +298,7 @@ theorem decoder_bitmask {s : Bool}
       simp only [hmeta.1, isStatic_bytesLike hu, annotate_compValue]
       exact bitmaskCheck_dynamic hlen _ junk _ hat
     | .sliceWord _ h _ _ _ _ _ | .sliceBytes _ h _ _ _ _ _ => rw [hop0] at h; cases h
-    | .tuple he _ _ _ | .array _ _ he _ _ _ _ _ | .call he _ _ _ _ | .logical _ he _ _ _ _ _ =>
+    | .tuple he _ _ _ _ _ | .array _ _ he _ _ _ _ _ | .call he _ _ _ _ _ | .logical _ he _ _ _ _ _ =>
       rw [he] at henc; simp at henc
   · exfalso
     rw [annotate_encoding] at henc

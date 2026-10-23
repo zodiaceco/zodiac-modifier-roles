@@ -26,7 +26,12 @@ suite("packConditions()", () => {
     const { verdict, packed } = checkAndPack(flat)
     expect(verdict).toEqual({
       kind: "typed",
-      type: { k: "call", lb: 4, ts: [{ k: "static" }, { k: "static" }] },
+      type: {
+        k: "call",
+        lb: 4,
+        ts: [{ k: "static" }, { k: "static" }],
+        o: true,
+      },
     })
     expect(packed).toBe(
       "0x" +

@@ -165,10 +165,9 @@ suite(
       expect(normalizeCondition(backward)).toEqual(backward)
     })
 
-    it("pads the parameter a type tree child describes, past non-structural children", () => {
+    it("does not pad: checks of a prefix of one struct stay as they are", () => {
       // two checks of one dynamic struct ((bytes,uint), (bytes,uint,uint,uint)),
-      // the first with an ether value check in front: the type tree lists
-      // fields only
+      // the first with an ether value check in front
       const ether: Condition = {
         paramType: Encoding.EtherValue,
         operator: Operator.LessThan,
@@ -184,9 +183,8 @@ suite(
       const f = result.children!.find(
         (b) => b.children![0].paramType === Encoding.EtherValue
       )!
-      // the first field keeps its two, the second gets the fourth one
       expect(f.children![1].children).toHaveLength(2)
-      expect(f.children![2].children).toHaveLength(4)
+      expect(f.children![2].children).toHaveLength(3)
     })
 
     it("never pads a static tuple: later parameters would move", () => {
@@ -217,6 +215,18 @@ suite(
       const input = and(calldata(plucked), zip)
       const result = normalizeCondition(input)
       expect(result.children).toContainEqual(zip)
+    })
+
+    it("keeps a Zip after the check that describes the value when sorting", () => {
+      // And[EqualTo(bytes), Zip]: the And's size is its first child's that
+      // fits, and the SDK check requires the Zip after the described child
+      const zip = zipEvery(pass(Encoding.Dynamic), pass(Encoding.Static))
+      const input = calldata(pluckArray(1), and(bytesEq("0x1234"), zip))
+      const inner = normalizeCondition(input).children!.find(
+        (c) => c.operator === Operator.And
+      )!
+      expect(inner.children![0].paramType).toBe(Encoding.Dynamic)
+      expect(inner.children![1]).toEqual(zip)
     })
 
     it("does not merge Or branches whose differing parameters have different types", () => {

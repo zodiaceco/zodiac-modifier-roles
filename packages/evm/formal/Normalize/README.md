@@ -13,11 +13,10 @@ lake build Normalize
 
 | File            | Contents                                                                                                        |
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
-| `Defs.lean`     | The transcription: `prune`, `pad`, `flatten`, `dedupe`, `unwrap`, `pushDownOr`, `sortB`, `normalize` (with fuel) |
+| `Defs.lean`     | The transcription: `prune`, `flatten`, `dedupe`, `unwrap`, `pushDownOr`, `sortB`, `normalize` (with fuel)        |
 | `Sem.lean`      | `sem`: the meaning of a condition; effect classes (`KeepsT`, `PureT`, `ChargerT`); `World.Ok`                    |
 | `Effects.lean`  | The SDK's effect checks (`writes`, `charges`, `chooses`) imply effect classes; reordering lemmas                |
 | `Steps.lean`    | Each of prune, flatten, dedupe, unwrap, sort keeps the meaning                                                  |
-| `Pad.lean`      | Padding keeps the meaning                                                                                       |
 | `PushDown.lean` | `pushDownOr` keeps the meaning (distributivity)                                                                 |
 | `Sound.lean`    | `normalize_sound`; `consume_comm` (the contract's allowance charges commute)                                    |
 
@@ -39,8 +38,7 @@ lake build Normalize
 
 `World.Ok` collects what is assumed of `ext` and of charging. `comm` (charges
 commute) holds for the contract's `consume` (`consume_comm`). The rest are
-statements about operators normalization doesn't rewrite: a trailing `Pass`
-child of a tuple or calldata node only describes type; only `Pluck` writes
+statements about operators normalization doesn't rewrite: only `Pluck` writes
 slots; only `Custom`, `WithinAllowance`, `CallWithinAllowance` charge; and
 only `ArraySome`, `ZipSome` (besides `Or`) choose a branch, so only they can
 pick charges depending on earlier ones.
@@ -50,7 +48,6 @@ pick charges depending on earlier ones.
 | Step         | Argument                                                                                                                   |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | prune        | Dropped `Pass` nodes pass; nothing after them reads a field. `CallWithinAllowance` moves only when `canReorderAnd` holds    |
-| pad          | Appends `Pass` nodes at the end of tuple and calldata children (structural children are paired with the type tree), never to an array that checks something |
 | flatten      | `And`/`Or` are associative                                                                                                 |
 | dedupe       | A duplicate that charges nothing (`And`) passed already; a duplicate in an `Or` failed already. Skipped next to `Pluck`s   |
 | unwrap       | `And[x] = Or[x] = x`                                                                                                       |

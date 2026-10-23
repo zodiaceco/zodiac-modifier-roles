@@ -104,6 +104,78 @@ theorem D_leadingBytes_withCh (c : Cond) (l : List Cond) :
     (D avatar { c with ch := l }).leadingBytes = (D avatar c).leadingBytes := by
   rw [D_leadingBytes, D_leadingBytes]; rfl
 
+/-- A call node is never inlined: its layout metadata does not depend on
+    its children. -/
+theorem D_lay_abi {x : Cond} (he : x.enc = 5) : (D avatar x).inlined = false ∧ (D avatar x).size = 0 := by
+  have : isInl x = false := by rw [isInl_eq, he]; rfl
+  rw [D_inlined, D_size, this]; simp
+
+theorem layEq_abi {x x' : Cond} {m : Condition} (he : x.enc = 5) (he' : x'.enc = 5)
+    (hl : LayEq (D avatar x) m) : LayEq (D avatar x') m := by
+  obtain ⟨a1, a2⟩ := D_lay_abi avatar he
+  obtain ⟨b1, b2⟩ := D_lay_abi avatar he'
+  exact ⟨by rw [b1, ← a1]; exact hl.1, by rw [b2, ← a2]; exact hl.2⟩
+
+/-- A check of the plain `bytes` value of a variant is plain. -/
+theorem Fits.plain_dyn {c : Cond} {d : Condition} (h : Fits avatar c d dynLay) (he : c.enc = 2) :
+    Plain c := by
+  cases h with
+  | pass _ _ _ _ hp _ _ => exact hp
+  | slice _ _ _ _ _ _ hp _ _ => exact hp
+  | leaf _ _ _ _ _ _ hp _ _ _ _ _ => exact hp
+  | ns hs hns _ => rcases hns with ⟨h, _, _⟩ | ⟨_, h, _⟩ <;> omega
+  | logical _ h _ _ _ _ _ => omega
+  | tup _ h _ _ _ _ _ _ _ _ => omega
+  | arr _ h _ _ _ _ _ _ _ => omega
+  | varAbi _ h _ _ _ _ _ _ _ _ => omega
+  | varDyn hv _ _ _ => simp [dynLay, isVarLay] at hv
+
+/-- A `Matches` on calldata that fits a call layout: the `tup` facts. -/
+theorem Fits.abi_tup {c : Cond} {k : Condition} (h : F c k) (h5 : c.op = 5) (he : c.enc = 5)
+    (hke : k.encoding = .AbiEncoded) :
+    (D avatar c).encoding = k.encoding ∧ LayEq (D avatar c) k ∧
+      (D avatar c).leadingBytes = k.leadingBytes ∧ (∀ x ∈ c.ch, isStruct x = true) ∧
+      c.ch.length ≤ k.children.length ∧
+      (∀ i (h : i < c.ch.length), F c.ch[i] (k.children.getD i default)) ∧
+      isInl c = (D avatar c).inlined := by
+  cases h with
+  | tup _ _ _ hm hl hlb hs hk hch hsn => exact ⟨hm, hl, hlb, hs, hk, hch, hsn⟩
+  | pass h0 => omega
+  | ns hs _ _ => rw [isStruct_eq] at hs; simp [h5, he] at hs
+  | logical hop => omega
+  | arr _ he' => omega
+  | slice h13 => omega
+  | leaf hop => simp [leafOp, h5] at hop
+  | varAbi _ _ _ hv _ _ _ _ _ _ => simp [isVarLay, hke] at hv
+  | varDyn _ he' => omega
+
+theorem fits_children_tup (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m') {c : Cond}
+    {m : Condition} (h5 : c.op = 5) (he : c.enc = 3 ∨ c.enc = 5)
+    (hm : (D avatar c).encoding = m.encoding) (hl : LayEq (D avatar c) m)
+    (hlb : (D avatar c).leadingBytes = m.leadingBytes) (hs : ∀ x ∈ c.ch, isStruct x = true)
+    (hk : c.ch.length ≤ m.children.length)
+    (hch : ∀ i (h : i < c.ch.length), F c.ch[i] (m.children.getD i default))
+    (hsn : isInl c = (D avatar c).inlined) : F { c with ch := c.ch.map (normalize k) } m := by
+  have hlen : (c.ch.map (normalize k)).length = c.ch.length := by simp
+  have hch' : ∀ i (hi : i < (c.ch.map (normalize k)).length),
+      F (c.ch.map (normalize k))[i] (m.children.getD i default) := by
+    intro i hi
+    simp only [List.getElem_map]
+    exact IH _ _ (hch i (by simpa using hi))
+  have hraw := container_raw avatar (c := c) (c' := { c with ch := c.ch.map (normalize k) }) rfl
+    hlen.symm (fun i h1 h2 => by
+      simp only [List.getElem_map]
+      have r1 := (hch i h1).raw avatar (hs _ (List.getElem_mem h1))
+      have r2 := (IH _ _ (hch i h1)).raw avatar
+        (by rw [isStruct_normalize]; exact hs _ (List.getElem_mem h1))
+      refine ⟨r1.1.trans r2.1.symm, fun hi => (r1.2.1 hi).trans (r2.2.1 (r2.1.trans (r1.1.symm.trans hi))).symm⟩)
+  obtain ⟨hsn', hl'⟩ := lay_transfer avatar hraw hsn hl
+  refine .tup h5 he rfl (by rw [D_encoding_withCh]; exact hm) hl' (by rw [D_leadingBytes_withCh]; exact hlb)
+    ?_ (by rw [hlen]; exact hk) hch' hsn'
+  intro x' hx'
+  obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hx'
+  rw [isStruct_normalize]; exact hs x hx
+
 theorem fits_children (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m') {c : Cond}
     {m : Condition} (h : F c m) : F { c with ch := c.ch.map (normalize k) } m := by
   have h0 := h
@@ -133,25 +205,12 @@ theorem fits_children (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m')
     obtain ⟨hl', hsn'⟩ := logical_lay avatar (c := { c with ch := c.ch.map (normalize k) }) hop he hs' hch'
     exact .logical hop he hs' rfl hl' hch' hsn'
   | tup h5 he _ hm hl hlb hs hk hch hsn =>
-    have hlen : (c.ch.map (normalize k)).length = c.ch.length := by simp
-    have hch' : ∀ i (hi : i < (c.ch.map (normalize k)).length),
-        F (c.ch.map (normalize k))[i] (m.children.getD i default) := by
-      intro i hi
-      simp only [List.getElem_map]
-      exact IH _ _ (hch i (by simpa using hi))
-    have hraw := container_raw avatar (c := c) (c' := { c with ch := c.ch.map (normalize k) }) rfl
-      hlen.symm (fun i h1 h2 => by
-        simp only [List.getElem_map]
-        have r1 := (hch i h1).raw avatar (hs _ (List.getElem_mem h1))
-        have r2 := (IH _ _ (hch i h1)).raw avatar
-          (by rw [isStruct_normalize]; exact hs _ (List.getElem_mem h1))
-        refine ⟨r1.1.trans r2.1.symm, fun hi => (r1.2.1 hi).trans (r2.2.1 (r2.1.trans (r1.1.symm.trans hi))).symm⟩)
-    obtain ⟨hsn', hl'⟩ := lay_transfer avatar hraw hsn hl
-    refine .tup h5 he rfl (by rw [D_encoding_withCh]; exact hm) hl' (by rw [D_leadingBytes_withCh]; exact hlb)
-      ?_ (by rw [hlen]; exact hk) hch' hsn'
-    intro x' hx'
-    obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hx'
-    rw [isStruct_normalize]; exact hs x hx
+    exact fits_children_tup avatar k IH h5 he hm hl hlb hs hk hch hsn
+  | varAbi h5 he _ hv hl hmem hke hkey hu hf =>
+    obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar h5 he hke
+    exact .varAbi h5 he rfl hv (layEq_abi avatar he he hl) hmem hke hkey hu
+      (fits_children_tup avatar k IH h5 (.inr he) hm' hl' hlb' hs' hk' hch' hsn')
+  | varDyn _ he2 _ hf => rw [map_normalize_plain k (hf.plain_dyn avatar he2)]; cases c; exact h0
   | arr hop he _ hm hl hne hs hch hsn =>
     have hraw : isInl c = isInl { c with ch := c.ch.map (normalize k) } ∧
         (isInl c = true → rawSz avatar c = rawSz avatar { c with ch := c.ch.map (normalize k) }) := by
@@ -223,6 +282,47 @@ theorem pruneList_struct {ch : List Cond} (keep : Nat) (h : ∀ x ∈ ch, isStru
 theorem cutIdx_ge (ch : List Cond) (keep : Nat) (hk : keep < ch.length) : keep < cutIdx ch keep := by
   unfold cutIdx; omega
 
+theorem prune_tup {c : Cond} {m : Condition} (h5 : c.op = 5) (he : c.enc = 3 ∨ c.enc = 5)
+    (hcase : c.enc = 5 ∨ dynTuple c = true)
+    (hm : (D avatar c).encoding = m.encoding) (hl : LayEq (D avatar c) m)
+    (hlb : (D avatar c).leadingBytes = m.leadingBytes) (hs : ∀ x ∈ c.ch, isStruct x = true)
+    (hk : c.ch.length ≤ m.children.length)
+    (hch : ∀ i (h : i < c.ch.length), F c.ch[i] (m.children.getD i default))
+    (hsn : isInl c = (D avatar c).inlined) : F { c with ch := pruneCh c } m := by
+  have hre := reorderGA_struct hs
+  have hpc : pruneCh c = c.ch.take (cutIdx c.ch (if dynTuple c then c.ch.findIdx isDyn else 0)) := by
+    unfold pruneCh; rw [hre, pruneList_struct _ hs]
+  rw [hpc]
+  generalize hcut : cutIdx c.ch (if dynTuple c then c.ch.findIdx isDyn else 0) = cut
+  have hinl : isInl c = false ∧ isInl { c with ch := c.ch.take cut } = false := by
+    rcases hcase with h' | h'
+    · constructor <;> (rw [isInl_eq]; simp [h'])
+    · unfold dynTuple at h'
+      simp only [Bool.and_eq_true, beq_iff_eq] at h'
+      obtain ⟨h3, hdyn⟩ := h'
+      refine ⟨isDyn_notInl c hdyn, ?_⟩
+      rw [isDyn_eq] at hdyn
+      simp [h3] at hdyn
+      obtain ⟨x, hx, hdx⟩ := hdyn
+      have hfi : c.ch.findIdx isDyn < c.ch.length := by
+        rw [List.findIdx_lt_length]; exact ⟨x, hx, hdx⟩
+      have hdt : dynTuple c = true := by
+        unfold dynTuple; rw [isDyn_eq]; simp [h3]; exact ⟨x, hx, hdx⟩
+      rw [if_pos hdt] at hcut
+      apply isDyn_notInl
+      rw [isDyn_eq]; simp [h3]
+      refine ⟨c.ch[c.ch.findIdx isDyn], ?_, ?_⟩
+      · rw [List.mem_take_iff_getElem]
+        exact ⟨_, by have := cutIdx_ge c.ch _ hfi; omega, rfl⟩
+      · exact List.findIdx_getElem (w := hfi)
+  obtain ⟨hsn', hl'⟩ := lay_transfer avatar ⟨hinl.1.trans hinl.2.symm, fun h => by
+    rw [hinl.1] at h; exact absurd h (by simp)⟩ hsn hl
+  refine .tup h5 he rfl (by rw [D_encoding_withCh]; exact hm) hl' (by rw [D_leadingBytes_withCh]; exact hlb)
+    (fun x hx => hs x (List.mem_of_mem_take hx)) (by simp; omega) ?_ hsn'
+  intro i hi
+  simp only [List.getElem_take]
+  exact hch i (by simp at hi; omega)
+
 theorem prune_fits {c : Cond} {m : Condition} (h : F c m) : F (prune c) m := by
   unfold prune
   split
@@ -244,40 +344,16 @@ theorem prune_fits {c : Cond} {m : Condition} (h : F c m) : F (prune c) m := by
       · unfold dynTuple at h'; simp at h'; omega
     | slice hop => omega
     | leaf hop => simp [leafOp, h5] at hop
-    | tup _ he _ hm hl hlb hs hk hch hsn =>
-      have hre := reorderGA_struct hs
-      have hpc : pruneCh c = c.ch.take (cutIdx c.ch (if dynTuple c then c.ch.findIdx isDyn else 0)) := by
-        unfold pruneCh; rw [hre, pruneList_struct _ hs]
-      rw [hpc]
-      generalize hcut : cutIdx c.ch (if dynTuple c then c.ch.findIdx isDyn else 0) = cut
-      have hinl : isInl c = false ∧ isInl { c with ch := c.ch.take cut } = false := by
-        rcases hcase with h' | h'
-        · constructor <;> (rw [isInl_eq]; simp [h'])
-        · unfold dynTuple at h'
-          simp only [Bool.and_eq_true, beq_iff_eq] at h'
-          obtain ⟨h3, hdyn⟩ := h'
-          refine ⟨isDyn_notInl c hdyn, ?_⟩
-          rw [isDyn_eq] at hdyn
-          simp [h3] at hdyn
-          obtain ⟨x, hx, hdx⟩ := hdyn
-          have hfi : c.ch.findIdx isDyn < c.ch.length := by
-            rw [List.findIdx_lt_length]; exact ⟨x, hx, hdx⟩
-          have hdt : dynTuple c = true := by
-            unfold dynTuple; rw [isDyn_eq]; simp [h3]; exact ⟨x, hx, hdx⟩
-          rw [if_pos hdt] at hcut
-          apply isDyn_notInl
-          rw [isDyn_eq]; simp [h3]
-          refine ⟨c.ch[c.ch.findIdx isDyn], ?_, ?_⟩
-          · rw [List.mem_take_iff_getElem]
-            exact ⟨_, by have := cutIdx_ge c.ch _ hfi; omega, rfl⟩
-          · exact List.findIdx_getElem (w := hfi)
-      obtain ⟨hsn', hl'⟩ := lay_transfer avatar ⟨hinl.1.trans hinl.2.symm, fun h => by
-        rw [hinl.1] at h; exact absurd h (by simp)⟩ hsn hl
-      refine .tup h5 he rfl (by rw [D_encoding_withCh]; exact hm) hl' (by rw [D_leadingBytes_withCh]; exact hlb)
-        (fun x hx => hs x (List.mem_of_mem_take hx)) (by simp; omega) ?_ hsn'
-      intro i hi
-      simp only [List.getElem_take]
-      exact hch i (by simp at hi; omega)
+    | tup _ he _ hm hl hlb hs hk hch hsn => exact prune_tup avatar h5 he hcase hm hl hlb hs hk hch hsn
+    | varAbi _ he _ hv hl hmem hke hkey hu hf =>
+      obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar h5 he hke
+      exact .varAbi h5 he rfl hv (layEq_abi avatar he he hl) hmem hke hkey hu
+        (prune_tup avatar h5 (.inr he) hcase hm' hl' hlb' hs' hk' hch' hsn')
+    | varDyn _ he2 _ _ =>
+      exfalso
+      rcases hcase with h' | h'
+      · omega
+      · unfold dynTuple at h'; simp [he2] at h'
   · exact h
 
 /-! ## Logical nodes -/
@@ -310,6 +386,8 @@ theorem Fits.logical_ch {c : Cond} {m : Condition} (h : F c m) (hop : c.op = 1 �
   | arr hop' => omega
   | slice h13 => omega
   | leaf hop' => exfalso; rcases hop with h | h <;> simp [leafOp, h] at hop'
+  | varAbi h5 => omega
+  | varDyn _ he2 _ hf => exact absurd hop (by have := hf.dyn_op avatar he2; omega)
 
 theorem withCh_eq_self {c : Cond} {l : List Cond} (h : l = c.ch) : ({ c with ch := l } : Cond) = c := by
   subst h; cases c; rfl
@@ -397,7 +475,8 @@ theorem getElem!_eq {l : List Cond} {i : Nat} (h : i < l.length) : l[i]! = l[i] 
   rw [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem h]; rfl
 
 /-- The fields of a `Matches` on a tuple or calldata that fits `m`. -/
-theorem Fits.tup_inv {x : Cond} {m : Condition} (h : F x m) (h5 : x.op = 5) (he : x.enc = 3 ∨ x.enc = 5) :
+theorem Fits.tup_inv {x : Cond} {m : Condition} (h : F x m) (h5 : x.op = 5) (he : x.enc = 3 ∨ x.enc = 5)
+    (hnv : isVarLay m = false) :
     (D avatar x).encoding = m.encoding ∧ LayEq (D avatar x) m ∧ (D avatar x).leadingBytes = m.leadingBytes ∧
       (∀ y ∈ x.ch, isStruct y = true) ∧ x.ch.length ≤ m.children.length ∧
       (∀ i (h : i < x.ch.length), F x.ch[i] (m.children.getD i default)) ∧ Sane avatar x := by
@@ -412,12 +491,15 @@ theorem Fits.tup_inv {x : Cond} {m : Condition} (h : F x m) (h5 : x.op = 5) (he 
   | arr _ he' => omega
   | slice h13 => omega
   | leaf hop => simp [leafOp, h5] at hop
+  | varAbi _ _ _ hv => rw [hv] at hnv; cases hnv
+  | varDyn hv => rw [hv] at hnv; cases hnv
 
 theorem orNode_fits {hs : List Cond} {m : Condition} (h : ∀ x ∈ hs, F x m) : F (orNode hs) m := by
   have := logical_withCh avatar (c := ⟨0, 2, [], []⟩) (Or.inr rfl) rfl hs h
   exact this
 
-theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c = some n) : F n m := by
+theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
+    (hnv : c.ch.all (·.op == 5) = true → isVarLay m = false) (hp : pushStep c = some n) : F n m := by
   unfold pushStep at hp
   split at hp
   · rename_i hcond
@@ -434,6 +516,7 @@ theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c 
     split at hp
     · -- all `Matches`
       rename_i hall
+      have hnv' : isVarLay m = false := hnv hall
       simp only [List.all_eq_true, beq_iff_eq] at hall
       obtain ⟨nch, hm, rfl⟩ := Option.map_eq_some_iff.1 hp
       unfold mergeMatches at hm
@@ -456,14 +539,14 @@ theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c 
       split at hm; · simp at hm
       simp only [Option.some.injEq] at hm
       subst hm
-      have hft := (hch _ hhead).tup_inv avatar (hall _ hhead) hhe'
+      have hft := (hch _ hhead).tup_inv avatar (hall _ hhead) hhe' hnv'
       obtain ⟨hm1, hl1, hlb1, hs1, hk1, hch1, hsn1⟩ := hft
       -- the branches' children at the hinge fit the hinge's layout
       have hhinges : ∀ y ∈ c.ch.map (·.ch[hi]!), F y (m.children.getD hi default) := by
         intro y hy
         obtain ⟨o, ho, rfl⟩ := List.mem_map.1 hy
         have hoe : o.enc = 3 ∨ o.enc = 5 := by rw [henc o ho]; exact hhe'
-        have hfo := (hch o ho).tup_inv avatar (hall o ho) hoe
+        have hfo := (hch o ho).tup_inv avatar (hall o ho) hoe hnv'
         have hol : o.ch.length = c.ch.head!.ch.length := by
           have := congrArg List.length (hsplit o ho); simp at this; omega
         rw [getElem!_eq (by omega)]
@@ -527,6 +610,81 @@ theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c 
         · exact orNode_fits avatar hys
       · simp at hp
   · simp at hp
+
+/-- A `Matches` at a variant: a call interpretation, fitting its candidate. -/
+theorem Fits.var_inv {o : Cond} {m : Condition} (h : F o m) (hv : isVarLay m = true) (h5 : o.op = 5) :
+    o.enc = 5 ∧ ∃ k ∈ m.children, k.encoding = .AbiEncoded ∧ k.compValue = prefixOf 5 o.cv ∧
+      KeyUnique m k ∧ F o k ∧ LayEq (D avatar o) m := by
+  have hmd : m.encoding = .Dynamic := by unfold isVarLay at hv; simp at hv; exact hv.2
+  cases h with
+  | varAbi _ he _ _ hl hmem hke hkey hu hf => exact ⟨he, _, hmem, hke, hkey, hu, hf, hl⟩
+  | tup _ he _ hm =>
+    exfalso; rw [hmd, D_encoding] at hm
+    rcases he with h | h <;> simp [h, encN, ConditionPacking.encOf?] at hm
+  | pass h0 => omega
+  | ns _ hns _ =>
+    cases hns with
+    | leaf _ _ hop => simp [nsOp, h5] at hop
+    | logical hop => omega
+  | logical hop => omega
+  | arr _ _ _ hm => rw [hmd] at hm; cases hm
+  | slice h13 => omega
+  | leaf hop => simp [leafOp, h5] at hop
+  | varDyn _ he2 _ hf =>
+    exfalso; obtain ⟨_, _, h5', _, _⟩ := hf.plain_dyn avatar he2; exact h5' h5
+
+theorem KeyUnique.eq {m k k' : Condition} (hu : KeyUnique m k) (hm : k' ∈ m.children)
+    (he : k'.compValue = k.compValue) : k' = k := by
+  by_cases h : k' = k
+  · exact h
+  · exact absurd (he ▸ List.prefix_refl _) (hu k' hm h).1
+
+theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c = some n) : F n m := by
+  cases hv : isVarLay m
+  · exact pushStep_fits_nv avatar h (fun _ => hv) hp
+  cases hall : c.ch.all (·.op == 5)
+  · exact pushStep_fits_nv avatar h (fun h' => by rw [hall] at h'; cases h') hp
+  -- a variant `Or` of call interpretations with one compValue: merged at
+  -- their common candidate
+  have hp' := hp
+  unfold pushStep at hp'
+  split at hp'
+  · rename_i hcond
+    obtain ⟨nch, hm, rfl⟩ := Option.map_eq_some_iff.1 hp'
+    simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Bool.not_eq_true',
+      List.all_eq_true, List.any_eq_false] at hcond
+    obtain ⟨⟨⟨h2, hlen⟩, _⟩, _⟩ := hcond
+    obtain ⟨he0, hch⟩ := h.logical_ch avatar (Or.inr h2)
+    have hhead : c.ch.head! ∈ c.ch := by
+      obtain ⟨x, xs, hc⟩ : ∃ x xs, c.ch = x :: xs := by
+        cases hc : c.ch with
+        | nil => rw [hc] at hlen; simp at hlen
+        | cons x xs => exact ⟨x, xs, rfl⟩
+      rw [hc]; exact List.mem_cons.2 (Or.inl rfl)
+    simp only [List.all_eq_true, beq_iff_eq] at hall
+    have hcv : ∀ o ∈ c.ch, o.cv = c.ch.head!.cv := by
+      unfold mergeMatches at hm
+      split at hm; · simp at hm
+      split at hm; · simp at hm
+      rename_i hc
+      intro o ho
+      have hc' : c.ch.all (fun x => x.cv == c.ch.head!.cv) = true := by
+        cases h' : c.ch.all (fun x => x.cv == c.ch.head!.cv)
+        · rw [h'] at hc; simp at hc
+        · rfl
+      simpa using List.all_eq_true.1 hc' o ho
+    obtain ⟨he5, k0, hmem0, hke0, hkey0, hu0, _, hl0⟩ := (hch _ hhead).var_inv avatar hv (hall _ hhead)
+    have hk : ∀ o ∈ c.ch, F o k0 := by
+      intro o ho
+      obtain ⟨_, k, hmem, _, hkey, _, hf, _⟩ := (hch o ho).var_inv avatar hv (hall o ho)
+      have : k = k0 := hu0.eq hmem (by rw [hkey, hkey0, hcv o ho])
+      exact this ▸ hf
+    have hck : F c k0 := by
+      have := logical_withCh avatar (c := c) (Or.inr h2) he0 c.ch hk
+      rwa [withCh_eq_self rfl] at this
+    have hn := pushStep_fits_nv avatar hck (fun _ => by simp [isVarLay, hke0]) hp
+    exact .varAbi (hall c.ch.head! hhead) he5 rfl hv (layEq_abi avatar he5 he5 hl0) hmem0 hke0 hkey0 hu0 hn
+  · simp at hp'
 
 theorem pushDownOr_fits {c : Cond} {m : Condition} (f : Cond → Cond) (hf : ∀ n, F n m → F (f n) m)
     (h : F c m) : F (pushDownOr f c) m := by

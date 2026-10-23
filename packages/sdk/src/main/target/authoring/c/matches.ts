@@ -2,13 +2,11 @@ import { BigNumberish, isHexString, ParamType } from "ethers"
 import { Condition, Operator, Encoding } from "../../../types"
 
 import { coercePermission } from "../../../permission/coercePermission"
-import {
-  checkParameterTypeCompatibility,
-  checkRootConditionIntegrity,
-} from "../../../condition/conditionIntegrity"
+import { scopedType } from "../../../condition/conditionIntegrity"
 import { describeStructure } from "./helpers/describeStructure"
 import { isFixedArray, parameterType } from "./helpers/parameterType"
 
+import { and } from "./branching"
 import { bitmask, eq } from "./comparison"
 
 import { FunctionPermission } from "../../../permission"
@@ -110,28 +108,6 @@ export const matches =
     }
   }
 
-/**
- * Scopings for a parameter list must be an array with at most one entry per
- * parameter: an entry without a parameter would be dropped, leaving the
- * permission wider than written.
- */
-const assertScopingsFit = (
-  scopings: unknown,
-  paramTypes: readonly ParamType[],
-  name: string
-) => {
-  if (!Array.isArray(scopings)) {
-    throw new Error(
-      `\`${name}\` expects an array of scopings, one per parameter`
-    )
-  }
-  if (scopings.length > paramTypes.length) {
-    throw new Error(
-      `\`${name}\` got ${scopings.length} scopings for ${paramTypes.length} parameters`
-    )
-  }
-}
-
 const calldataMatchesScopings =
   <S extends TupleScopings<any>>(
     scopings: S,
@@ -151,8 +127,6 @@ const calldataMatchesScopings =
       )
     }
 
-    assertScopingsFit(scopings, paramTypes, "calldataMatches")
-
     const { selector, callWithinAllowance } = options
 
     // map scoping items to conditions
@@ -164,7 +138,7 @@ const calldataMatchesScopings =
     assertValidConditionsKeys(conditions, paramTypes)
     assertCompatibleParamTypes(conditions, paramTypes)
 
-    const matchesCondition: Condition = {
+    const matchesCondition = {
       paramType: Encoding.AbiEncoded,
       operator: Operator.Matches,
       children: conditions.map(
@@ -172,34 +146,13 @@ const calldataMatchesScopings =
       ),
     }
 
-    // A Matches may only have children that read a parameter, so the
-    // allowance goes next to it: And[Matches, CallWithinAllowance].
-    const allowance: Condition | undefined = callWithinAllowance
-      ? {
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: encodeKey(callWithinAllowance),
-        }
-      : undefined
-    // Without parameters there is no Matches (it needs children). At the top
-    // level, the allowance alone; with neither allowance nor selector there
-    // is nothing to check (use a permission without a condition). On a
-    // `bytes` parameter, a Pass describing the bytes keeps the parameter's
-    // type next to the allowance or selector check.
-    if (paramTypes.length === 0 && !abiType && !allowance) {
-      throw new Error(
-        "`calldataMatches` without parameters or allowance checks nothing: use a function permission without a condition"
-      )
+    if (callWithinAllowance) {
+      matchesCondition.children.push({
+        paramType: Encoding.None,
+        operator: Operator.CallWithinAllowance,
+        compValue: encodeKey(callWithinAllowance),
+      })
     }
-    const parts: Condition[] =
-      paramTypes.length > 0
-        ? [matchesCondition, ...(allowance ? [allowance] : [])]
-        : abiType
-          ? [
-              { paramType: Encoding.Dynamic, operator: Operator.Pass },
-              ...(allowance ? [allowance] : []),
-            ]
-          : [allowance!]
 
     if (selector) {
       if (selector.length !== 10) {
@@ -208,20 +161,13 @@ const calldataMatchesScopings =
         )
       }
 
-      return {
-        paramType: Encoding.None,
-        operator: Operator.And,
-        children: [
-          ...parts,
-          bitmask({ mask: "0xffffffff", value: selector })(
-            ParamType.from("bytes")
-          ),
-        ],
-      }
+      return and(
+        () => matchesCondition,
+        bitmask({ mask: "0xffffffff", value: selector })
+      )(ParamType.from("bytes"))
     }
 
-    if (parts.length === 1) return parts[0]
-    return { paramType: Encoding.None, operator: Operator.And, children: parts }
+    return matchesCondition
   }
 
 const calldataMatchesFunctionPermission =
@@ -234,23 +180,27 @@ const calldataMatchesFunctionPermission =
     }
 
     const { selector, condition } = coercePermission(functionPermission)
-    // any condition valid for a function's calldata: a Matches on the
-    // parameters, or one with a call allowance next to it, or alone
-    if (condition) checkRootConditionIntegrity(condition)
+    if (condition) {
+      if (
+        condition.operator !== Operator.Matches ||
+        condition.paramType !== Encoding.AbiEncoded
+      ) {
+        throw new Error(
+          `calldataMatches expects a function permission with an \`Operator.matches\`, \`ParamType.AbiEncoded\` condition, got: \`Operator.${
+            Operator[condition.operator]
+          }\`, \`ParamType.${Encoding[condition.paramType]}\``
+        )
+      }
+    }
 
     const selectorCondition = bitmask({
-      mask: "0xffffffff",
+      mask: "0xffffffff0000000000000000000000",
       value: selector,
-    })(ParamType.from("bytes"))
+    })
 
-    // the And node built directly: importing `and` would make a module cycle
-    return condition
-      ? {
-          paramType: Encoding.None,
-          operator: Operator.And,
-          children: [condition, selectorCondition],
-        }
-      : selectorCondition
+    return (
+      condition ? and(() => condition, selectorCondition) : selectorCondition
+    )(ParamType.from("bytes"))
   }
 
 type CalldataMatches = {
@@ -321,8 +271,6 @@ export const abiEncodedMatches =
       )
     }
 
-    assertScopingsFit(scopings, paramTypes, "abiEncodedMatches")
-
     // map scoping items to conditions
     const conditions: (Condition | undefined)[] = paramTypes.map(
       (type, index) => mapScoping(scopings[index], type)
@@ -353,11 +301,6 @@ export function mapScoping(
 ): Condition | undefined {
   if (scoping === undefined) {
     return undefined
-  }
-  if (scoping === null) {
-    throw new Error(
-      "A scoping must not be null (use undefined to leave a parameter unscoped)"
-    )
   }
 
   let conditionFunction: ConditionFunction<any>
@@ -458,51 +401,20 @@ const assertCompatibleParamTypes = (
     }
 
     const expectedType = parameterType(type)
-    const scopedType = checkScopedType(condition)
+    const scoped = scopedType(condition)
 
-    if (scopedType === expectedType) return
+    if (scoped === expectedType) return
 
     // allow dynamic type values to be interpreted as abi encoded
-    if (
-      expectedType === Encoding.Dynamic &&
-      scopedType === Encoding.AbiEncoded
-    ) {
+    if (expectedType === Encoding.Dynamic && scoped === Encoding.AbiEncoded) {
       return
     }
 
     const fieldReference = type.name ? `'${type.name}'` : `at index ${index}`
     throw new Error(
-      `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scopedType]}\` (expected: \`${Encoding[expectedType]}\`)`
+      `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scoped]}\` (expected: \`${Encoding[expectedType]}\`)`
     )
   })
-}
-
-/**
- * Returns `condition.paramType` if it is not `Encoding.None`, otherwise returns the scoped param type of its children, if any.
- * Throws if the children have mixed scoped param types.
- * @param condition The condition to get the scoped param type of.
- * @returns the `Encoding` the condition is applied to.
- */
-const checkScopedType = (condition: Condition): Encoding => {
-  if (condition.paramType === Encoding.None) {
-    if (!condition.children || condition.children.length === 0) {
-      // e.g.: Operator.CallWithinAllowance
-      return Encoding.None
-    }
-
-    const [first, ...rest] = condition.children
-    const result = checkScopedType(first)
-
-    // assert that all following children have compatible types
-    rest.forEach((child) => {
-      const childType = checkScopedType(child)
-      checkParameterTypeCompatibility(result, childType)
-    })
-
-    return result
-  }
-
-  return condition.paramType
 }
 
 const arrayDiff = (a: string[], b: string[]) => {

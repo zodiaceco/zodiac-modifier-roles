@@ -20,12 +20,13 @@ namespace ConditionCheck
 open DecoderFaithfulness DecoderFaithfulness.Roles
 
 theorem stored_input {s : Bool} {fs : List ConditionPacking.Flat} (hP : ConditionPacking.Packable fs)
-    (avatar : Bytes) (junk junk' : ConditionPacking.Mem) {lb : Nat} {ts : List Ty}
-    (h : checkCondition s (ConditionPacking.rawTree avatar fs 0) = some (.call lb ts))
+    (avatar : Bytes) (junk junk' : ConditionPacking.Mem) {lb : Nat} {ts : List Ty} {o : Bool}
+    (h : checkCondition s (ConditionPacking.rawTree avatar fs 0) = some (.call lb ts o))
     {tree : Condition} {maxPluck : Nat}
     (hu : ConditionPacking.unpack avatar
       (ConditionPacking.bufMem (ConditionPacking.pack junk fs) junk') = some (tree, maxPluck))
-    {pre : Bytes} {args : List Val} (hpre : pre.length = lb) (hargs : HasTAll s args ts)
+    {pre : Bytes} {args : List Val} (hpre : pre.length = lb)
+    (hargs : if o then HasTPre s args ts else HasTAll s args ts)
     (suffix : Bytes) (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
     (hv : Eval (calldata pre args suffix) tree p d l)

@@ -102,13 +102,17 @@ export const toFlatNodes = (flat: readonly ConditionFlatInput[]): FlatNode[] =>
 // Types (`Ty`, `K`)
 // ---------------------------------------------------------------------------
 
-/** The ABI type a structural node describes. */
+/**
+ * The ABI type a structural node describes. An open tuple or call type
+ * (`o`, a `Matches` node) types the first fields only: the value may have
+ * more (only if the fields typed are not all static).
+ */
 export type Ty =
   | { k: "static" }
   | { k: "dynamic" }
-  | { k: "tuple"; ts: Ty[] }
+  | { k: "tuple"; ts: Ty[]; o: boolean }
   | { k: "array"; t: Ty }
-  | { k: "call"; lb: number; ts: Ty[] }
+  | { k: "call"; lb: number; ts: Ty[]; o: boolean }
 
 const STATIC: Ty = { k: "static" }
 const DYNAMIC: Ty = { k: "dynamic" }
@@ -121,11 +125,11 @@ export const tyKey = (t: Ty): string => {
     case "dynamic":
       return "D"
     case "tuple":
-      return `T(${t.ts.map(tyKey).join(",")})`
+      return `T(${[...t.ts.map(tyKey), ...(t.o ? [".."] : [])].join(",")})`
     case "array":
       return `A(${tyKey(t.t)})`
     case "call":
-      return `C${t.lb}(${t.ts.map(tyKey).join(",")})`
+      return `C${t.lb}(${[...t.ts.map(tyKey), ...(t.o ? [".."] : [])].join(",")})`
   }
 }
 
@@ -135,6 +139,43 @@ const isStatic = (t: Ty): boolean =>
   t.k === "static" || (t.k === "tuple" && t.ts.every(isStatic))
 
 const isBytesLike = (t: Ty): boolean => t.k === "dynamic" || t.k === "call"
+
+/**
+ * `Ty.sub` (Check.lean): every value of type `t1` has type `t2`. Equal
+ * types aside: a bytes-like type and `dynamic`; with `s` any two bytes-like
+ * types; and the prefix order of open tuple and call types.
+ */
+const sub = (s: boolean, t1: Ty, t2: Ty): boolean => {
+  if (t1.k === "static" && t2.k === "static") return true
+  if (t1.k === "dynamic" && t2.k === "dynamic") return true
+  if (t1.k === "tuple" && t2.k === "tuple") {
+    if (t2.o)
+      return (
+        t2.ts.length <= t1.ts.length &&
+        subPre(s, t1.ts, t2.ts) &&
+        (!(t2.ts.length < t1.ts.length || t1.o) || !t2.ts.every(isStatic))
+      )
+    return !t1.o && t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
+  }
+  if (t1.k === "array" && t2.k === "array") return le(s, t1.t, t2.t)
+  if (t1.k === "call" && t2.k === "call") {
+    const prefix = t2.o
+      ? t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
+      : !t1.o && t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
+    return (t1.lb === t2.lb && prefix) || s
+  }
+  if (t1.k === "call" && t2.k === "dynamic") return true
+  if (t1.k === "dynamic" && t2.k === "call") return s
+  return false
+}
+
+/** `Ty.subPre`: `le` on the first `ts2.length` types. */
+const subPre = (s: boolean, ts1: readonly Ty[], ts2: readonly Ty[]): boolean =>
+  ts2.every((t2, i) => i < ts1.length && le(s, ts1[i], t2))
+
+/** `Ty.le`: equal, or a subtype. */
+const le = (s: boolean, t1: Ty, t2: Ty): boolean =>
+  tyEq(t1, t2) || sub(s, t1, t2)
 
 type K = { k: "ty"; t: Ty } | { k: "ns" } | { k: "zip" }
 
@@ -595,17 +636,28 @@ const firstTy = (ks: readonly K[]): Ty | undefined => {
   return undefined
 }
 
-const fits = (t: Ty, k: K) => k.k !== "ty" || tyEq(k.t, t)
+const fits = (s: boolean, t: Ty, k: K) => k.k !== "ty" || le(s, t, k.t)
 const bytesLikeOk = (k: K) => k.k !== "ty" || isBytesLike(k.t)
 const bytesLikeTy = (k: K) => k.k === "ty" && isBytesLike(k.t)
 
+/** `meetOf`: the first structural type that all children contain. */
+const meetOf = (s: boolean, ks: readonly K[]): Ty | undefined => {
+  for (const k of ks)
+    if (k.k === "ty" && ks.every((k2) => fits(s, k.t, k2))) return k.t
+  return undefined
+}
+
 const logicalTy = (s: boolean, ks: readonly K[]): Ty | undefined => {
-  const t0 = firstTy(ks)
-  if (t0 === undefined) return undefined
-  if (ks.every((k) => fits(t0, k))) return t0
+  if (firstTy(ks) === undefined) return undefined
+  const t = meetOf(s, ks)
+  if (t !== undefined) return t
   if (s && ks.every(bytesLikeOk)) return DYNAMIC
   return undefined
 }
+
+/** `noNav`: no node of the subtree navigates (a type description). */
+const noNav = (c: Node): boolean =>
+  !isNavOp(c.operator) && c.children.every(noNav)
 
 const logicalKind = (s: boolean, ks: readonly K[]): K | undefined => {
   if (ks.length === 0) return undefined
@@ -635,26 +687,38 @@ const classifyNode = (
         ? { k: "ty", t: DYNAMIC }
         : undefined
     case Enc.Tuple: {
-      if (!(cs.length > 0 && (!isNavOp(op) || op === Op.Matches)))
+      if (
+        !(
+          cs.length > 0 &&
+          ((!isNavOp(op) && cs.every(noNav)) || op === Op.Matches)
+        )
+      )
         return undefined
       const ts = allTy(ks)
-      return ts && { k: "ty", t: { k: "tuple", ts } }
+      return ts && { k: "ty", t: { k: "tuple", ts, o: op === Op.Matches } }
     }
     case Enc.Array: {
-      if (!(!isNavOp(op) || isArrayOp(op))) return undefined
+      if (!((!isNavOp(op) && cs.every(noNav)) || isArrayOp(op)))
+        return undefined
       const k0 = ks[0]
       if (k0 === undefined || k0.k !== "ty") return undefined
-      if (ks.slice(1).every((k) => kEq(k, k0)))
+      // the template `children[0]` reads every element: the most specific
+      if (ks.slice(1).every((k) => k.k === "ty" && fits(s, k0.t, k)))
         return { k: "ty", t: { k: "array", t: k0.t } }
       if (s && ks.every(bytesLikeTy))
         return { k: "ty", t: { k: "array", t: DYNAMIC } }
       return undefined
     }
     case Enc.AbiEncoded: {
-      if (!(cs.length > 0 && (op === Op.Matches || op === Op.Pass)))
+      if (
+        !(
+          cs.length > 0 &&
+          (op === Op.Matches || (op === Op.Pass && cs.every(noNav)))
+        )
+      )
         return undefined
       const ts = allTy(ks)
-      return ts && { k: "ty", t: { k: "call", lb, ts } }
+      return ts && { k: "ty", t: { k: "call", lb, ts, o: op === Op.Matches } }
     }
     case Enc.None:
       if (op === Op.ZipSome || op === Op.ZipEvery) {
@@ -670,6 +734,60 @@ const classifyNode = (
     default:
       return undefined
   }
+}
+
+/** An SDK condition (as `normalizeCondition` handles it). */
+export interface ConditionInput {
+  paramType: number
+  operator: number
+  compValue?: string
+  children?: readonly ConditionInput[]
+}
+
+/** The raw tree of an SDK condition (`Normalize.toCheck` in Lean). */
+const nodeOf = (c: ConditionInput): Node => {
+  const cv = hexToBytes(c.compValue)
+  const abi = c.paramType === Enc.AbiEncoded
+  return {
+    encoding: c.paramType,
+    operator: c.operator,
+    children: (c.children ?? []).map(nodeOf),
+    leadingBytes: abi ? (cv.length === 0 ? 4 : wordVal(cv.slice(0, 2))) : 0,
+    compValue: abi ? cv.slice(2) : cv,
+  }
+}
+
+/**
+ * The check's rule for the children of one `And`/`Or` (`logicalTy`): every
+ * structural one describes the value of the most specific of them (a prefix
+ * of one tuple or call, or, with `s`, interpretations of one bytes value).
+ * `normalizeCondition` merges `Or` branches only into such a node.
+ */
+export const siblingsCompatible = (
+  cs: readonly ConditionInput[],
+  s = true
+): boolean => {
+  // unknown codes have no raw tree (`toCheck` is `none`)
+  const known = (c: ConditionInput): boolean =>
+    Number.isInteger(c.paramType) &&
+    0 <= c.paramType &&
+    c.paramType <= 6 &&
+    OP_CODES.has(c.operator) &&
+    (c.children ?? []).every(known)
+  if (!cs.every(known)) return false
+  const checker = new Checker(s)
+  const ks: K[] = []
+  for (const c of cs) {
+    let k: K | undefined
+    try {
+      k = checker.classify(nodeOf(c))
+    } catch {
+      return false
+    }
+    if (k === undefined) return false
+    ks.push(k)
+  }
+  return logicalTy(s, ks) !== undefined
 }
 
 class Checker {
@@ -717,11 +835,7 @@ class Checker {
   }
 
   tyCompat(t1: Ty, t2: Ty): boolean {
-    return (
-      tyEq(t1, t2) ||
-      (t2.k === "dynamic" && isBytesLike(t1)) ||
-      (this.s && isBytesLike(t1) && isBytesLike(t2))
-    )
+    return le(this.s, t1, t2)
   }
 
   zipCheck(root: Node): boolean {

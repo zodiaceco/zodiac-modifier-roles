@@ -93,24 +93,76 @@ theorem hasTEach_iff (s : Bool) (t : Ty) :
   | [] => by simp [HasTEach]
   | v :: vs => by simp [HasTEach, hasTEach_iff s t (vs := vs)]
 
+theorem hasTPre_get (s : Bool) :
+    ∀ {vs : List Val} {ts : List Ty}, HasTPre s vs ts →
+      ts.length ≤ vs.length ∧ ∀ i (h1 : i < vs.length) (h2 : i < ts.length), HasT s vs[i] ts[i]
+  | _, [], _ => by simp
+  | v :: vs, t :: ts, h => by
+    simp only [HasTPre] at h
+    obtain ⟨hl, hg⟩ := hasTPre_get s h.2
+    refine ⟨by simp; omega, ?_⟩
+    intro i h1 h2
+    cases i with
+    | zero => simpa using h.1
+    | succ i => simpa using hg i (by simp at h1; omega) (by simp at h2; omega)
+  | [], _ :: _, h => by simp [HasTPre] at h
+
+theorem hasTPre_of_get (s : Bool) :
+    ∀ {vs : List Val} {ts : List Ty}, ts.length ≤ vs.length →
+      (∀ i (h1 : i < vs.length) (h2 : i < ts.length), HasT s vs[i] ts[i]) → HasTPre s vs ts
+  | _, [], _, _ => by simp [HasTPre]
+  | v :: vs, t :: ts, hl, hg => by
+    simp only [HasTPre]
+    exact ⟨hg 0 (by simp) (by simp),
+      hasTPre_of_get s (by simp at hl; omega) fun i h1 h2 =>
+        hg (i + 1) (by simp; omega) (by simp; omega)⟩
+  | [], _ :: _, hl, _ => by simp at hl
+
+theorem hasTPre_of_all {s : Bool} {vs : List Val} {ts : List Ty} (h : HasTAll s vs ts) :
+    HasTPre s vs ts := by
+  obtain ⟨hl, hg⟩ := hasTAll_get s h
+  exact hasTPre_of_get s (by omega) hg
+
+theorem hasTAll_of_pre {s : Bool} {vs : List Val} {ts : List Ty} (h : HasTPre s vs ts)
+    (hl : vs.length = ts.length) : HasTAll s vs ts := by
+  obtain ⟨_, hg⟩ := hasTPre_get s h
+  exact hasTAll_of_get s hl hg
+
+/-- An open type's fields, as the exact types of the first values. -/
+theorem hasTPre_take {s : Bool} {vs : List Val} {ts : List Ty} (h : HasTPre s vs ts) :
+    HasTAll s (vs.take ts.length) ts := by
+  obtain ⟨hl, hg⟩ := hasTPre_get s h
+  exact hasTAll_of_get s (by simp; omega) fun i h1 h2 => by
+    simp only [List.getElem_take]; exact hg i (by simp at h1; omega) h2
+
+theorem allStatic_take_drop' : ∀ (vs : List Val) (k : Nat),
+    Val.allStatic vs = (Val.allStatic (vs.take k) && Val.allStatic (vs.drop k)) :=
+  DecoderFaithfulness.allStatic_take_drop
+
 mutual
   theorem hasT_isStatic (s : Bool) : ∀ {u : Val} {t : Ty}, HasT s u t → u.isStatic = t.isStatic
     | .word _, t, h => by simp only [HasT] at h; rw [h.1]; rfl
     | .bytes _, t, h => by
       simp only [HasT] at h
-      rcases h with rfl | ⟨_, lb, ts, rfl⟩ <;> rfl
+      rcases h with rfl | ⟨_, lb, ts, o, rfl⟩ <;> rfl
     | .tuple vs, t, h => by
       simp only [HasT] at h
-      obtain ⟨ts, rfl, h⟩ := h
+      obtain ⟨ts, o, rfl, h⟩ := h
       simp only [Val.isStatic, Ty.isStatic]
-      exact hasTAll_allStatic s h
+      cases o
+      · exact hasTAll_allStatic s h
+      · simp only [ite_true] at h
+        have ht := hasTAll_allStatic s (hasTPre_take h.1)
+        by_cases hlt : ts.length < vs.length
+        · rw [h.2 hlt, allStatic_take_drop' vs ts.length, ht, h.2 hlt]; rfl
+        · rw [List.take_of_length_le (by omega)] at ht; exact ht
     | .array _, t, h => by
       simp only [HasT] at h
       obtain ⟨t', rfl, _⟩ := h
       rfl
     | .call _ _, t, h => by
       simp only [HasT] at h
-      rcases h with rfl | ⟨lb, ts, rfl, _⟩ <;> rfl
+      rcases h with rfl | ⟨lb, ts, o, rfl, _⟩ <;> rfl
 
   theorem hasTAll_allStatic (s : Bool) :
       ∀ {vs : List Val} {ts : List Ty}, HasTAll s vs ts → Val.allStatic vs = Ty.allStatic ts
@@ -127,7 +179,7 @@ theorem isBytesLike_of_hasT {s : Bool} {u : Val} {t : Ty} (h : HasT s u t)
   | word w => simp only [HasT] at h; rw [h.1] at ht; simp [Ty.isBytesLike] at ht
   | bytes _ => trivial
   | tuple vs =>
-    simp only [HasT] at h; obtain ⟨ts, rfl, _⟩ := h; simp [Ty.isBytesLike] at ht
+    simp only [HasT] at h; obtain ⟨ts, o, rfl, _⟩ := h; simp [Ty.isBytesLike] at ht
   | array vs =>
     simp only [HasT] at h; obtain ⟨t', rfl, _⟩ := h; simp [Ty.isBytesLike] at ht
   | call _ _ => trivial
@@ -141,7 +193,7 @@ theorem hasT_of_bytesLike {s : Bool} {u : Val} {t : Ty} (hs : s = true) (hu : Is
     | bytes _ => simp [HasT]
     | call _ _ => simp [HasT]
     | _ => cases hu
-  | call lb ts =>
+  | call lb ts o =>
     cases u with
     | bytes _ => simp [HasT, hs]
     | call _ _ => simp [HasT, hs]
@@ -153,6 +205,152 @@ theorem hasT_dynamic {s : Bool} {u : Val} (hu : IsBytesLike u) : HasT s u .dynam
   | bytes _ => simp [HasT]
   | call _ _ => simp [HasT]
   | _ => cases hu
+
+/-! ## Subtypes -/
+
+theorem le_refl (s : Bool) (t : Ty) : Ty.le s t t = true := by simp [Ty.le]
+
+theorem subPre_length {s : Bool} : ∀ {ts1 ts2 : List Ty}, Ty.subPre s ts1 ts2 = true →
+    ts2.length ≤ ts1.length
+  | _, [], _ => by simp
+  | _ :: _, _ :: _, h => by
+    simp only [Ty.subPre, Bool.and_eq_true] at h
+    have := subPre_length h.2; simp; omega
+  | [], _ :: _, h => by simp [Ty.subPre] at h
+
+theorem subPre_get {s : Bool} : ∀ {ts1 ts2 : List Ty}, Ty.subPre s ts1 ts2 = true →
+    ∀ i (h1 : i < ts1.length) (h2 : i < ts2.length), Ty.le s ts1[i] ts2[i] = true
+  | _, [], _, _, _, h2 => by simp at h2
+  | _ :: _, _ :: _, h, i, h1, h2 => by
+    simp only [Ty.subPre, Bool.and_eq_true] at h
+    cases i with
+    | zero => simpa [Ty.le] using h.1
+    | succ i => simpa using subPre_get h.2 i (by simp at h1; omega) (by simp at h2; omega)
+  | [], _ :: _, h, _, _, _ => by simp [Ty.subPre] at h
+
+mutual
+  /-- **Subtypes.** Every value of type `t1` has every supertype `t2`. -/
+  theorem hasT_sub (s : Bool) : ∀ {u : Val} {t1 t2 : Ty}, Ty.sub s t1 t2 = true →
+      HasT s u t1 → HasT s u t2
+    | .word _, t1, t2, hs, h => by
+      simp only [HasT] at h ⊢
+      obtain ⟨rfl, hw⟩ := h
+      cases t2 <;> simp_all [Ty.sub]
+    | .bytes _, t1, t2, hs, h => by
+      simp only [HasT] at h ⊢
+      rcases h with rfl | ⟨hs', lb, ts, o, rfl⟩
+      · cases t2 <;> simp_all [Ty.sub]
+      · cases t2 <;> simp_all [Ty.sub]
+    | .tuple vs, t1, t2, hs, h => by
+      simp only [HasT] at h ⊢
+      obtain ⟨ts1, o1, rfl, h⟩ := h
+      cases t2 with
+      | tuple ts2 o2 =>
+        refine ⟨ts2, o2, rfl, ?_⟩
+        have hpre1 : HasTPre s vs ts1 := by
+          cases o1
+          · exact hasTPre_of_all (by simpa using h)
+          · simp only [ite_true] at h; exact h.1
+        have hsp : Ty.subPre s ts1 ts2 = true := by
+          cases o2
+          · simp only [Ty.sub, ite_false, Bool.false_eq_true, Bool.and_eq_true] at hs; exact hs.2
+          · simp only [Ty.sub, ite_true, Bool.and_eq_true] at hs; exact hs.1.2
+        have hpre2 : HasTPre s vs ts2 := hasTPre_subPre s hpre1 hsp
+        cases o2
+        · simp only [Ty.sub, ite_false, Bool.false_eq_true, Bool.and_eq_true, Bool.not_eq_true',
+            decide_eq_true_eq] at hs
+          obtain ⟨⟨ho1, hl⟩, _⟩ := hs
+          subst ho1
+          simp only [ite_false, Bool.false_eq_true] at h ⊢
+          exact hasTAll_of_pre hpre2 (by have := (hasTAll_get s h).1; omega)
+        · have h3 : (!(decide (ts2.length < ts1.length) || o1) || !Ty.allStatic ts2) = true := by
+            simp only [Ty.sub, ite_true, Bool.and_eq_true] at hs; exact hs.2
+          simp only [ite_true]
+          refine ⟨hpre2, fun hlt => ?_⟩
+          cases hst : Ty.allStatic ts2
+          · rfl
+          · exfalso
+            rw [hst] at h3
+            have ho1 : o1 = false := by cases o1 <;> simp_all
+            have hge : ts1.length ≤ ts2.length := by
+              rcases Nat.lt_or_ge ts2.length ts1.length with hl | hl
+              · simp [hl] at h3
+              · exact hl
+            subst ho1
+            simp only [ite_false, Bool.false_eq_true] at h
+            have := (hasTAll_get s h).1; omega
+      | _ => cases o1 <;> simp [Ty.sub] at hs
+    | .array vs, t1, t2, hs, h => by
+      simp only [HasT] at h ⊢
+      obtain ⟨a, rfl, h⟩ := h
+      cases t2 with
+      | array b =>
+        simp only [Ty.sub] at hs
+        refine ⟨b, rfl, (hasTEach_iff s b).mpr fun v hv => ?_⟩
+        have hv' := (hasTEach_iff s a).mp h v hv
+        simp only [Bool.or_eq_true, decide_eq_true_eq] at hs
+        rcases hs with rfl | hs
+        · exact hv'
+        · exact hasT_sub s hs hv'
+      | _ => simp [Ty.sub] at hs
+    | .call pre args, t1, t2, hs, h => by
+      simp only [HasT] at h ⊢
+      rcases h with rfl | ⟨lb1, ts1, o1, rfl, h⟩
+      · cases t2 <;> simp_all [Ty.sub]
+      · cases t2 with
+        | dynamic => exact .inl rfl
+        | call lb2 ts2 o2 =>
+          refine .inr ⟨lb2, ts2, o2, rfl, ?_⟩
+          by_cases hsv : s = true
+          · exact .inr hsv
+          · simp only [Ty.sub, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hs
+            rcases hs with ⟨hlb, hs⟩ | hs
+            · subst hlb
+              rcases h with ⟨hpre, h⟩ | h
+              · refine .inl ⟨hpre, ?_⟩
+                have hpre1 : HasTPre s args ts1 := by
+                  cases o1
+                  · exact hasTPre_of_all (by simpa using h)
+                  · simpa using h
+                cases o2
+                · simp only [ite_false, Bool.false_eq_true, Bool.and_eq_true, Bool.not_eq_true',
+                    decide_eq_true_eq] at hs
+                  obtain ⟨⟨ho1, hl⟩, hsp⟩ := hs
+                  subst ho1
+                  simp only [ite_false, Bool.false_eq_true] at h ⊢
+                  exact hasTAll_of_pre (hasTPre_subPre s hpre1 hsp)
+                    (by have := (hasTAll_get s h).1; omega)
+                · simp only [ite_true, Bool.and_eq_true, decide_eq_true_eq] at hs ⊢
+                  exact hasTPre_subPre s hpre1 hs.2
+              · exact absurd h hsv
+            · exact absurd hs hsv
+        | _ => simp [Ty.sub] at hs
+
+  theorem hasTPre_subPre (s : Bool) : ∀ {vs : List Val} {ts1 ts2 : List Ty},
+      HasTPre s vs ts1 → Ty.subPre s ts1 ts2 = true → HasTPre s vs ts2
+    | _, _, [], _, _ => by simp [HasTPre]
+    | v :: vs, t1 :: ts1, t2 :: ts2, h, hs => by
+      simp only [HasTPre] at h ⊢
+      simp only [Ty.subPre, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hs
+      refine ⟨?_, hasTPre_subPre s h.2 hs.2⟩
+      rcases hs.1 with rfl | h1
+      · exact h.1
+      · exact hasT_sub s h1 h.1
+    | [], _ :: _, _, h, _ => by simp [HasTPre] at h
+    | _ :: _, [], _ :: _, _, hs => by simp [Ty.subPre] at hs
+end
+
+theorem hasT_le {s : Bool} {u : Val} {t1 t2 : Ty} (h : Ty.le s t1 t2 = true) (hu : HasT s u t1) :
+    HasT s u t2 := by
+  simp only [Ty.le, Bool.or_eq_true, decide_eq_true_eq] at h
+  rcases h with rfl | h
+  · exact hu
+  · exact hasT_sub s h hu
+
+/-- The bytes-like interpretations of a variant node: `dynamic` is below each. -/
+theorem le_dynamic_of_bytesLike {s : Bool} {t : Ty} (hs : s = true) (hb : t.isBytesLike = true) :
+    Ty.le s .dynamic t = true := by
+  cases t <;> simp_all [Ty.isBytesLike, Ty.le, Ty.sub]
 
 /-! ## Inverting `classifyNode` -/
 
@@ -180,8 +378,8 @@ theorem node_word {s : Bool} {e : Encoding} {op : Operator} {cs : List Condition
 
 theorem node_tuple {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .Tuple op cs lb cv ks = some k) :
-    ∃ ts, k = .ty (.tuple ts) ∧ cs ≠ [] ∧ (isNavOp op = false ∨ op = .Matches) ∧
-      allTy ks = some ts := by
+    ∃ ts, k = .ty (.tuple ts (op == .Matches)) ∧ cs ≠ [] ∧
+      ((isNavOp op = false ∧ noNavAll cs = true) ∨ op = .Matches) ∧ allTy ks = some ts := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
@@ -189,47 +387,66 @@ theorem node_tuple {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     obtain ⟨ts, hts, rfl⟩ := h
     simp only [Bool.and_eq_true, Bool.not_eq_true', List.isEmpty_eq_false_iff, Bool.or_eq_true,
       beq_iff_eq] at hc
-    exact ⟨ts, rfl, hc.1, by simpa using hc.2, hts⟩
+    exact ⟨ts, rfl, hc.1, hc.2, hts⟩
   · cases h
+
+theorem mem_tysOf : ∀ {ks : List K} {t : Ty}, t ∈ tysOf ks → K.ty t ∈ ks
+  | [], _, h => by simp [tysOf] at h
+  | .ty t' :: ks, t, h => by
+    simp only [tysOf, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp
+    · exact List.mem_cons_of_mem _ (mem_tysOf h)
+  | .ns :: ks, t, h => List.mem_cons_of_mem _ (mem_tysOf (by simpa [tysOf] using h))
+  | .zip :: ks, t, h => List.mem_cons_of_mem _ (mem_tysOf (by simpa [tysOf] using h))
+
+theorem meetOf_spec {s : Bool} {ks : List K} {t : Ty} (h : meetOf s ks = some t) :
+    K.ty t ∈ ks ∧ ∀ k, k ∈ ks → K.fits s t k = true := by
+  unfold meetOf at h
+  obtain ⟨hp, hm⟩ := List.find?_some h, List.mem_of_find?_eq_some h
+  exact ⟨mem_tysOf hm, fun k hk => List.all_eq_true.mp hp k hk⟩
 
 theorem node_array {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .Array op cs lb cv ks = some k) :
-    ∃ t0, k = .ty (.array t0) ∧ (isNavOp op = false ∨ isArrayOp op = true) ∧
-      ks ≠ [] ∧ ∀ k', k' ∈ ks → ∃ t', k' = .ty t' ∧
-        (t' = t0 ∨ (s = true ∧ t0 = .dynamic ∧ t'.isBytesLike = true)) := by
+    ∃ t0, k = .ty (.array t0) ∧
+      ((isNavOp op = false ∧ noNavAll cs = true) ∨ isArrayOp op = true) ∧
+      ks ≠ [] ∧ (∀ k', k' ∈ ks → ∃ t', k' = .ty t' ∧ Ty.le s t0 t' = true) ∧
+      ((∃ rest, ks = .ty t0 :: rest) ∨ (s = true ∧ t0 = .dynamic ∧ ∀ k', k' ∈ ks → K.bytesLikeTy k' = true)) := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
+    have hc' : (isNavOp op = false ∧ noNavAll cs = true) ∨ isArrayOp op = true := by
+      simpa [Bool.or_eq_true, Bool.and_eq_true] using hc
     split at h
     · rename_i t rest
       split at h
       · rename_i hr
         simp only [Option.some.injEq] at h; subst h
-        refine ⟨t, rfl, by simpa [Bool.or_eq_true] using hc, by simp, ?_⟩
+        refine ⟨t, rfl, hc', by simp, ?_, .inl ⟨rest, rfl⟩⟩
         intro k' hk'
         simp only [List.mem_cons] at hk'
         rcases hk' with rfl | hk'
-        · exact ⟨t, rfl, .inl rfl⟩
+        · exact ⟨t, rfl, le_refl s t⟩
         · have := List.all_eq_true.mp hr k' hk'
-          simp only [beq_iff_eq] at this
-          exact ⟨t, this, .inl rfl⟩
+          rcases k' with t' | _ | _ <;> simp [K.fits] at this
+          exact ⟨t', rfl, this⟩
       · split at h
         · rename_i hv
           simp only [Option.some.injEq] at h; subst h
           simp only [Bool.and_eq_true] at hv
-          refine ⟨.dynamic, rfl, by simpa [Bool.or_eq_true] using hc, by simp, ?_⟩
+          refine ⟨.dynamic, rfl, hc', by simp, ?_, .inr ⟨hv.1, rfl, fun k' hk' => List.all_eq_true.mp hv.2 k' hk'⟩⟩
           intro k' hk'
           have := List.all_eq_true.mp hv.2 k' hk'
           rcases k' with t' | _ | _ <;> simp [K.bytesLikeTy] at this
-          exact ⟨t', rfl, .inr ⟨hv.1, rfl, this⟩⟩
+          exact ⟨t', rfl, le_dynamic_of_bytesLike hv.1 this⟩
         · cases h
     · cases h
   · cases h
 
 theorem node_abi {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .AbiEncoded op cs lb cv ks = some k) :
-    ∃ ts, k = .ty (.call lb ts) ∧ cs ≠ [] ∧ (op = .Matches ∨ op = .Pass) ∧
-      allTy ks = some ts := by
+    ∃ ts, k = .ty (.call lb ts (op == .Matches)) ∧ cs ≠ [] ∧
+      (op = .Matches ∨ (op = .Pass ∧ noNavAll cs = true)) ∧ allTy ks = some ts := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
@@ -250,16 +467,16 @@ theorem node_ether {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
 
 theorem node_none {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .None op cs lb cv ks = some k) :
-    ((op = .ZipSome ∨ op = .ZipEvery) ∧ k = .zip ∧ ∃ ts, ks = [.ty (.tuple ts)]) ∨
+    ((op = .ZipSome ∨ op = .ZipEvery) ∧ k = .zip ∧ ∃ ts o, ks = [.ty (.tuple ts o)]) ∨
     (k = .ns ∧ cs = [] ∧ isNavOp op = false) ∨
     ((op = .And ∨ op = .Or) ∧ logicalKind s ks = some k) := by
   simp only [classifyNode] at h
   split at h
   · rename_i hz
     split at h
-    · rename_i ts
+    · rename_i ts o
       simp only [Option.some.injEq] at h
-      exact .inl ⟨by simpa [Bool.or_eq_true] using hz, h.symm, ts, rfl⟩
+      exact .inl ⟨by simpa [Bool.or_eq_true] using hz, h.symm, ts, o, rfl⟩
     · cases h
   · split at h
     · rename_i hl; simp only [Option.some.injEq] at h
@@ -312,12 +529,13 @@ theorem logicalKind_not_zip {s : Bool} {ks : List K} : logicalKind s ks ≠ some
 
 /-- What `logicalKind = ty t` guarantees: a first structural child with only
     non-structural children before it, and every child non-structural, a Zip
-    (then `t` is dynamic), or structural with type `t` or (variant) a
-    bytes-like type. -/
+    (then `t` is dynamic), or structural with a type of which `t` is a
+    subtype. -/
 theorem logicalKind_ty {s : Bool} {ks : List K} {t : Ty} (h : logicalKind s ks = some (.ty t)) :
     (∃ i, ∃ hi : i < ks.length, (∃ t0, ks[i] = .ty t0) ∧ ∀ j (hj : j < i), ks[j]'(by omega) = .ns) ∧
-    ∀ k, k ∈ ks → k = .ns ∨ (k = .zip ∧ t.isStatic = false) ∨
-      ∃ t', k = .ty t' ∧ (t' = t ∨ (s = true ∧ t = .dynamic ∧ t'.isBytesLike = true)) := by
+    (∀ k, k ∈ ks → k = .ns ∨ (k = .zip ∧ t.isStatic = false) ∨
+      ∃ t', k = .ty t' ∧ Ty.le s t t' = true) ∧
+    (K.ty t ∈ ks ∨ (s = true ∧ t = .dynamic ∧ ∀ k, k ∈ ks → K.bytesLikeOk k = true)) := by
   unfold logicalKind at h
   split at h
   · cases h
@@ -335,22 +553,31 @@ theorem logicalKind_ty {s : Bool} {ks : List K} {t : Ty} (h : logicalKind s ks =
           · cases hlt
           · rename_i t0 hf
             obtain ⟨i, hi, hk, hb⟩ := firstTy_spec hf
-            refine ⟨⟨i, hi, ⟨t0, hk⟩, hb⟩, ?_⟩
+            have hmem : K.ty t1 ∈ ks ∨ (s = true ∧ t1 = .dynamic ∧ ∀ k, k ∈ ks → K.bytesLikeOk k = true) := by
+              split at hlt
+              · rename_i tm hm
+                simp only [Option.some.injEq] at hlt; subst hlt
+                exact .inl (meetOf_spec hm).1
+              · split at hlt
+                · rename_i hall
+                  simp only [Option.some.injEq] at hlt; subst hlt
+                  simp only [Bool.and_eq_true] at hall
+                  exact .inr ⟨hall.1, rfl, fun k hk => List.all_eq_true.mp hall.2 k hk⟩
+                · cases hlt
+            refine ⟨⟨i, hi, ⟨t0, hk⟩, hb⟩, ?_, hmem⟩
             intro k hk
             rcases k with t' | _ | _
             · refine .inr (.inr ⟨t', rfl, ?_⟩)
               split at hlt
-              · rename_i hall
+              · rename_i tm hm
                 simp only [Option.some.injEq] at hlt; subst hlt
-                have := List.all_eq_true.mp hall _ hk
-                simp [K.fits] at this
-                exact .inl this
+                simpa [K.fits] using (meetOf_spec hm).2 _ hk
               · split at hlt
                 · rename_i hall
                   simp only [Option.some.injEq] at hlt; subst hlt
                   simp only [Bool.and_eq_true] at hall
                   have := List.all_eq_true.mp hall.2 _ hk
-                  exact .inr ⟨hall.1, rfl, by simpa [K.bytesLikeOk] using this⟩
+                  exact le_dynamic_of_bytesLike hall.1 (by simpa [K.bytesLikeOk] using this)
                 · cases hlt
             · exact .inl rfl
             · refine .inr (.inl ⟨rfl, ?_⟩)
@@ -368,8 +595,12 @@ theorem Desc.dynamic_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
   cases hD <;> simp_all
 
 theorem Desc.tuple_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
-    (he : c.encoding = .Tuple) : ∃ vs, u = .tuple vs ∧ DescAll s c.children vs := by
-  cases hD <;> simp_all
+    (he : c.encoding = .Tuple) : ∃ vs, u = .tuple vs ∧ c.children.length ≤ vs.length ∧
+      DescAll s c.children (vs.take c.children.length) ∧
+      (c.children.length < vs.length → isInlined c = false ∧ c.operator = .Matches) := by
+  cases hD with
+  | tuple _ _ hk hall hpre _ => exact ⟨_, rfl, hk, hall, hpre⟩
+  | _ => simp_all
 
 theorem Desc.array_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
     (he : c.encoding = .Array) :
@@ -380,9 +611,12 @@ theorem Desc.array_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
 
 theorem Desc.call_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
     (he : c.encoding = .AbiEncoded) :
-    ∃ pre args, u = .call pre args ∧ c.leadingBytes = pre.length ∧ DescAll s c.children args := by
+    ∃ pre args, u = .call pre args ∧ c.leadingBytes = pre.length ∧
+      c.children.length ≤ args.length ∧ DescAll s c.children (args.take c.children.length) ∧
+      (c.operator = .Matches ∨
+        (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true)) := by
   cases hD with
-  | call _ hlb _ hall _ => exact ⟨_, _, rfl, hlb, hall⟩
+  | call _ hlb _ hk hall hop => exact ⟨_, _, rfl, hlb, hk, hall, hop⟩
   | _ => simp_all
 
 theorem Desc.none_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
@@ -451,7 +685,7 @@ theorem zip_sound (s : Bool) (c : Condition) (h : classify s c = some .zip) : Zi
   obtain ⟨hlen, _⟩ := classifyAll_get s hks
   cases he : c.encoding <;> rw [he] at hn
   case None =>
-    rcases node_none hn with ⟨hop, _, ts, rfl⟩ | ⟨hk, _⟩ | ⟨_, hl⟩
+    rcases node_none hn with ⟨hop, _, ts, o, rfl⟩ | ⟨hk, _⟩ | ⟨_, hl⟩
     · match hc : c.children, hlen with
       | [t], _ => exact .mk t he hop hc
     · cases hk
@@ -500,15 +734,16 @@ theorem bytesLike_ty (s : Bool) (c : Condition) {t : Ty} (h : classify s c = som
     rcases node_none hn with ⟨_, hk, _⟩ | ⟨hk, _⟩ | ⟨_, hl⟩
     · cases hk
     · cases hk
-    · obtain ⟨_, hall⟩ := logicalKind_ty hl
+    · obtain ⟨_, hall, _⟩ := logicalKind_ty hl
       obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
       rcases hall k hk with rfl | ⟨rfl, _⟩ | ⟨t', rfl, ht'⟩
       · exact (NonStruct.not_bytesLike (ns_sound s ch0 hck) hb0).elim
       · exact (ZipNode.not_bytesLike (zip_sound s ch0 hck) hb0).elim
       · have := bytesLike_ty s ch0 hck hb0
-        rcases ht' with rfl | ⟨_, rfl, _⟩
+        simp only [Ty.le, Bool.or_eq_true, decide_eq_true_eq] at ht'
+        rcases ht' with rfl | ht'
         · exact this
-        · rfl
+        · cases t <;> cases t' <;> simp_all [Ty.sub, Ty.isBytesLike]
 termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
 
@@ -541,16 +776,11 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     rcases node_none hn with ⟨_, hk, _⟩ | ⟨hk, _⟩ | ⟨hop, hl⟩
     · cases hk
     · cases hk
-    obtain ⟨⟨i, hi, ⟨t0, hk0⟩, hpre⟩, hall⟩ := logicalKind_ty hl
+    obtain ⟨⟨i, hi, ⟨t0, hk0⟩, hpre⟩, hall, _⟩ := logicalKind_ty hl
     have hi' : i < c.children.length := by omega
     have hstruct : ∀ ch, ch ∈ c.children → ∀ t', classify s ch = some (.ty t') →
-        (t' = t ∨ (s = true ∧ t = .dynamic ∧ t'.isBytesLike = true)) → DescS s ch u := by
-      intro ch hm t' hck ht'
-      have hu' : HasT s u t' := by
-        rcases ht' with rfl | ⟨hs, rfl, hb⟩
-        · exact hu
-        · exact hasT_of_bytesLike hs (isBytesLike_of_hasT hu rfl) hb
-      exact (ih ch hm hck hu').1
+        Ty.le s t t' = true → DescS s ch u :=
+      fun ch hm t' hck ht' => (ih ch hm hck (hasT_le ht' hu)).1
     have hch : ∀ ch, ch ∈ c.children → DescSN s ch u := by
       intro ch hm
       obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
@@ -610,26 +840,45 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     obtain ⟨ts, hk, hne, hop, hts⟩ := node_tuple hn
     simp only [K.ty.injEq] at hk; subst hk
     have hks' := allTy_eq hts; subst hks'
-    obtain ⟨vs, rfl, hvs⟩ : ∃ vs, u = .tuple vs ∧ HasTAll s vs ts := by
+    simp only [List.length_map] at hlen
+    obtain ⟨vs, rfl, hvs⟩ : ∃ vs, u = .tuple vs ∧
+        (if (c.operator == .Matches) = true then
+          HasTPre s vs ts ∧ (ts.length < vs.length → Ty.allStatic ts = false)
+         else HasTAll s vs ts) := by
       cases u with
       | tuple vs =>
         simp only [HasT] at hu
-        obtain ⟨ts', h', hall⟩ := hu
+        obtain ⟨ts', o', h', hall⟩ := hu
         cases h'; exact ⟨vs, rfl, hall⟩
       | _ => simp [HasT] at hu
-    obtain ⟨hl2, hg2⟩ := hasTAll_get s hvs
-    simp only [List.length_map] at hlen
-    have hall : DescAll s c.children vs := descAll_of_get (by omega) fun i h1 h2 => by
-      have hc := hget i h1 (by simp; omega)
-      simp only [List.getElem_map] at hc
-      exact (ih _ (List.getElem_mem h1) hc (hg2 i h2 (by omega))).1
-    have hvne : vs ≠ [] := by
-      intro h; subst h
-      exact hne (List.eq_nil_of_length_eq_zero (by simp at hl2; omega))
-    have D : Desc s c (.tuple vs) := .tuple he hvne hall hop
+    have hpre : HasTPre s vs ts := by
+      split at hvs
+      · exact hvs.1
+      · exact hasTPre_of_all hvs
+    obtain ⟨hl2, hg2⟩ := hasTPre_get s hpre
+    have hk : c.children.length ≤ vs.length := by omega
+    have hall : DescAll s c.children (vs.take c.children.length) :=
+      descAll_of_get (by simp; omega) fun i h1 h2 => by
+        have hc := hget i h1 (by simp; omega)
+        simp only [List.getElem_map] at hc
+        simp only [List.getElem_take]
+        exact (ih _ (List.getElem_mem h1) hc (hg2 i (by simp at h2; omega) (by omega))).1
+    have hlong : c.children.length < vs.length →
+        isInlined c = false ∧ c.operator = .Matches := by
+      intro hlt
+      split at hvs
+      · rename_i hm
+        refine ⟨?_, by simpa using hm⟩
+        have hst := hvs.2 (by omega)
+        have hm' := (DescAll.meta hall).1
+        rw [isInlined_eq, he]
+        simp only [reduceCtorEq, or_self, ite_false]
+        rw [hm', ← hlen, hasTAll_allStatic s (hasTPre_take hpre), hst]
+      · have := (hasTAll_get s hvs).1; omega
+    have D : Desc s c (.tuple vs) := .tuple he hne hk hall hlong hop
     exact ⟨.desc D, fun _ => D⟩
   case Array =>
-    obtain ⟨t0, hk, hop, hne, hallk⟩ := node_array hn
+    obtain ⟨t0, hk, hop, hne, hallk, _⟩ := node_array hn
     simp only [K.ty.injEq] at hk; subst hk
     obtain ⟨vs, rfl, hvs⟩ : ∃ vs, u = .array vs ∧ HasTEach s vs t0 := by
       cases u with
@@ -643,17 +892,14 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
       intro ch hm v hv
       obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
       obtain ⟨t', rfl, ht'⟩ := hallk k hk
-      have hv' : HasT s v t' := by
-        rcases ht' with rfl | ⟨hs, rfl, hb⟩
-        · exact hev v hv
-        · exact hasT_of_bytesLike hs (isBytesLike_of_hasT (hev v hv) rfl) hb
-      exact (ih ch hm hck hv').1
+      exact (ih ch hm hck (hasT_le ht' (hev v hv))).1
     obtain ⟨c0, cs, hcs⟩ : ∃ c0 cs, c.children = c0 :: cs := by
       cases hc : c.children with
       | nil => rw [hc] at hlen; exact absurd (List.eq_nil_of_length_eq_zero hlen) hne
       | cons c0 cs => exact ⟨c0, cs, rfl⟩
     have hm0 : c0 ∈ c.children := by rw [hcs]; simp
-    have hop' : isNavOp c.operator = false ∨ c.operator = .Matches ∨ c.operator = .ArraySome ∨
+    have hop' : (isNavOp c.operator = false ∧ noNavAll c.children = true) ∨
+        c.operator = .Matches ∨ c.operator = .ArraySome ∨
         c.operator = .ArrayEvery ∨ c.operator = .ArrayTailMatches := by
       rcases hop with h | h
       · exact .inl h
@@ -672,21 +918,32 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     simp only [K.ty.injEq] at hk; subst hk
     have hks' := allTy_eq hts; subst hks'
     simp only [List.length_map] at hlen
-    have strict : Strict s u (.call c.leadingBytes ts) → Desc s c u := by
+    have strict : Strict s u (.call c.leadingBytes ts (c.operator == .Matches)) → Desc s c u := by
       intro hS
       simp only [Strict] at hS
       obtain ⟨pre, args, rfl, hpre, hargs⟩ := hS
-      obtain ⟨hl2, hg2⟩ := hasTAll_get s hargs
-      have hall : DescAll s c.children args := descAll_of_get (by omega) fun i h1 h2 => by
-        have hc := hget i h1 (by simp; omega)
-        simp only [List.getElem_map] at hc
-        exact (ih _ (List.getElem_mem h1) hc (hg2 i h2 (by omega))).1
-      have hane : args ≠ [] := by
-        intro h; subst h
-        exact hne (List.eq_nil_of_length_eq_zero (by simp at hl2; omega))
-      exact .call he hpre.symm hane hall hop
+      have hp : HasTPre s args ts := by
+        split at hargs
+        · exact hargs
+        · exact hasTPre_of_all hargs
+      obtain ⟨hl2, hg2⟩ := hasTPre_get s hp
+      have hall : DescAll s c.children (args.take c.children.length) :=
+        descAll_of_get (by simp; omega) fun i h1 h2 => by
+          have hc := hget i h1 (by simp; omega)
+          simp only [List.getElem_map] at hc
+          simp only [List.getElem_take]
+          exact (ih _ (List.getElem_mem h1) hc (hg2 i (by simp at h2; omega) (by omega))).1
+      have hop' : c.operator = .Matches ∨
+          (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true) := by
+        rcases hop with h | ⟨h, hn'⟩
+        · exact .inl h
+        · refine .inr ⟨h, ?_, hn'⟩
+          rw [h] at hargs
+          simp only [beq_iff_eq, reduceCtorEq, decide_false, Bool.false_eq_true, ite_false] at hargs
+          have := (hasTAll_get s hargs).1; omega
+      exact .call he hpre.symm hne (by omega) hall hop'
     refine ⟨?_, strict⟩
-    by_cases hS : Strict s u (.call c.leadingBytes ts)
+    by_cases hS : Strict s u (.call c.leadingBytes ts (c.operator == .Matches))
     · exact .desc (strict hS)
     · have hs : s = true := by
         cases u with
@@ -697,7 +954,7 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
           · exact hs
         | call pre args =>
           simp only [HasT] at hu
-          rcases hu with h | ⟨lb, ts', h, h2 | hs⟩
+          rcases hu with h | ⟨lb, ts', o', h, h2 | hs⟩
           · cases h
           · cases h; exact absurd ⟨pre, args, rfl, h2.1, h2.2⟩ hS
           · exact hs
@@ -708,6 +965,51 @@ termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
 
 /-! ## Described values are typed -/
+
+theorem NonStruct.classify {s : Bool} : ∀ {c : Condition} {k : K}, NonStruct c →
+    classify s c = some k → k = .ns
+  | c, k, .leaf he hch hnav, h => by
+    rw [classify_eq, hch] at h
+    simp only [classifyAll, Option.bind_some] at h
+    rcases he with he | he <;> rw [he] at h
+    · rcases node_none h with ⟨hop, _, _, _, hks⟩ | ⟨hk, _⟩ | ⟨hop, hl⟩
+      · cases hks
+      · exact hk
+      · unfold logicalKind at hl; simp at hl
+    · exact (node_ether h).1
+  | c, k, .logical he hop hall, h => by
+    rw [classify_eq, he] at h
+    obtain ⟨ks, hks, hn⟩ := Option.bind_eq_some_iff.mp h
+    have hns : ∀ k', k' ∈ ks → k' = .ns := by
+      intro k' hk'
+      obtain ⟨hl, hg⟩ := classifyAll_get s hks
+      obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hk'
+      exact NonStruct.classify (hall _ (List.getElem_mem (by omega))) (hg i (by omega) hi)
+    rcases node_none hn with ⟨hz, _⟩ | ⟨hk, _⟩ | ⟨_, hl⟩
+    · rcases hop with h | h <;> rw [h] at hz <;> simp at hz
+    · exact hk
+    · unfold logicalKind at hl
+      split at hl
+      · cases hl
+      · split at hl
+        · simpa using hl.symm
+        · rename_i hnot
+          exact absurd (List.all_eq_true.mpr fun k' hk' => by simp [hns k' hk']) hnot
+termination_by c => sizeOf c
+decreasing_by
+  all_goals first
+    | (simp_wf; have := sizeOf_child (List.getElem_mem (by omega)); omega)
+    | (exact sizeOf_child (List.getElem_mem _))
+
+theorem ZipNode.classify {s : Bool} {c : Condition} {k : K} (hz : ZipNode c)
+    (h : classify s c = some k) : k = .zip := by
+  obtain ⟨t, he, hop, hch⟩ := hz
+  rw [classify_eq, he] at h
+  obtain ⟨ks, hks, hn⟩ := Option.bind_eq_some_iff.mp h
+  rcases node_none hn with ⟨_, hk, _⟩ | ⟨_, hcs, _⟩ | ⟨hop', _⟩
+  · exact hk
+  · rw [hch] at hcs; cases hcs
+  · rcases hop with h | h <;> rcases hop' with h' | h' <;> rw [h] at h' <;> cases h'
 
 /-- The converse: a value a checked node describes has the node's type. Used
     for Zips, whose fields must describe whatever the Pluck node's elements
@@ -730,16 +1032,29 @@ theorem hasT_of_descS (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     rcases node_none hn with ⟨_, hk, _⟩ | ⟨hk, _⟩ | ⟨_, hl⟩
     · cases hk
     · cases hk
-    obtain ⟨_, hall⟩ := logicalKind_ty hl
+    obtain ⟨_, hall, hmem⟩ := logicalKind_ty hl
     obtain ⟨_, ch0, hm, h0⟩ := Desc.none_inv hD (.inl he)
-    obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
-    rcases hall k hk with rfl | ⟨rfl, _⟩ | ⟨t', rfl, ht'⟩
-    · exact (NonStruct.not_descS (ns_sound s ch0 hck) h0).elim
-    · exact (ZipNode.not_descS (zip_sound s ch0 hck) h0).elim
-    · have := ih ch0 hm hck h0
-      rcases ht' with rfl | ⟨_, rfl, hb⟩
-      · exact this
-      · exact hasT_dynamic (isBytesLike_of_hasT this hb)
+    obtain ⟨hop, _, _, _, hchs, _⟩ : (c.operator = .And ∨ c.operator = .Or) ∧ ∃ ch0, ch0 ∈ c.children ∧
+        DescS s ch0 u ∧ (∀ ch, ch ∈ c.children → DescSN s ch u) ∧ True := by
+      cases hD with
+      | logical ch0 _ hop hm h0 hall _ => exact ⟨hop, ch0, hm, h0, hall, trivial⟩
+      | _ => simp_all
+    rcases hmem with hmt | ⟨hs, rfl, hbl⟩
+    · -- the branch of the most specific type describes the value too
+      obtain ⟨i, hi, hki⟩ := List.getElem_of_mem hmt
+      have hci := hget i (by omega) hi
+      rw [hki] at hci
+      have hmi : c.children[i]'(by omega) ∈ c.children := List.getElem_mem _
+      cases hchs _ hmi with
+      | ds h => exact ih _ hmi hci h
+      | ns h => cases NonStruct.classify h hci
+      | zip h _ => cases ZipNode.classify h hci
+    · obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
+      rcases hall k hk with rfl | ⟨rfl, _⟩ | ⟨t', rfl, ht'⟩
+      · exact (NonStruct.not_descS (ns_sound s ch0 hck) h0).elim
+      · exact (ZipNode.not_descS (zip_sound s ch0 hck) h0).elim
+      · have := ih ch0 hm hck h0
+        exact hasT_dynamic (isBytesLike_of_hasT this (by simpa [K.bytesLikeOk] using hbl _ hk))
   case Static =>
     have := (node_word (.inl rfl) hn).1
     simp only [K.ty.injEq] at this; subst this
@@ -754,38 +1069,76 @@ theorem hasT_of_descS (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     simp only [K.ty.injEq] at hk; subst hk
     have hks' := allTy_eq hts; subst hks'
     simp only [List.length_map] at hlen
-    obtain ⟨vs, rfl, hall⟩ := Desc.tuple_inv hD he
+    obtain ⟨vs, rfl, hkv, hall, hlong⟩ := Desc.tuple_inv hD he
     have hl := DescAll.length_eq hall
+    simp only [List.length_take] at hl
+    have htl : (vs.take c.children.length).length = c.children.length := by simp; omega
+    have htake : HasTAll s (vs.take c.children.length) ts :=
+      hasTAll_of_get s (by omega) fun i h1 h2 => by
+        have hi : i < c.children.length := by omega
+        have hc := hget i hi (by simp; omega)
+        simp only [List.getElem_map] at hc
+        exact ih _ (List.getElem_mem _) hc (DescAll.get hall i hi)
+    have hpre : HasTPre s vs ts := hasTPre_of_get s (by omega) fun i h1 h2 => by
+      have := (hasTAll_get s htake).2 i (by simp; omega) h2
+      simpa [List.getElem_take] using this
     simp only [HasT]
-    refine ⟨ts, rfl, hasTAll_of_get s (by omega) fun i h1 h2 => ?_⟩
-    have hc := hget i (by omega) (by simp; omega)
-    simp only [List.getElem_map] at hc
-    exact ih _ (List.getElem_mem _) hc (DescAll.get hall i (by omega))
+    refine ⟨ts, _, rfl, ?_⟩
+    split
+    · refine ⟨hpre, fun hlt => ?_⟩
+      have hi := (hlong (by omega)).1
+      have hm' := (DescAll.meta hall).1
+      rw [isInlined_eq, he] at hi
+      simp only [reduceCtorEq, or_self, ite_false] at hi
+      rw [← hasTAll_allStatic s htake, ← hm', hi]
+    · rename_i hnm
+      by_cases hlt : c.children.length < vs.length
+      · exact absurd (by simpa using (hlong hlt).2) hnm
+      · exact hasTAll_of_pre hpre (by omega)
   case Array =>
-    obtain ⟨t0, hk, _, _, hallk⟩ := node_array hn
+    obtain ⟨t0, hk, _, _, hallk, hfirst⟩ := node_array hn
     simp only [K.ty.injEq] at hk; subst hk
     obtain ⟨vs, c0, cs, rfl, hcs, h0⟩ := Desc.array_inv hD he
     have hm0 : c0 ∈ c.children := by rw [hcs]; simp
     obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm0
-    obtain ⟨t', rfl, ht'⟩ := hallk k hk
     simp only [HasT]
     refine ⟨t0, rfl, (hasTEach_iff s t0).mpr fun v hv => ?_⟩
-    have := ih c0 hm0 hck (h0 v hv)
-    rcases ht' with rfl | ⟨_, rfl, hb⟩
-    · exact this
-    · exact hasT_dynamic (isBytesLike_of_hasT this hb)
+    rcases hfirst with ⟨rest, rfl⟩ | ⟨hs, rfl, hbl⟩
+    · -- the template has the array's element type
+      have hc0 := hget 0 (by rw [hcs]; simp) (by simp)
+      simp only [List.getElem_cons_zero] at hc0
+      have : c.children[0]'(by rw [hcs]; simp) = c0 := by simp [hcs]
+      rw [this] at hc0
+      exact ih c0 hm0 hc0 (h0 v hv)
+    · obtain ⟨t', rfl, _⟩ := hallk k hk
+      have := ih c0 hm0 hck (h0 v hv)
+      exact hasT_dynamic (isBytesLike_of_hasT this (by simpa [K.bytesLikeTy] using hbl _ hk))
   case AbiEncoded =>
     obtain ⟨ts, hk, _, _, hts⟩ := node_abi hn
     simp only [K.ty.injEq] at hk; subst hk
     have hks' := allTy_eq hts; subst hks'
     simp only [List.length_map] at hlen
-    obtain ⟨pre, args, rfl, hlb, hall⟩ := Desc.call_inv hD he
+    obtain ⟨pre, args, rfl, hlb, hka, hall, hop⟩ := Desc.call_inv hD he
     have hl := DescAll.length_eq hall
+    simp only [List.length_take] at hl
+    have htl : (args.take c.children.length).length = c.children.length := by simp; omega
+    have htake : HasTAll s (args.take c.children.length) ts :=
+      hasTAll_of_get s (by omega) fun i h1 h2 => by
+        have hi : i < c.children.length := by omega
+        have hc := hget i hi (by simp; omega)
+        simp only [List.getElem_map] at hc
+        exact ih _ (List.getElem_mem _) hc (DescAll.get hall i hi)
+    have hpre : HasTPre s args ts := hasTPre_of_get s (by omega) fun i h1 h2 => by
+      have := (hasTAll_get s htake).2 i (by simp; omega) h2
+      simpa [List.getElem_take] using this
     simp only [HasT]
-    refine .inr ⟨c.leadingBytes, ts, rfl, .inl ⟨hlb.symm, hasTAll_of_get s (by omega) fun i h1 h2 => ?_⟩⟩
-    have hc := hget i (by omega) (by simp; omega)
-    simp only [List.getElem_map] at hc
-    exact ih _ (List.getElem_mem _) hc (DescAll.get hall i (by omega))
+    refine .inr ⟨c.leadingBytes, ts, _, rfl, .inl ⟨hlb.symm, ?_⟩⟩
+    split
+    · exact hpre
+    · rename_i hnm
+      rcases hop with h | ⟨_, hel, _⟩
+      · exact absurd (by simp [h]) hnm
+      · exact hasTAll_of_pre hpre (by omega)
   case EtherValue => cases (node_ether hn).1
 termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
@@ -793,12 +1146,7 @@ decreasing_by exact sizeOf_child hm
 /-! ## Zips -/
 
 theorem hasT_compat {s : Bool} {t1 t2 : Ty} {v : Val} (hc : tyCompat s t1 t2 = true)
-    (h : HasT s v t1) : HasT s v t2 := by
-  simp only [tyCompat, Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq] at hc
-  rcases hc with (rfl | ⟨rfl, hb⟩) | ⟨⟨hs, hb1⟩, hb2⟩
-  · exact h
-  · exact hasT_dynamic (isBytesLike_of_hasT h hb)
-  · exact hasT_of_bytesLike hs (isBytesLike_of_hasT h hb1) hb2
+    (h : HasT s v t1) : HasT s v t2 := hasT_le hc h
 
 theorem zipOK_of (s : Bool) (root : Condition) (hz : zipCheck s root = true) : ZipOK s root := by
   intro z pk f hzs hpks hzop hf hpk hcv
@@ -881,24 +1229,33 @@ theorem checkCondition_sound {s : Bool} {root : Condition} {t : Ty}
     · cases h
   · cases h
 
-/-- The same for a root of type `call lb ts` (an `AbiEncoded` root, or an
-    `And`/`Or` of such with one type): every calldata with `lb` leading bytes
-    and arguments of types `ts`. -/
-theorem checkCondition_call {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty}
-    (h : checkCondition s root = some (.call lb ts)) {pre : Bytes} {args : List Val}
-    (hpre : pre.length = lb) (hargs : HasTAll s args ts) :
+/-- The same for a root of type `call lb ts o` (an `AbiEncoded` root, or an
+    `And`/`Or` of such): every calldata with `lb` leading bytes and arguments
+    of types `ts`, followed by more arguments if the type is open (a
+    `Matches` root, whose trailing `Pass` children were pruned). -/
+theorem checkCondition_call {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o : Bool}
+    (h : checkCondition s root = some (.call lb ts o)) {pre : Bytes} {args : List Val}
+    (hpre : pre.length = lb) (hargs : if o then HasTPre s args ts else HasTAll s args ts) :
     RootOK root ∧ ZipOK s root ∧ Desc s root (.call pre args) := by
   obtain ⟨hr, hz, hd⟩ := checkCondition_sound h
-  exact ⟨hr, hz, hd pre args (.inr ⟨lb, ts, rfl, .inl ⟨hpre, hargs⟩⟩) ⟨pre, args, rfl, hpre, hargs⟩⟩
+  exact ⟨hr, hz, hd pre args (.inr ⟨lb, ts, o, rfl, .inl ⟨hpre, hargs⟩⟩) ⟨pre, args, rfl, hpre, hargs⟩⟩
+
+/-- With exactly the arguments typed, for any root of type `call lb ts o`. -/
+theorem checkCondition_call_all {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o : Bool}
+    (h : checkCondition s root = some (.call lb ts o)) {pre : Bytes} {args : List Val}
+    (hpre : pre.length = lb) (hargs : HasTAll s args ts) :
+    RootOK root ∧ ZipOK s root ∧ Desc s root (.call pre args) :=
+  checkCondition_call h hpre (by cases o <;> simp [hargs, hasTPre_of_all hargs])
 
 /-- **End to end**, for the comparison operands (`decoder_input`): on a tree
     the check accepts, for every well-typed calldata, every visited node that
     reads `__input` reads the spec encoding of its value (or a window of it,
     below a `Slice`, or the ether value), unless it sits in an interpretation
     that does not hold (only with `s = true`). -/
-theorem checked_input {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty}
-    (h : checkCondition s root = some (.call lb ts)) {pre : Bytes} {args : List Val}
-    (hpre : pre.length = lb) (hargs : HasTAll s args ts) (suffix : Bytes)
+theorem checked_input {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o : Bool}
+    (h : checkCondition s root = some (.call lb ts o)) {pre : Bytes} {args : List Val}
+    (hpre : pre.length = lb) (hargs : if o then HasTPre s args ts else HasTAll s args ts)
+    (suffix : Bytes)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
     (hv : Eval (calldata pre args suffix) (annotate root) p d l)

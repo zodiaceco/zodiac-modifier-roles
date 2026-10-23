@@ -140,30 +140,53 @@ theorem NsOk.meta : ∀ {c : Cond}, NsOk c → isInl c = true ∧ rawSz avatar c
 
 /-! ## What `Fits` says about metadata -/
 
+theorem Fits.sane {c : Cond} {d m : Condition} (h : Fits avatar c d m) :
+    isStruct c = true → Sane avatar c := by
+  induction h with
+  | pass _ _ _ _ _ hsn _ => exact fun _ => hsn
+  | ns hns => intro hs; rw [hns] at hs; exact absurd hs (by simp)
+  | logical _ _ _ _ _ _ hsn => exact fun _ => hsn
+  | tup _ _ _ _ _ _ _ _ _ hsn => exact fun _ => hsn
+  | arr _ _ _ _ _ _ _ _ hsn => exact fun _ => hsn
+  | slice _ _ _ _ _ _ _ hsn _ => exact fun _ => hsn
+  | leaf _ _ _ _ _ _ _ hsn _ _ _ _ => exact fun _ => hsn
+  | varAbi _ _ _ _ _ _ _ _ _ _ ih => exact ih
+  | varDyn _ _ _ _ ih => exact ih
+
 theorem Fits.sane_lay {c : Cond} {m : Condition} (h : Fits avatar c (D avatar c) m)
     (hs : isStruct c = true) : Sane avatar c ∧ LayEq (D avatar c) m := by
+  refine ⟨h.sane avatar hs, ?_⟩
   cases h with
-  | pass _ _ _ hl _ hsn _ => exact ⟨hsn, hl⟩
+  | pass _ _ _ hl _ _ _ => exact hl
   | ns hns => rw [hns] at hs; exact absurd hs (by simp)
-  | logical _ _ _ _ hl _ hsn => exact ⟨hsn, hl⟩
-  | tup _ _ _ _ hl _ _ _ _ hsn => exact ⟨hsn, hl⟩
-  | arr _ _ _ _ hl _ _ _ hsn => exact ⟨hsn, hl⟩
-  | slice _ _ hn hl _ _ _ hsn _ => exact ⟨hsn, hl⟩
-  | leaf _ _ _ ht _ _ _ hsn _ _ _ _ => exact ⟨hsn, ht.layEq⟩
+  | logical _ _ _ _ hl _ _ => exact hl
+  | tup _ _ _ _ hl _ _ _ _ _ => exact hl
+  | arr _ _ _ _ hl _ _ _ _ => exact hl
+  | slice _ _ _ hl _ _ _ _ _ => exact hl
+  | leaf _ _ _ ht _ _ _ _ _ _ _ _ => exact ht.layEq
+  | varAbi _ _ _ _ hl _ _ _ _ _ => exact hl
+  | varDyn _ _ hl _ => exact hl
 
-theorem Fits.nsOk {c : Cond} {d m : Condition} (h : Fits avatar c d m) (hs : isStruct c = false) :
-    NsOk c := by
-  cases h with
-  | ns _ hns _ => exact hns
-  | pass _ _ h _ _ _ _ => rw [h] at hs; exact absurd hs (by simp)
-  | logical _ _ h _ _ _ _ => rw [h] at hs; exact absurd hs (by simp)
+theorem Fits.nsOk {c : Cond} {d m : Condition} (h : Fits avatar c d m) :
+    isStruct c = false → NsOk c := by
+  induction h with
+  | ns _ hns _ => exact fun _ => hns
+  | pass _ _ h _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
+  | logical _ _ h _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
   | tup h5 he _ _ _ _ _ _ _ _ =>
-    rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
+    intro hs; rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
   | arr hop he _ _ _ _ _ _ _ =>
-    rw [isStruct_eq] at hs; rcases hop with h | h | h | h <;> simp_all
+    intro hs; rw [isStruct_eq] at hs; rcases hop with h | h | h | h <;> simp_all
   | slice h13 he _ _ _ _ _ _ =>
-    rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
-  | leaf _ h _ _ _ _ _ _ _ _ _ _ => rw [h] at hs; exact absurd hs (by simp)
+    intro hs; rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
+  | leaf _ h _ _ _ _ _ _ _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
+  | varAbi h5 he _ _ _ _ _ _ _ _ _ => intro hs; rw [isStruct_eq] at hs; simp_all
+  | varDyn _ he _ _ ih =>
+    intro hs
+    have hn := ih hs
+    cases hn with
+    | leaf h _ _ => omega
+    | logical _ h _ => omega
 
 /-- Layout of a node fitting `m`, in terms of the tree. -/
 theorem Fits.raw {c : Cond} {m : Condition} (h : Fits avatar c (D avatar c) m)

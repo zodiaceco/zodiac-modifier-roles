@@ -147,24 +147,53 @@ theorem headLen_ge_count (vs : List Val) (h : ∀ v, v ∈ vs → 32 ≤ (enc v)
 
 /-! ## `AbiLocation.children` for each container -/
 
+theorem encParts_take : ∀ (vs : List Val) (k off : Nat),
+    ∃ r1 r2, (encParts vs off).1 = (encParts (vs.take k) off).1 ++ r1 ∧
+      (encParts vs off).2 = (encParts (vs.take k) off).2 ++ r2
+  | [], k, off => ⟨[], [], by cases k <;> simp [encParts]⟩
+  | v :: vs, 0, off => ⟨(encParts (v :: vs) off).1, (encParts (v :: vs) off).2,
+      by simp [encParts], by simp [encParts]⟩
+  | v :: vs, k + 1, off => by
+    by_cases hs : v.isStatic
+    · obtain ⟨r1, r2, h1, h2⟩ := encParts_take vs k off
+      exact ⟨r1, r2, by simp [encParts, hs, h1], by simp [encParts, hs, h2]⟩
+    · obtain ⟨r1, r2, h1, h2⟩ := encParts_take vs k (off + (enc v).length)
+      exact ⟨r1, r2, by simp [encParts, hs, h1], by simp [encParts, hs, h2]⟩
+
+/-- The children of a tuple (or calldata) node that describe the first
+    fields of `vs`: the first locations of the spec encoding. -/
 theorem children_tuple {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {c : Condition}
     {vs : List Val} {loc : Nat}
-    (hne : (annotate c).encoding ≠ .Array) (hall : DescAll s c.children vs)
+    (hne : (annotate c).encoding ≠ .Array) (hk : c.children.length ≤ vs.length)
+    (hall : DescAll s c.children (vs.take c.children.length))
     (hat : At data loc (encTuple vs)) :
-    ∃ locs, children data loc (annotate c) = some locs ∧ locs.length = vs.length ∧
+    ∃ locs, children data loc (annotate c) = some locs ∧ locs.length = c.children.length ∧
       ∀ k (hk : k < locs.length) (hk' : k < vs.length),
         At data locs[k] (enc vs[k]) ∧ (vs[k].isStatic = false → 0 < locs[k]) := by
   unfold children
   rw [ite_eq_right hne, annotate_children]
-  have hl : (c.children.map annotate).length = vs.length := by
-    simp [DescAll.length_eq hall]
+  have hl : (c.children.map annotate).length = (vs.take c.children.length).length := by
+    rw [List.length_map]; exact DescAll.length_eq hall
   rw [hl]
   obtain ⟨h1, h2, h3⟩ := At_encTuple hat
-  apply childrenLoop_eq hlen (s := s) loc _ vs 0 0 (headLen vs) _ h1 h2 h3
-  intro k hk
-  have hkc : k < c.children.length := by rw [DescAll.length_eq hall]; exact hk
-  refine ⟨c.children[k], ?_, DescAll.get hall k hkc⟩
-  simp [hkc]
+  obtain ⟨r1, r2, e1, e2⟩ := encParts_take vs c.children.length (headLen vs)
+  rw [e1] at h1; rw [e2] at h2
+  have h1' := (At_append.mp h1).1
+  have h2' := (At_append.mp h2).1
+  have h3' : 0 + (encParts (vs.take c.children.length) (headLen vs)).1.length ≤ headLen vs := by
+    rw [encParts_fst_length]; have := headLen_take_le vs c.children.length; omega
+  obtain ⟨locs, hloop, hlen', hpl⟩ := childrenLoop_eq hlen (s := s) loc
+    (fun i => (c.children.map annotate).getD i default) (vs.take c.children.length)
+    0 0 (headLen vs) (by
+      intro k hk
+      have hkc : k < c.children.length := by rw [DescAll.length_eq hall]; exact hk
+      exact ⟨c.children[k], by simp [hkc], DescAll.get hall k hkc⟩) h1' h2' h3'
+  refine ⟨locs, hloop, by rw [hlen', ← DescAll.length_eq hall], ?_⟩
+  intro k hk hk'
+  have hkt : k < (vs.take c.children.length).length := by omega
+  have := hpl k hk hkt
+  rw [List.getElem_take] at this
+  exact this
 
 theorem children_array {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool}
     {c c0 : Condition} {cs : List Condition} {vs : List Val} {loc : Nat}
@@ -420,20 +449,43 @@ theorem size_static {data : Bytes} {l : Nat} {c : Condition} {w : Bytes}
   rw [ite_eq_right (by omega)]
   simp
 
+theorem noNav_eq (c : Condition) : noNav c = (!isNavOp c.operator && noNavAll c.children) := by
+  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩; rfl
+
+theorem noNavAll_get : ∀ {cs : List Condition}, noNavAll cs = true →
+    ∀ k (hk : k < cs.length), noNav cs[k] = true
+  | c :: cs, h, 0, _ => by simp only [noNavAll, Bool.and_eq_true] at h; exact h.1
+  | c :: cs, h, k + 1, hk => by
+    simp only [noNavAll, Bool.and_eq_true] at h
+    exact noNavAll_get h.2 k (by simp at hk; omega)
+
+theorem noNav_parts {c : Condition} (h : noNav c = true) :
+    isNavOp c.operator = false ∧ noNavAll c.children = true := by
+  rw [noNav_eq] at h; simpa using h
+
 mutual
-  /-- `AbiLocation.size` returns the length of the spec encoding. -/
+  /-- `AbiLocation.size` returns the length of the spec encoding, for a node
+      whose subtree does not navigate (what `__input` reads the size of). -/
   theorem Desc.size_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, Desc s c u → At data l (enc u) →
+      ∀ {c u l}, Desc s c u → noNav c = true → At data l (enc u) →
       size data l (annotate c) = (enc u).length
-    | _, _, _, .word he _ _ hw, hat => by
+    | _, _, _, .word he _ _ hw, _, hat => by
       simp only [enc] at hat ⊢; rw [hw]; exact size_static he hw hat
-    | _, _, _, .sliceWord he _ _ _ _ _ hw, hat => by
+    | _, _, _, .sliceWord he _ _ _ _ _ hw, _, hat => by
       simp only [enc] at hat ⊢; rw [hw]; exact size_static he hw hat
-    | _, _, _, .bytes he _ _ hu, hat => size_dynamicNode hlen (.inl he) hu hat
-    | _, _, _, .sliceBytes he _ _ _ _ _ hu, hat => size_dynamicNode hlen (.inl he) hu hat
-    | _, _, _, .call he _ _ _ _, hat => size_dynamicNode hlen (.inr he) trivial hat
-    | c, _, l, .tuple (vs := vs) he hne hall hop, hat => by
-      have hge := (Desc.tuple he hne hall hop (s := s)).enc_ge
+    | _, _, _, .bytes he _ _ hu, _, hat => size_dynamicNode hlen (.inl he) hu hat
+    | _, _, _, .sliceBytes he _ _ _ _ _ hu, _, hat => size_dynamicNode hlen (.inl he) hu hat
+    | _, _, _, .call he _ _ _ _ _, _, hat => size_dynamicNode hlen (.inr he) trivial hat
+    | c, _, l, .tuple (vs := vs) he hne hk hall0 hpre hop, hnn, hat => by
+      have hp := noNav_parts hnn
+      have hkeq : c.children.length = vs.length := by
+        by_cases hlt : c.children.length < vs.length
+        · have := (hpre hlt).2
+          rw [this] at hp; simp [isNavOp] at hp
+        · omega
+      have htake : vs.take c.children.length = vs := List.take_of_length_le (by omega)
+      have hall : DescAll s c.children vs := htake ▸ hall0
+      have hge := (Desc.tuple he hne hk hall0 hpre hop (s := s)).enc_ge
       have hb := hat.bound
       rw [enc_tuple] at hat hb hge ⊢
       rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children]
@@ -449,8 +501,12 @@ mutual
         refine ⟨c.children[k], by simp, DescAll.get hall k hkc, ?_⟩
         intro l' hl'
         simp only [List.getElem_map]
-        exact DescAll.sizes hlen hall k hkc hkv l' hl'
-    | c, _, l, .array (vs := vs) c0 cs he hch h0 _ _ _, hat => by
+        exact DescAll.sizes hlen hall hp.2 k hkc hkv l' hl'
+    | c, _, l, .array (vs := vs) c0 cs he hch h0 _ _ _, hnn, hat => by
+      have hp := noNav_parts hnn
+      have hn0 : noNav c0 = true := by
+        have := noNavAll_get hp.2 0 (by rw [hch]; simp)
+        simpa [hch] using this
       have hb := hat.bound
       rw [enc_array] at hat hb ⊢
       obtain ⟨hw, ht⟩ := At_append.mp hat
@@ -469,40 +525,29 @@ mutual
       simp only [length_word] at ht
       obtain ⟨h1, h2, h3⟩ := At_encTuple ht
       rw [sizeArrayLoop_eq hlen (l + 32) (annotate c0) rfl vs 0 (headLen vs) h0
-        (fun l' v hv hat' => DescS.size_eq hlen (h0 v hv) hat') h1 h2 h3]
+        (fun l' v hv hat' => DescS.size_eq hlen (h0 v hv) hn0 hat') h1 h2 h3]
       simp [encTuple]
-    | c, u, l, .logical ch0 he _ _ h0 hall ⟨pre, post, hcs, hnz⟩, hat => by
-      have hge := h0.enc_ge
-      have hb := hat.bound
-      rw [DecoderFaithfulness.size_eq, annotate_encoding, he, annotate_children, hcs]
-      rw [ite_eq_right (by omega)]
-      simp only [reduceCtorEq, ite_false, ite_true, List.map_append, List.map_cons]
-      apply sizeNone_prefix data l _ _ _ ⟨by omega, by omega⟩ (DescS.size_eq hlen h0 hat)
-      intro ch hm
-      obtain ⟨ch', hm', rfl⟩ := List.mem_map.mp hm
-      exact DescSN.size_cases hlen (hall ch' (by rw [hcs]; simp [hm'])) (hnz ch' hm') hat
+    | _, _, _, .logical _ _ hop _ _ _ _, hnn, _ => by
+      have hp := noNav_parts hnn
+      rcases hop with h | h <;> (rw [h] at hp; simp [isNavOp] at hp)
 
   theorem DescS.size_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, DescS s c u → At data l (enc u) →
+      ∀ {c u l}, DescS s c u → noNav c = true → At data l (enc u) →
       size data l (annotate c) = (enc u).length
-    | _, _, _, .desc h, hat => Desc.size_eq hlen h hat
-    | _, _, _, .stray _ hb hu, hat => BytesLike.size_eq hlen hb hu hat
-
-  theorem DescSN.size_cases {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, DescSN s c u → ¬ ZipNode c → At data l (enc u) →
-      size data l (annotate c) = (enc u).length ∨ data.length < size data l (annotate c)
-    | _, _, _, .ds h, _, hat => Or.inl (DescS.size_eq hlen h hat)
-    | _, _, l, .ns h, _, _ => Or.inr (NonStruct.size_gt l h)
-    | _, _, _, .zip hz _, hnz, _ => absurd hz hnz
+    | _, _, _, .desc h, hnn, hat => Desc.size_eq hlen h hnn hat
+    | _, _, _, .stray _ hb hu, _, hat => BytesLike.size_eq hlen hb hu hat
 
   theorem DescAll.sizes {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {cs vs}, DescAll s cs vs →
+      ∀ {cs vs}, DescAll s cs vs → noNavAll cs = true →
       ∀ k (hk : k < cs.length) (hkv : k < vs.length) l, At data l (enc vs[k]) →
       size data l (annotate cs[k]) = (enc vs[k]).length
-    | _, _, .cons h _, 0, _, _, _, hat => DescS.size_eq hlen h hat
-    | _, _, .cons _ hs, k + 1, hk, hkv, l, hat => by
+    | _, _, .cons h _, hnn, 0, _, _, _, hat => by
+      simp only [noNavAll, Bool.and_eq_true] at hnn
+      exact DescS.size_eq hlen h hnn.1 hat
+    | _, _, .cons _ hs, hnn, k + 1, hk, hkv, l, hat => by
+      simp only [noNavAll, Bool.and_eq_true] at hnn
       simp only [List.getElem_cons_succ] at hat ⊢
-      exact DescAll.sizes hlen hs k (by simp at hk; omega) (by simp at hkv; omega) l hat
+      exact DescAll.sizes hlen hs hnn.2 k (by simp at hk; omega) (by simp at hkv; omega) l hat
 end
 
 end DecoderFaithfulness

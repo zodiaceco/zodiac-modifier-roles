@@ -38,25 +38,12 @@ theorem normalize_plain : ∀ (k : Nat) (c : Cond), Plain c → normalize k c = 
       unfold prune; simp [h5]
     have hlog : isLogical c = false := by
       unfold isLogical; simp [h1, h2]
-    have hpad : pad c = c := by
-      unfold pad
-      rw [hlog]
-      by_cases he : c.enc = 4
-      · have hl := h4 he
-        have hok : padOk c.ch = false := by
-          unfold padOk
-          have hlen : (c.ch.filter isPaddeable).length ≤ 1 :=
-            Nat.le_trans (List.length_filter_le _ _) hl
-          have := eraseDups_short ((c.ch.filter isPaddeable).map createTT) (by simpa using hlen)
-          simp [this]
-        simp [hok]
-      · simp [he]
     have hflat : flatten c = c := by unfold flatten; simp [hlog]
     have hded : dedupe c = c := by unfold dedupe; simp [hlog]
     have hunw : unwrap c = c := by unfold unwrap; simp [hlog]
     have hpush : pushDownOr (normalize k) c = c := by
       unfold pushDownOr pushStep; simp [h2]
     have hsort : sortB c = c := by unfold sortB; simp [hlog]
-    rw [hprune, hpad, hflat, hded, hunw, hpush, hsort]
+    rw [hprune, hflat, hded, hunw, hpush, hsort]
 
 end Bridge

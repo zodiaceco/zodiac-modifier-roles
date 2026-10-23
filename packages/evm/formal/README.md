@@ -233,7 +233,9 @@ $`i`$ exactly where the spec put $`u_i`$.
     unpacker by [condition packing](#condition-packing).
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
 - Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$ and
-  $`\mathsf{ZipOK}_s`$ (not proven yet).
+  $`\mathsf{ZipOK}_s`$ (not proven yet, and false for navigating nodes below
+  an operator that reads its whole value, which $`\mathsf{Desc}_s`$ excludes;
+  see [Findings](#findings)).
 - When a Zip reads a Pluck slot, it holds a location where a Pluck with that
   index was evaluated (Integrity's slot-filled-before-use rule; the
   [condition check](#condition-check) proves its version against a model of
@@ -290,11 +292,16 @@ produce exactly this.
 `...Packed` setter: `Packable`, Integrity's per-operator rules, the Pluck slot
 assignment rule, and a type check. `checkCondition s c` classifies every node
 bottom-up: structural with an ABI type $`t`$ (`static`, `dynamic`, `tuple`,
-`array`, `call lb ts`), non-structural, or a Zip. Containers need structural
-children of the right types, a Zip may only be a child of `And`/`Or` (after
-the child that describes the value, and only over a dynamic value), and each
-Pluck a Zip reads is an array whose element type fits the field. The check
-returns the root's type, or that the root reads no calldata.
+`array`, `call lb ts`), non-structural, or a Zip. The type of a `Matches` on
+a tuple or calldata is *open*: it lists the first fields, the value may have
+more (as pruning leaves them). Containers need structural children of the
+right types; the children of one `And`/`Or`, and the elements of an array,
+must all contain the most specific of them (`Ty.sub`: equal, a prefix of one
+dynamic tuple or call, or bytes-like interpretations of one value). A Zip may
+only be a child of `And`/`Or` (after the child that describes the value, and
+only over a dynamic value), and each Pluck a Zip reads is an array whose
+element type fits the field. The check returns the root's type, or that the
+root reads no calldata.
 
 ### `checkStored_sound`: what an accepted array guarantees
 
@@ -311,7 +318,9 @@ For every avatar and memory contents:
 
 where $`c = \mathsf{tree}(\mathit{fs})`$ and $`v : t`$ is "the calldata
 $`v = \mathsf{call}(\mathit{pre}, \vec a)`$ has type $`t`$":
-$`|\mathit{pre}| = lb`$ and each argument has its type. Nested calldata has its
+$`|\mathit{pre}| = lb`$ and each argument has its type (for an open type,
+the first arguments; real calldata with the trailing parameters a pruned
+tree leaves out has the type too). Nested calldata has its
 `call` type only if it parses as such; with $`s = \mathsf{true}`$, any `bytes`
 value also counts. So every decoder theorem holds for every well-typed
 calldata. For $`\mathsf{noCalldata}`$, every node `evaluate` reaches reads only
@@ -338,9 +347,12 @@ end to end), assuming keccak256 has no collisions.
 Where Integrity and the check differ (details in the
 [README](ConditionCheck/README.md#findings-where-integrity-and-the-check-differ)):
 Integrity accepts trees `evaluate` misreads (backlog items 1, 2, 6), and
-rejects two shapes that are read correctly: `Slice` next to plain checks
-(item 4) and a Zip next to a `Tuple`/`Array` check (item 10). Unique Pluck
-indices are not needed for safe decoding.
+rejects shapes that are read correctly: `Slice` next to plain checks
+(item 4), a Zip next to a `Tuple`/`Array` check (item 10), checks of a
+prefix of one dynamic tuple or call (what pruning leaves; the SDK no longer
+pads them to one type tree), and two checks of one array whose elements are
+different interpretations. Unique Pluck indices are not needed for safe
+decoding.
 
 ### Trusted base
 
@@ -357,8 +369,11 @@ indices are not needed for safe decoding.
 [Details](Normalize/README.md) · Lean: `Normalize/Sound.lean`
 
 The SDK normalizes every condition before it is stored (`normalizeCondition`:
-prune trailing `Pass` nodes, pad branches to one type tree, flatten, dedupe and
-unwrap `And`/`Or`, push `Or` down into `Matches`/`And`, sort). `Normalize/Defs.lean`
+prune trailing `Pass` nodes, flatten, dedupe and unwrap `And`/`Or`, push `Or`
+down into `Matches`/`And`, sort). It used to pad branches to one type tree,
+as Integrity requires; the SDK stores trees with the `...Packed` setters, and
+its check accepts checks of a prefix of one tuple as siblings, so padding was
+removed (with it, bug 13 below and about 1,500 lines of proof). `Normalize/Defs.lean`
 transcribes it; `test/formal/sdk-normalize.spec.ts` checks the transcription
 against the TypeScript on random trees (40,000 over 8 seeds, no difference).
 
@@ -377,8 +392,7 @@ opaque. For every fuel $`n`$:
 ```
 
 The opaque operators are assumed to (`World.Ok`): see their children only
-through their meanings; ignore trailing `Pass` children of tuple and calldata
-nodes (they describe type); write slots only if `Pluck`; charge only if
+through their meanings; write slots only if `Pluck`; charge only if
 `Custom`, `WithinAllowance` or `CallWithinAllowance`; and choose between
 charges depending on earlier ones only if `ArraySome` or `ZipSome`. Charges
 commute, which `consume_comm` proves of `AllowanceConsumer.consume`.
@@ -430,13 +444,17 @@ in the SDK with regression tests (`effects.test.ts`,
 10. Pruning and padding inside a Zip's fields or a plucked array changed their
     types, which Integrity then rejects; those subtrees are now left as written.
 11. Pushing an `Or` down merged children of incompatible types (e.g. a `Slice`
-    next to a plain check), which Integrity rejects; merges now require
-    Integrity's type compatibility (`compatibleSiblings`, the contract's
-    `TypeTree` rule).
+    next to a plain check), which Integrity rejects; merges now require the
+    SDK check's rule for the children of one `Or` (`compatibleSiblings`,
+    `siblingsCompatible` in checkStored.ts).
 12. `createTypeTree` gave an `And`/`Or` the type of its first child, and none
     when that child reads no parameter, so the parent's type tree lost a field;
     it now takes the first structural child, as the contract's `TypeTree` does.
     The SDK also crashed on such nodes while padding.
+13. Padding extended the call branches of a variant `Or` inside a tuple with
+    the parameters of a call with another selector (from a sibling tuple):
+    the stored tree rejected calls the written one accepted (narrowing, on
+    the packed path only: Integrity rejects the tree). Removed with padding.
 
 By design, not changed: `Pass` places no constraint on a value, including
 whether it is well-formed. A trailing `Pass` still makes the contract locate
@@ -449,8 +467,7 @@ well-formedness (a `Pass:Static` field is not read, trailing data and
 non-canonical offsets are accepted), so this side effect is not a check to
 rely on. On top-level calldata a Solidity target rejects such calldata
 anyway. The theorems below hold on calldata that decodes as the parameter's
-full type (`Decodable`), which excludes exactly these cases; padding, the
-other way round, can make a branch fail on them.
+full type (`Decodable`), which excludes exactly these cases.
 
 ## Evaluation on calldata
 
@@ -471,11 +488,11 @@ world does not depend on the tree.
 
 ### `contractWorld_ok`: the normalization proof's assumptions hold
 
-The five assumptions `World.Ok` of `normalize_sound` are theorems for the
+The four assumptions `World.Ok` of `normalize_sound` are theorems for the
 contract world: charges commute (consumptions as a map from allowance key to
-balance and consumed), a trailing `Pass` does not change a tuple or calldata
-operator, only `Pluck` writes slots, only `Custom`, `WithinAllowance` and
-`CallWithinAllowance` charge, only `ArraySome`/`ZipSome` choose.
+balance and consumed), only `Pluck` writes slots, only `Custom`,
+`WithinAllowance` and `CallWithinAllowance` charge, only
+`ArraySome`/`ZipSome` choose.
 
 ### `adequacy`: the evaluator computes the world's meaning
 
@@ -483,6 +500,20 @@ operator, only `Pluck` writes slots, only `Custom`, `WithinAllowance` and
 structural node has `m`'s `inlined` and `size`; containers list `m`'s
 children (a `Matches` on calldata or a dynamic tuple may leave out trailing
 ones); checks on a whole value see exactly `m`'s type. Zips are not covered.
+
+**Call variants.** At a `bytes` parameter that a tree reads as different
+calls (`Or[Matches:AbiEncoded(f..), Matches:AbiEncoded(g..), Dynamic..]`), the
+layout is a *variant* layout: its children are the candidate call types, each
+keyed by the leading bytes (selector) a call of that type starts with. A call
+branch fits its candidate (`Fits.varAbi`; no other key may be a prefix of its
+key, `KeyUnique`), a check on the plain bytes fits a `Dynamic` value
+(`Fits.varDyn`). The contract world decodes a call at a variant with the
+candidate whose key the calldata starts with (`pick`); a branch whose key it
+doesn't start with fails at its leading bytes on both sides. `Decodable` asks
+only that the calldata decode as the candidate it starts with. Variants
+without distinct keys (no selector) are not covered: that is where pruning
+may accept malformed encodings (see Findings).
+
 `Decodable data m l`: decoding the calldata with `m` at `l` does not
 overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
 
@@ -497,7 +528,7 @@ or both fail; no revert.
 
 ## Normalization on calldata
 
-Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/PadFits.lean`
+Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/NormalizeFits.lean`
 
 ### `normalize_fits`: normalization keeps the layout
 
@@ -506,9 +537,10 @@ Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/PadFits.lean`
 ```
 
 Pruning drops trailing `Pass` children of containers that are not inlined,
-padding appends `Pass` children of the layout's types to such containers, and
-every rewrite of `And`/`Or` keeps each branch at the layout. Also
-`cvOk_normalize`.
+and every rewrite of `And`/`Or` keeps each branch at the layout. At a
+variant, pushing an `Or` down merges only call branches with the same
+compValue, which fit the same candidate: the merge is done at the candidate.
+Also `cvOk_normalize`.
 
 ### `normalize_calldata'`: the contract's verdict does not change
 
@@ -522,10 +554,10 @@ For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$:
 from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
 `contractWorld_ok`.
 
-Not covered: trees with call interpretations of different types under one
-`Or` (they do not fit one layout; the contract reads the interpretation that
-does not hold as whatever its bytes are). They are covered by the on-chain
-fuzzer only. Zips.
+Covered since: call interpretations of different types under one `Or`, when
+their leading bytes tell them apart (variant layouts, above). Not covered:
+interpretations without distinct leading bytes, and Zips; the on-chain
+fuzzer covers both.
 
 ## The SDK pipeline, end to end
 

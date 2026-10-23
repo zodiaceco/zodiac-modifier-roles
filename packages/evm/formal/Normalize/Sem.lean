@@ -170,10 +170,6 @@ def ChargerT (step : C → Ch → Option C) (t : Thunk S C) : Prop :=
 structure World.Ok (W : World V S C) (step : C → Ch → Option C) : Prop where
   /-- Two charges commute (true of `AllowanceConsumer.consume`, see `consume_comm`). -/
   comm : ∀ c x y, (step c x).bind (step · y) = (step c y).bind (step · x)
-  /-- A trailing `Pass` child of a tuple or calldata node that is not
-      `Matches` only describes type: the operator compares the value. -/
-  pad : ∀ e o cv ss, (e = 3 ∨ e = 5) → o ≠ 0 → o ≠ 1 → o ≠ 2 → o ≠ 5 →
-    W.ext e o cv (ss ++ [fun _ => passT]) = W.ext e o cv ss
   /-- Only `Pluck` writes slots. -/
   keeps : ∀ e o cv ss, o ≠ 14 → (∀ s ∈ ss, ∀ v, KeepsT (s v)) → ∀ v, KeepsT (W.ext e o cv ss v)
   /-- Only `Custom`, `WithinAllowance`, `CallWithinAllowance` charge. -/

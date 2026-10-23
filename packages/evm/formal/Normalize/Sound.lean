@@ -1,4 +1,4 @@
-import Normalize.Pad
+import Normalize.Steps
 import Normalize.PushDown
 
 /-!
@@ -26,8 +26,7 @@ theorem normalize_same (hW : W.Ok step) : ∀ (n : Nat) (c : Cond), Same W (norm
     · rw [if_pos hk]; exact Same.refl c
     rw [if_neg hk]
     exact (sortB_same hW _).trans <| (pushDownOr_same hW ih _).trans <| (unwrap_same _).trans <|
-      (dedupe_same hW _).trans <| (flatten_same _).trans <| (pad_same hW _).trans <|
-      (prune_same hW _).trans h1
+      (dedupe_same hW _).trans <| (flatten_same _).trans <| (prune_same hW _).trans h1
 
 /-- **Normalization never changes what a condition means.** -/
 theorem normalize_sound (hW : W.Ok step) (n : Nat) (c : Cond) :

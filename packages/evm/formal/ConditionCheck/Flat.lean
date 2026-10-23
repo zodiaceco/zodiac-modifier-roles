@@ -88,9 +88,18 @@ theorem skel_compValue (c : Condition) :
 
 theorem skel_default : skel default = default := rfl
 
+mutual
+  theorem noNav_skel : ∀ c : Condition, noNav (skel c) = noNav c
+    | ⟨e, op, cs, i, sz, lb, cv⟩ => by simp only [skel, noNav, noNavAll_skel cs]
+  theorem noNavAll_skel : ∀ cs : List Condition, noNavAll (skelAll cs) = noNavAll cs
+    | [] => rfl
+    | c :: cs => by simp only [skelAll, noNavAll, noNav_skel c, noNavAll_skel cs]
+end
+
 theorem classifyNode_congr {s : Bool} {e : Encoding} {op : Operator} {cs cs' : List Condition}
     {lb : Nat} {cv cv' : Bytes} {ks : List K}
-    (hcs : cs'.map (·.encoding) = cs.map (·.encoding)) (hcv : op = .Slice → cv' = cv) :
+    (hcs : cs'.map (·.encoding) = cs.map (·.encoding)) (hcv : op = .Slice → cv' = cv)
+    (hnn : noNavAll cs' = noNavAll cs) :
     classifyNode s e op cs' lb cv' ks = classifyNode s e op cs lb cv ks := by
   have hl : cs'.isEmpty = cs.isEmpty := by
     have := congrArg List.length hcs
@@ -99,12 +108,12 @@ theorem classifyNode_congr {s : Bool} {e : Encoding} {op : Operator} {cs cs' : L
   by_cases hop : op = .Slice
   · rw [hcv hop]
     unfold classifyNode leafOk sliceOk
-    rw [hl, hcs]
+    rw [hl, hcs, hnn]
   · have hs : ∀ c c' : Bytes, sliceOk op cs' c' ks = sliceOk op cs c ks := by
       have hb : (op == Operator.Slice) = false := by simp [hop]
       intro c c'; simp [sliceOk, hb]
     unfold classifyNode leafOk
-    rw [hl, hs cv cv']
+    rw [hl, hs cv cv', hnn]
 
 theorem classify_skel (s : Bool) (c : Condition) : classify s (skel c) = classify s c := by
   have hall : classifyAll s (c.children.map skel) = classifyAll s c.children := by
@@ -124,6 +133,7 @@ theorem classify_skel (s : Bool) (c : Condition) : classify s (skel c) = classif
   apply classifyNode_congr
   · simp [List.map_map, Function.comp_def]
   · intro hop; rw [skel_compValue, hop]; rfl
+  · rw [← skelAll_eq]; exact noNavAll_skel _
 termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
 

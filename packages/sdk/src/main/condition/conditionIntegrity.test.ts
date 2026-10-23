@@ -38,45 +38,27 @@ suite("checkConditionIntegrity()", () => {
     ).to.throw("`And` condition cannot have a compValue")
   })
 
-  it("should throw for And with mixed children types", () => {
-    expect(() =>
-      checkConditionIntegrity({
-        paramType: Encoding.None,
-        operator: Operator.And,
-        children: [
-          { paramType: Encoding.Static, operator: Operator.Pass },
-          { paramType: Encoding.Dynamic, operator: Operator.Pass },
-        ],
-      })
-    ).to.throw("Inconsistent children types (`Static` and `Dynamic`)")
-  })
-
-  it("should not throw for And with AbiEncoded and Dynamic children", () => {
-    expect(() =>
-      checkConditionIntegrity({
-        paramType: Encoding.None,
-        operator: Operator.And,
-        children: [
-          { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
-          { paramType: Encoding.Dynamic, operator: Operator.Pass },
-        ],
-      })
-    ).to.not.throw()
-  })
-
-  it("should throw for And with AbiEncoded and Dynamic children if AbiEncoded does not come first", () => {
-    expect(() =>
-      checkConditionIntegrity({
-        paramType: Encoding.None,
-        operator: Operator.And,
-        children: [
-          { paramType: Encoding.Dynamic, operator: Operator.Pass },
-          { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
-        ],
-      })
-    ).to.throw(
-      "Mixed children types: `AbiEncoded` must appear before `Dynamic`"
-    )
+  it("leaves the types of And/Or children to the SDK check", () => {
+    // which children fit together (prefixes of one tuple, interpretations
+    // of one bytes value) is checkStored's rule, in any order
+    for (const children of [
+      [
+        { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
+        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+      ],
+      [
+        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+        { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
+      ],
+    ]) {
+      expect(() =>
+        checkConditionIntegrity({
+          paramType: Encoding.None,
+          operator: Operator.And,
+          children,
+        })
+      ).to.not.throw()
+    }
   })
 })
 

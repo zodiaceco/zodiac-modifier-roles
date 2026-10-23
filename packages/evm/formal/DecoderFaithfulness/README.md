@@ -83,7 +83,7 @@ Plucks it reads to be visited before it.
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `Spec.lean`                       | ABI encoding, transcribed from the [formal spec section](https://docs.soliditylang.org/en/latest/abi-spec.html#formal-specification-of-the-encoding) of the Solidity docs: values in, bytes out.                                                                                                     | `Bytes.lean` only |
 | `Roles.lean`                      | Line-by-line transcription of `AbiLocation.sol`, `Topology.sol`, the pack/unpack metadata, `ConditionEvaluator.__input`, which node `evaluate` visits at which location (`Visit`, including `_slice`; `Eval` adds the Zip jump), and `BitmaskChecker.check`.                                         | `Bytes.lean` only |
-| `Desc.lean`                       | `Desc s c u`: condition tree `c` describes value `u` (the structural rules Integrity enforces); `ZipOK` (the Zip type rules).                                                                                                                                                                        | both              |
+| `Desc.lean`                       | `Desc s c u`: condition tree `c` describes value `u` (the structural rules Integrity enforces, a `Matches` the first fields); `ZipOK` (the Zip type rules).                                                                                                                                          | both              |
 | `Basic`, `Meta`, `Decode`, `Main` | Proofs.                                                                                                                                                                                                                                                                                              |                   |
 | `Bitmask.lean`                    | `bitmaskSpec` (what a Bitmask checks, byte by byte) and `decoder_bitmask`.                                                                                                                                                                                                                           |                   |
 | `Example.lean`                    | `f(uint256, bytes)` in strict mode; `f(bytes, uint256)` with a variant `Or` (one interpretation does not fit) and a `Slice` on the last byte, conclusions checked on concrete bytes; `f(uint256[], uint256[])` with `And[Matches[Pluck, Pluck], ZipEvery]`, all hypotheses including `ZipOK` proven. |                   |
@@ -143,7 +143,13 @@ by hand; `MockLocator` does not expose them.
   formal definition).
 - **Integrity**: the theorems are about trees satisfying `Desc`, `RootOK` and
   `ZipOK`. That `Integrity.enforce` only accepts such trees (for a given
-  signature) is not proven here. Also assumed: inlined sizes ≤ 8191 bytes
+  signature) is not proven here. `Desc` lets a `Matches` on a tuple or
+  calldata describe the first fields of a value (trailing `Pass` children
+  pruned; a tuple only if it is not inlined), and requires the children of
+  an operator that reads its whole value (`EqualTo` on a tuple, ..., and
+  `Pass` containers) to be a type description without navigating nodes
+  (`noNav`): their sizes give the length read. Integrity accepts a `Matches`
+  there; the theorems say nothing about such trees. Also assumed: inlined sizes ≤ 8191 bytes
   (Integrity rejects larger), and the flat-BFS-array-to-tree view of `Topology`.
 - **Pluck slots** (in `Eval`): when a Zip reads slot `k`, it holds a location
   where the Pluck node with slot `k` was evaluated. Integrity makes the slot's

@@ -47,17 +47,6 @@ theorem chargesT_charger (g : Slots → Option (List (Bytes × Nat))) :
 theorem pure_of {t : T} (b : Slots → Bool) (h : ∀ sl cs, t sl cs = (if b sl then some cs else none, sl)) :
     PureT t := ⟨b, h⟩
 
-theorem contractWorld_pad (e o : Nat) (cv : List Nat) (ss : List (Val' → T))
-    (he : e = 3 ∨ e = 5) (h0 : o ≠ 0) (h1 : o ≠ 1) (h2 : o ≠ 2) (h5 : o ≠ 5) :
-    (contractWorld avatar env data n).ext e o cv (ss ++ [fun _ => passT]) =
-      (contractWorld avatar env data n).ext e o cv ss := by
-  funext v
-  simp only [contractWorld]
-  have h4 : e ≠ 4 := by omega
-  have h12 : ¬(e = 1 ∨ e = 2) := by omega
-  unfold extW
-  split <;> simp_all [iterT, tailT, matchesArrT, sliceT]
-
 theorem checkT_pure (b : Slots → Bool) : PureT (checkT b) := ⟨b, fun _ _ => rfl⟩
 
 theorem iterT_ok (P : T → Prop) (hf : P failT)
@@ -192,7 +181,6 @@ theorem contractWorld_charger (e o : Nat) (cv : List Nat) (ss : List (Val' → T
 /-- **The contract satisfies the normalization proof's assumptions.** -/
 theorem contractWorld_ok : (contractWorld avatar env data n).Ok (consumeM env.balance) where
   comm := consumeM_comm env.balance
-  pad := contractWorld_pad avatar env data n
   keeps := contractWorld_keeps avatar env data n
   pure := contractWorld_pure avatar env data n
   charger := contractWorld_charger avatar env data n
