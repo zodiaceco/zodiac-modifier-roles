@@ -185,8 +185,18 @@ unmutated and mutated runs, every difference fell into one of these classes.
   compatible with `Dynamic`/`AbiEncoded` ones. Only the root form
   `And[Matches:AbiEncoded[...], Zip]` gets through.
 
+- Two checks of one array in an `And`/`Or` whose elements are `bytes`
+  values read as different interpretations, described differently, e.g.
+  `And[Pass:Array[And[Dynamic, AbiEncoded]], ArrayTailMatches[And[Dynamic,
+  AbiEncoded], Or[AbiEncoded, Dynamic]]]`. `TypeTree.resolve` keeps one
+  element layout for an array with one child and all of them for a variant
+  array, so the two arrays hash differently and `_isTypeCompatible` only
+  lets differing hashes through for `Dynamic`/`AbiEncoded`. Each element is
+  read at the array's element location either way (found by the packed-path
+  fuzzer, `GAP_PACKED=1`).
+
 Every "check accepts, Integrity rejects" case in the fuzzer runs is one of
-these two.
+these three.
 
 **Integrity rules the decoder does not need; the check keeps them anyway**
 (they are about intent, not safety):

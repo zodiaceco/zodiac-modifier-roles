@@ -45,6 +45,13 @@
  * accepts, the Lean model of `evaluate` (formal/Evaluate, driver query `ev`)
  * must give the contract's exact status and consumptions
  * (`MockEvaluator.evaluateWith`).
+ *
+ * With `GAP_PACKED=1` the trees take the path the SDK uses: they are gated by
+ * the SDK's `checkStored` instead of Integrity, packed by the SDK's
+ * `packConditions` and evaluated from that buffer
+ * (`MockEvaluator.evaluatePackedWith`), as the `...Packed` setters store it.
+ * Trees the SDK check accepts and Integrity rejects are listed (and the
+ * other way round counted). `GAP_GAS` sets the gas limit (default 16M).
  */
 import { expect } from "chai";
 import {
@@ -69,6 +76,8 @@ import {
   tyKey,
 } from "../../../sdk/src/main/condition/checkStored.js";
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
+import { checkStoredConditions, toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { Encoding, Operator, flattenCondition } from "../utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
@@ -78,8 +87,11 @@ const REPORT = process.env.GAP_REPORT;
 const CHECK = process.env.GAP_CHECK === "1";
 const MUTATE = Number(process.env.GAP_MUTATE ?? 0);
 const NORMALIZE = process.env.GAP_NORMALIZE === "1";
-const STRAY = "normalized-passes-stray-interpretation";
+// by design: `Pass` constrains nothing, not even well-formedness (formal/README.md)
+const STRAY = "pruned-pass-accepts-malformed-encoding";
 const EVAL = Number(process.env.GAP_EVAL ?? 0);
+const PACKED = process.env.GAP_PACKED === "1";
+const GAS = BigInt(process.env.GAP_GAS ?? 16_000_000);
 /** Allowance keys used in `GAP_EVAL` mode. */
 const KEYS = [
   "0x" + "a1".repeat(32),
@@ -1366,7 +1378,7 @@ describe("Integrity gaps (fuzz)", function () {
     await connection?.close();
 
     console.log(
-      `      ${CASES} cases: ${accepted} accepted by Integrity, ${compared} compared, ${unknown} unknown (stray variant), ${outOfGas} out of gas`,
+      `      ${CASES} cases: ${accepted} accepted by Integrity, ${compared} compared, ${unknown} unknown (malformed for a pruned Pass, by design), ${outOfGas} out of gas`,
     );
     for (const [why, n] of [...rejected].sort((a, b) => b[1] - a[1]))
       console.log(`      rejected ${n}× ${why}`);
@@ -1462,7 +1474,9 @@ describe("Integrity gaps (fuzz)", function () {
     let evaluator: any;
     const fresh = async () => {
       await connection?.close();
-      connection = await network.create();
+      connection = await network.create({
+        override: { blockGasLimit: GAS > 30_000_000n ? GAS : 30_000_000n },
+      } as any);
       const { ethers } = connection;
       const [signer] = await ethers.getSigners();
       const lib = async (name: string) => {
@@ -1523,19 +1537,60 @@ describe("Integrity gaps (fuzz)", function () {
     // length makes AbiLocation loop) are not sent to the model.
     let rejected = 0;
     let oog = 0;
+    // PACKED: trees the SDK check and Integrity disagree on
+    let sdkStricter = 0;
+    const sdkLooser = new Map<string, { n: number; example: string }>();
+    const looserLines: string[] = [];
     const chain: (string | undefined)[] = [];
     for (let c = 0; c < queries.length; c++) {
       if (c % 200 === 0) await fresh();
       const q = queries[c];
+      let packed: string | undefined;
+      if (PACKED) {
+        let intErr: string | undefined;
+        try {
+          await evaluator.enforceIntegrity.staticCall(q.flat, { gasLimit: GAS });
+        } catch (e: any) {
+          intErr = errName(e, evaluator.interface);
+        }
+        let verdict;
+        try {
+          verdict = checkStoredConditions(q.flat);
+        } catch {
+          verdict = undefined;
+        }
+        if (verdict === undefined) {
+          rejected++;
+          if (intErr === undefined) sdkStricter++;
+          chain.push(undefined);
+          continue;
+        }
+        if (intErr !== undefined) {
+          looserLines.push(`${intErr} ${q.line.split(" ").pop()}`);
+          const e = sdkLooser.get(intErr) ?? { n: 0, example: q.line.split(" ").pop()! };
+          e.n++;
+          sdkLooser.set(intErr, e);
+        }
+        packed = hexlify(packConditions(toFlatNodes(q.flat)));
+      }
       try {
-        const [status, cons] = await evaluator.evaluateWith.staticCall(
-          q.data,
-          q.flat,
-          q.value,
-          KEYS,
-          q.bal,
-          { gasLimit: 16_000_000 },
-        );
+        const [status, cons] = PACKED
+          ? await evaluator.evaluatePackedWith.staticCall(
+              q.data,
+              packed,
+              q.value,
+              KEYS,
+              q.bal,
+              { gasLimit: GAS },
+            )
+          : await evaluator.evaluateWith.staticCall(
+              q.data,
+              q.flat,
+              q.value,
+              KEYS,
+              q.bal,
+              { gasLimit: GAS },
+            );
         const cs = (cons as any[]).map(
           (x) => `${hexNo0x(x.allowanceKey)}:${x.balance}:${x.consumed}`,
         );
@@ -1545,13 +1600,14 @@ describe("Integrity gaps (fuzz)", function () {
         if (name === "out of gas") {
           oog++;
           chain.push(undefined);
-        } else if (/^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic") {
+        } else if (!PACKED && /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic") {
           rejected++;
           chain.push(undefined);
         } else chain.push("255 -");
       }
     }
     const asked = queries.filter((_, c) => chain[c] !== undefined);
+    if (REPORT && PACKED) writeFileSync(REPORT + ".looser", looserLines.join("\n") + "\n");
     if (REPORT) {
       writeFileSync(REPORT, asked.map((q) => q.line).join("\n") + "\n");
       writeFileSync(
@@ -1579,8 +1635,16 @@ describe("Integrity gaps (fuzz)", function () {
     });
     await connection?.close();
     console.log(
-      `      ${EVAL} cases: ${compared} compared, ${rejected} rejected by Integrity, ${oog} out of gas, ${diffs.length} differences`,
+      `      ${EVAL} cases${PACKED ? " (packed path)" : ""}: ${compared} compared, ${rejected} rejected by ${PACKED ? "the SDK check" : "Integrity"}, ${oog} out of gas, ${diffs.length} differences`,
     );
+    if (PACKED) {
+      const looser = [...sdkLooser.values()].reduce((a, e) => a + e.n, 0);
+      console.log(
+        `      SDK check accepts, Integrity rejects: ${looser}; Integrity accepts, SDK check rejects: ${sdkStricter}`,
+      );
+      for (const [name, e] of [...sdkLooser].sort((a, b) => b[1].n - a[1].n))
+        console.log(`        ${e.n}× ${name}  e.g. ${e.example.slice(0, 300)}`);
+    }
     console.log(
       `      statuses ${[...statuses].sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, n]) => `${k}:${n}`).join(" ")}`,
     );

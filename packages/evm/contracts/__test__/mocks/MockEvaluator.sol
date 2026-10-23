@@ -36,6 +36,27 @@ contract MockEvaluator {
         bytes32[] memory keys,
         uint128[] memory balances
     ) public returns (Status, Consumption[] memory) {
+        Integrity.enforce(conditions);
+        return
+            evaluatePackedWith(
+                data,
+                ConditionPacker.pack(conditions),
+                value,
+                keys,
+                balances
+            );
+    }
+
+    /// @dev As `evaluateWith`, on a buffer packed off-chain (the SDK's
+    ///      `packConditions`) and without Integrity, the way the `...Packed`
+    ///      setters store it.
+    function evaluatePackedWith(
+        bytes calldata data,
+        bytes memory packed,
+        uint256 value,
+        bytes32[] memory keys,
+        uint128[] memory balances
+    ) public returns (Status, Consumption[] memory) {
         for (uint256 i; i < keys.length; ++i) {
             bytes32 key = keys[i];
             // word2: timestamp (max, so nothing accrues) | balance | period 0
@@ -50,8 +71,6 @@ contract MockEvaluator {
             }
         }
 
-        Integrity.enforce(conditions);
-        bytes memory packed = ConditionPacker.pack(conditions);
         (Condition memory root, uint256 maxPluck) = ConditionUnpacker.unpack(
             packed
         );
@@ -70,6 +89,11 @@ contract MockEvaluator {
             context
         );
         return (result.status, result.consumptions);
+    }
+
+    /// @dev Reverts with Integrity's error if it rejects `conditions`.
+    function enforceIntegrity(ConditionFlat[] memory conditions) public pure {
+        Integrity.enforce(conditions);
     }
 
     /// @dev Without Integrity, as for trees stored with the `...Packed`

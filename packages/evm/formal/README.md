@@ -438,10 +438,19 @@ in the SDK with regression tests (`effects.test.ts`,
     it now takes the first structural child, as the contract's `TypeTree` does.
     The SDK also crashed on such nodes while padding.
 
-Not changed: a pruned branch no longer decodes the trailing parameters it does
-not check. On calldata of another interpretation that lacks them, that branch
-can now pass where it failed before. Such calldata does not have the branch's
-type, and a target decoding it as that type reverts.
+By design, not changed: `Pass` places no constraint on a value, including
+whether it is well-formed. A trailing `Pass` still makes the contract locate
+the field (follow its offset), so on a malformed encoding the tree as written
+can fail where the pruned one passes. Example: `f(bytes b)` with
+`Matches:AbiEncoded[EqualTo(1), Pass:Dynamic]` on `b` fails on
+`b = abi.encode(1)` (`CalldataOverflow`), its normalized form
+`Matches:AbiEncoded[EqualTo(1)]` passes. Roles never checks ABI
+well-formedness (a `Pass:Static` field is not read, trailing data and
+non-canonical offsets are accepted), so this side effect is not a check to
+rely on. On top-level calldata a Solidity target rejects such calldata
+anyway. The theorems below hold on calldata that decodes as the parameter's
+full type (`Decodable`), which excludes exactly these cases; padding, the
+other way round, can make a branch fail on them.
 
 ## Evaluation on calldata
 
@@ -506,10 +515,10 @@ every rewrite of `And`/`Or` keeps each branch at the layout. Also
 For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$:
 
 ```math
-\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \;pprox\; \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma)
+\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \;\approx\; \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma)
 ```
 
-($`pprox`$: same verdict, same consumptions as a map, same slots, no revert),
+($`\approx`$: same verdict, same consumptions as a map, same slots, no revert),
 from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
 `contractWorld_ok`.
 
@@ -532,7 +541,7 @@ whose parent is $`i`$), then for every calldata that decodes as the layout
 $`c_0`$ fits:
 
 ```math
-\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \;pprox\; \mathsf{run}(\mathit{cd}, D(c_0))
+\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \;\approx\; \mathsf{run}(\mathit{cd}, D(c_0))
 ```
 
 The contract enforces exactly what it would enforce for the tree as written.
@@ -552,6 +561,15 @@ allowance balances and `msg.value`, against `MockEvaluator.evaluateWith`
 exact `Status` and the consumption list must match. 3,000 cases: 1,171
 compared, 0 differences, 18 different statuses reached (the others were
 rejected by Integrity or ran out of gas on corrupted array lengths).
+
+`GAP_PACKED=1` takes the path the SDK uses: trees are gated by the SDK's
+`checkStored` instead of Integrity, packed by the SDK's `packConditions` and
+evaluated from that buffer without Integrity
+(`MockEvaluator.evaluatePackedWith`), as the `...Packed` setters store them.
+3,000 cases: 1,220 compared, 0 differences. 167 trees the SDK check accepts
+and Integrity rejects (`UnsuitableChildTypeTree`) were evaluated too; all
+fall in the three documented classes (`ConditionCheck/README.md`), one of
+them new.
 
 Found: `AbiLocation.children` allocates the location array before decoding,
 so an array length above $`2^{64}-1`$ panics there; the decoder transcription
