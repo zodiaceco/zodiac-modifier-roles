@@ -2,6 +2,7 @@ import DecoderFaithfulness.Roles
 import ConditionPacking.Model
 import ConditionCheck.Stored
 import Normalize.Defs
+import Evaluate.Model
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -33,6 +34,13 @@ and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
 A line `ck <s 0|1> <nodes>` runs `ConditionCheck.checkStored s` (the full SDK
 check) on the flat array and prints `ok <type>` (typed root), `ns` (root reads no
 calldata) or `none` (rejected, also for unknown encoding/operator codes).
+
+A line `ev <value> <allowances> <calldata hex> <nodes>` packs and unpacks the
+tree in the packing model and runs the evaluator model
+(`Evaluate/Model.lean`) on it, with `msg.value` = `<value>` and the
+allowance balances `<allowances>` (`key:balance` joined by `,`, or `-`). It
+prints `<status> <consumptions>`: the `Status` number (255 for a revert) and
+the consumption list as `key:balance:consumed` joined by `,` (or `-`).
 
 Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
 -/
@@ -145,8 +153,43 @@ def showCond (c : Normalize.Cond) : String :=
   "|".intercalate ((Normalize.bfsGo (Normalize.nodeCount c) [(c, 0)] #[]).toList.map
     fun (p, x) => s!"{p}:{x.enc}:{x.op}:{(Normalize.hexOf x.cv).drop 2}")
 
+def toPackingFlat (ns : List Flat) : Option (List ConditionPacking.Flat) :=
+  ns.mapM fun n =>
+    match ConditionPacking.encOf? n.encoding, ConditionPacking.opOf? n.operator with
+    | some e, some o => some ({ parent := n.parent, paramType := e, operator := o,
+                                compValue := n.compValue } : ConditionPacking.Flat)
+    | _, _ => none
+
+/-- The `ev` query (see the header). Runs that need an external call
+    (`Custom`, `WithinRatio`, a price adapter) report status 254. -/
+def runEval (value allowances hex nodesStr : String) : String :=
+  let bal : List (Bytes × Nat) :=
+    if allowances == "-" then []
+    else (allowances.splitOn ",").map fun kv =>
+      match kv.splitOn ":" with
+      | [k, b] => (parseHex k, b.toNat!)
+      | _ => ([], 0)
+  let env : Evaluate.Env :=
+    { value := value.toNat!
+      balance := fun k => ((bal.find? (·.1 == k)).map (·.2)).getD 0
+      scale := fun _ _ => (254, 0)
+      customCall := fun _ _ _ _ => .inl 254
+      ratio := fun _ _ => 254 }
+  match toPackingFlat (parseNodes nodesStr).toList with
+  | none => "bad-input"
+  | some fs =>
+    match ConditionPacking.unpack (zeros 32)
+        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0) with
+    | none => "unpack-failed"
+    | some (root, maxPluck) =>
+      let r := Evaluate.run env (parseHex hex) root maxPluck []
+      let cons := if r.cons.isEmpty then "-" else ",".intercalate (r.cons.map fun c =>
+        s!"{(hexOf c.key).drop 2}:{c.balance}:{c.consumed}")
+      s!"{r.status} {cons}"
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
+  | ["ev", value, allowances, hex, nodesStr] => runEval value allowances hex nodesStr
   | ["pk", nodesStr] =>
     let fs := (parseNodes nodesStr).toList.map fun n =>
       ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,

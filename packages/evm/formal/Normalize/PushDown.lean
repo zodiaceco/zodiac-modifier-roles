@@ -248,6 +248,7 @@ theorem mergeMatches_same (hW : W.Ok step) {c first : Cond} {rest nch : List Con
   split at hm; · simp at hm
   rename_i hst
   split at hm; · simp at hm
+  split at hm; · simp at hm
   rename_i hchg
   simp only [Option.some.injEq] at hm
   subst hm
@@ -331,6 +332,7 @@ theorem mergeAnd_same (hW : W.Ok step) {c first : Cond} {rest nch : List Cond}
   have hok : hingeOk c.ch = true := by simpa using hok
   split at hm; · simp at hm
   rename_i hchg
+  split at hm; · simp at hm
   simp only [Option.some.injEq] at hm
   subst hm
   have hfirst : first ∈ c.ch := by simp [hch]

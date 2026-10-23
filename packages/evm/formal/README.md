@@ -22,6 +22,10 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
 | [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 | [Normalization](#normalization): the SDK's `normalizeCondition` never changes what a condition means (on decoded values)                                       | [`Normalize`](Normalize/README.md)                     | Proven |
+| [Evaluation on calldata](#evaluation-on-calldata): the evaluator computes the contract world's meaning, which satisfies normalization's assumptions             | [`Bridge`](Bridge/)                                    | Proven |
+| [Normalization on calldata](#normalization-on-calldata): the contract gives the normalized tree the verdict it gives the tree as written                          | [`Bridge`](Bridge/)                                    | Proven |
+| [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate agrees with evaluating the user's tree                               | [`Bridge`](Bridge/)                                    | Proven |
+| [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
 
 Not covered yet:
 
@@ -369,7 +373,7 @@ written, consumptions start over in every branch. Every other operator is
 opaque. For every fuel $`n`$:
 
 ```math
-orall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
+\forall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
 ```
 
 The opaque operators are assumed to (`World.Ok`): see their children only
@@ -409,15 +413,160 @@ Normalization changed what conditions check in eight ways, all fixed in the SDK
 The calldata-level bug 8 is outside the theorem (which is about decoded
 values); writing down what padding may do at the value level exposed it.
 
-### Not covered
+### Findings on calldata
 
-- **Calldata.** The theorem is about decoded values. That the normalized tree
-  reads the same values from calldata (pruned and padded `Pass` nodes keep the
-  layout) is not proven. Padding is meant to add `Pass` nodes for parameters a
-  branch leaves out, of the type another branch gives them; it relies on the
-  branches describing the same type where they overlap.
-- `World.Ok` for the opaque operators, from reading `evaluate`.
-- The transcription, which is differentially tested, not proven equal.
+Lifting the theorem to calldata (below) and the on-chain fuzzer
+(`GAP_NORMALIZE=1` in `test/formal/integrity-gaps.spec.ts`) found more, fixed
+in the SDK with regression tests (`effects.test.ts`,
+`test/formal/sdk-normalize-layout.spec.ts`):
+
+9. Padding appended fields to a static tuple of one call interpretation with
+   the type of another (`Or[f((uint) t, uint x), g((uint, uint) t)]` at a
+   `bytes` parameter): `t` grew and `x` was read one word later, where any
+   appended calldata could sit. Padding now extends only containers that are
+   not inlined (their size does not depend on their children), and never a
+   call interpretation directly under the `Or` (the contract accepts calldata
+   variants of different types as they are).
+10. Pruning and padding inside a Zip's fields or a plucked array changed their
+    types, which Integrity then rejects; those subtrees are now left as written.
+11. Pushing an `Or` down merged children of incompatible types (e.g. a `Slice`
+    next to a plain check), which Integrity rejects; merges now require
+    Integrity's type compatibility (`compatibleSiblings`, the contract's
+    `TypeTree` rule).
+12. `createTypeTree` gave an `And`/`Or` the type of its first child, and none
+    when that child reads no parameter, so the parent's type tree lost a field;
+    it now takes the first structural child, as the contract's `TypeTree` does.
+    The SDK also crashed on such nodes while padding.
+
+Not changed: a pruned branch no longer decodes the trailing parameters it does
+not check. On calldata of another interpretation that lacks them, that branch
+can now pass where it failed before. Such calldata does not have the branch's
+type, and a target decoding it as that type reverts.
+
+## Evaluation on calldata
+
+Lean: `Evaluate/Model.lean`, `Bridge/`
+
+`Evaluate/Model.lean` transcribes `ConditionEvaluator.evaluate` (every
+operator, with `AllowanceConsumer`, `WithinAllowanceChecker` and the custom
+checker's charges). What it reads from outside (`msg.value`, accrued
+allowance balances, custom checkers, price adapters, `WithinRatio`) is a
+parameter, assumed only to never report `Ok` as a failure or a revert
+(`EnvOk`).
+
+The **contract world** (`Bridge/World.lean`) is the evaluator as a
+normalization world: a value is a layout (a `Condition` whose `inlined`,
+`size`, `leadingBytes` and children give the encoding) and a location;
+children are decoded with `AbiLocation` using the layout's metadata, so the
+world does not depend on the tree.
+
+### `contractWorld_ok`: the normalization proof's assumptions hold
+
+The five assumptions `World.Ok` of `normalize_sound` are theorems for the
+contract world: charges commute (consumptions as a map from allowance key to
+balance and consumed), a trailing `Pass` does not change a tuple or calldata
+operator, only `Pluck` writes slots, only `Custom`, `WithinAllowance` and
+`CallWithinAllowance` charge, only `ArraySome`/`ZipSome` choose.
+
+### `adequacy`: the evaluator computes the world's meaning
+
+`Fits c d m`: the tree `c` (evaluated as node `d`) fits layout `m`: every
+structural node has `m`'s `inlined` and `size`; containers list `m`'s
+children (a `Matches` on calldata or a dynamic tuple may leave out trailing
+ones); checks on a whole value see exactly `m`'s type. Zips are not covered.
+`Decodable data m l`: decoding the calldata with `m` at `l` does not
+overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
+
+```math
+\mathsf{Fits}(c, D(c), m) \wedge \mathsf{Decodable}(\mathit{cd}, m, \ell) \wedge \mathsf{CvOk}_n(c)
+\;\Longrightarrow\;
+\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{contract}}((m, \ell), \sigma, \kappa)
+```
+
+where $`\sim`$: same slots; both pass with the same consumptions (as a map),
+or both fail; no revert.
+
+## Normalization on calldata
+
+Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/PadFits.lean`
+
+### `normalize_fits`: normalization keeps the layout
+
+```math
+\mathsf{Fits}(c, D(c), m) \;\Longrightarrow\; \mathsf{Fits}(\mathsf{normalize}_k(c), D(\mathsf{normalize}_k(c)), m)
+```
+
+Pruning drops trailing `Pass` children of containers that are not inlined,
+padding appends `Pass` children of the layout's types to such containers, and
+every rewrite of `And`/`Or` keeps each branch at the layout. Also
+`cvOk_normalize`.
+
+### `normalize_calldata'`: the contract's verdict does not change
+
+For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$:
+
+```math
+\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \;pprox\; \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma)
+```
+
+($`pprox`$: same verdict, same consumptions as a map, same slots, no revert),
+from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
+`contractWorld_ok`.
+
+Not covered: trees with call interpretations of different types under one
+`Or` (they do not fit one layout; the contract reads the interpretation that
+does not hold as whatever its bytes are). They are covered by the on-chain
+fuzzer only. Zips.
+
+## The SDK pipeline, end to end
+
+Lean: `Bridge/Pipeline.lean`
+
+### `sdk_pipeline`
+
+The SDK normalizes the user's tree $`c_0`$, flattens it to $`\mathit{fs}`$ and
+stores `pack(fs)`; the contract unpacks and evaluates. If $`\mathit{fs}`$ is
+`Packable` (which `checkStored` proves) and reads back as
+$`\mathsf{normalize}_k(c_0)`$ (`nest`: node $`i`$'s children are the later nodes
+whose parent is $`i`$), then for every calldata that decodes as the layout
+$`c_0`$ fits:
+
+```math
+\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \;pprox\; \mathsf{run}(\mathit{cd}, D(c_0))
+```
+
+The contract enforces exactly what it would enforce for the tree as written.
+Chains `pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree
+read back), `normalize_calldata'`.
+
+Trusted: that `flattenCondition` produces an array that reads back as its
+input (tested through the driver's `buildCond` in the normalization and check
+differential tests); `EnvOk`; the evaluator transcription (next section).
+
+## The evaluator model
+
+`GAP_EVAL=<n>` in `test/formal/integrity-gaps.spec.ts`: generated trees with
+allowance checks, generated calldata (corrupted in half the cases), random
+allowance balances and `msg.value`, against `MockEvaluator.evaluateWith`
+(Integrity → pack → unpack → evaluate). For every tree Integrity accepts, the
+exact `Status` and the consumption list must match. 3,000 cases: 1,171
+compared, 0 differences, 18 different statuses reached (the others were
+rejected by Integrity or ran out of gas on corrupted array lengths).
+
+Found: `AbiLocation.children` allocates the location array before decoding,
+so an array length above $`2^{64}-1`$ panics there; the decoder transcription
+reports an overflow (both deny). The evaluator model has the panic.
+
+## Mutation testing
+
+`node test/formal/mutate.mjs <normalize|check|pack>` changes one operator,
+comparison or early return at a time in the SDK code the differential tests
+cover and reports the mutants the test does not notice. Last run: normalize
+186 of 239 killed (most survivors are equivalent, e.g. `invariant` conditions
+and sort ties, or in the packed `conditionId` this test does not cover),
+check 389 of 425 (most survivors are equivalent rewrites or sit at
+Packable size limits the generators rarely reach), pack 7 of 9 (survivors in the `checkAndPack`
+wrapper).
 
 ## Layout
 
@@ -428,6 +577,8 @@ values); writing down what padding may do at the value level exposed it.
 | `ConditionPacking/`    | Condition packing: byte-level pack/unpack model, round-trip proof, README            |
 | `ConditionCheck/`      | Condition check: the decidable check, its soundness, end-to-end theorem, README      |
 | `Normalize/`           | Normalization: transcription of the SDK's normalizeCondition, semantics, proof       |
+| `Evaluate/`            | Transcription of `ConditionEvaluator.evaluate` (differentially tested)               |
+| `Bridge/`              | The contract world, adequacy, normalization on calldata, the SDK pipeline            |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 

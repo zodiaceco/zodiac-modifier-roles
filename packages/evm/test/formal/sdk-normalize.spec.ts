@@ -9,8 +9,8 @@
  * Pass nodes and CallWithinAllowance children in calldata, Tuple and
  * AbiEncoded nodes of different widths (padding), leading bytes, and the
  * operators with effects (allowances, Custom, Pluck, Zip). A small pool of
- * compValues makes equal subtrees frequent. Trees on which the TypeScript
- * throws are skipped (the transcription returns its input there).
+ * compValues makes equal subtrees frequent. The TypeScript must not throw
+ * on any of them.
  *
  * Needs the Lean driver: `cd formal && lake build roles-model`. Skipped when it
  * is missing. `SDK_NORMALIZE_CASES` sets the number of trees (default 3000),
@@ -55,6 +55,7 @@ const O = {
   ArrayEvery: 7,
   ZipSome: 10,
   ZipEvery: 11,
+  Slice: 13,
   Pluck: 14,
   EqualTo: 16,
   GreaterThan: 17,
@@ -127,14 +128,37 @@ function genLeaf(s: Shape): C {
     if (r === 5) return node(E.Static, O.LessThan, word(pick([100, 200])));
     if (r === 6) return node(E.Static, O.WithinAllowance, word(1 + int(2)));
     if (r === 7) return node(E.Static, O.Custom, "0x" + "cc".repeat(20) + pick(["", "01"]));
+    if (chance(0.5)) return sliceOf(E.Static);
     return node(E.Static, O.Pluck, "0x0" + int(3));
   }
   if (s.k === "d") {
-    const r = int(4);
+    const r = int(5);
     if (r === 0) return node(E.Dynamic, O.Pass);
+    if (r === 4) return sliceOf(E.Dynamic);
     return node(E.Dynamic, O.EqualTo, pick(["0xaa", "0xaa0050bb", "0xbb", "0x"]));
   }
   return passOf(s);
+}
+
+const sliceOf = (paramType: number): C =>
+  node(paramType, O.Slice, pick(["0x000001", "0x000420"]), [
+    node(E.Static, pick([O.Pass, O.EqualTo]), word(int(2))),
+  ]);
+
+/** A shape close to `s`: a tuple or call with one field more or less. */
+function nearShape(s: Shape): Shape {
+  if (s.k === "t" || s.k === "c") {
+    const fs = [...s.fs];
+    if (fs.length > 1 && chance(0.5)) fs.pop();
+    else if (chance(0.5)) fs.push(genShape(1));
+    else {
+      const i = int(fs.length);
+      fs[i] = nearShape(fs[i]);
+    }
+    return { ...s, fs };
+  }
+  if (s.k === "a") return { k: "a", el: nearShape(s.el) };
+  return s.k === "d" && chance(0.5) ? { k: "c", fs: [genShape(1)] } : s;
 }
 
 function gen(s: Shape, depth: number): C {
@@ -156,8 +180,14 @@ function gen(s: Shape, depth: number): C {
     return node(encOf(s), O.Matches, cv, children.slice(0, width));
   }
   if (s.k === "a") {
-    const op = pick([O.ArraySome, O.ArrayEvery, O.Pass]);
+    const op = pick([O.ArraySome, O.ArrayEvery, O.Pass, O.Matches]);
     if (op === O.Pass) return passOf(s);
+    if (op === O.Matches) {
+      // element-wise, elements of slightly different shapes (variants)
+      const k = 1 + int(3);
+      return node(E.Array, O.Matches, undefined,
+        Array.from({ length: k }, () => gen(chance(0.6) ? s.el : nearShape(s.el), depth - 1)));
+    }
     return node(E.Array, op, undefined, [gen(s.el, depth - 1)]);
   }
   return genLeaf(s);
@@ -172,6 +202,9 @@ function genLogical(s: Shape, depth: number): C {
     const base = gen(s, depth - 1);
     kids = [base];
     for (let i = 1; i < n; i++) kids.push(variant(base, s, depth - 1));
+  } else if (chance(0.3)) {
+    // branches for different types: call variants, or misfitting tuples
+    kids = Array.from({ length: n }, () => gen(chance(0.5) ? s : nearShape(s), depth - 1));
   } else {
     kids = Array.from({ length: n }, () => gen(s, depth - 1));
   }
@@ -183,6 +216,8 @@ function genLogical(s: Shape, depth: number): C {
       kids[i] = { ...k, children: k.children.slice(0, 1 + int(k.children.length - 1)) };
     }
   }
+  // a first child that reads no parameter (layout of the logical node)
+  if (chance(0.12)) kids.unshift(node(E.Ether, O.LessThan, word(pick([10, 20]))));
   if (chance(0.15)) kids.push(kids[int(kids.length)]); // duplicate
   if (chance(0.15)) kids = [node(E.None, op, undefined, kids.slice(0, 2)), ...kids.slice(2)]; // nested
   return node(E.None, op, undefined, kids);
@@ -272,5 +307,8 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       console.log(`      input ${d.input}\n      ts    ${d.ts}\n      lean  ${d.lean}`);
     }
     expect(diffs.length).to.equal(0);
+    // normalizeCondition does not throw on these trees; a change that makes
+    // it throw would otherwise go unnoticed (those trees are skipped)
+    expect(threw, "normalizeCondition threw").to.equal(0);
   });
 });

@@ -63,10 +63,7 @@ theorem createTTL_eq (l : List Cond) : createTTL l = l.filterMap createTT := by
     split <;> simp_all
 
 theorem createTT_mk (e o cv ch) : createTT ⟨e, o, cv, ch⟩ =
-    if o == 1 || o == 2 then
-      (match ch with
-       | [] => none
-       | x :: _ => createTT x)
+    if o == 1 || o == 2 then createTTFirst ch
     else if e == 4 then
       (match ch with
        | [] => none
@@ -74,16 +71,24 @@ theorem createTT_mk (e o cv ch) : createTT ⟨e, o, cv, ch⟩ =
     else if e == 3 || e == 5 then some (.mk e (createTTL ch))
     else if e == 1 || e == 2 then some (.mk e [])
     else none := by
-  cases ch <;> rw [createTT]
+  rw [createTT.eq_def]; rfl
+
+theorem createTTFirst_spec : ∀ {l : List Cond} {t : TT}, createTTFirst l = some t →
+    ∃ x ∈ l, isStruct x = true ∧ createTT x = some t
+  | [], _, h => by simp [createTTFirst] at h
+  | x :: xs, t, h => by
+    unfold createTTFirst at h
+    split at h
+    · rename_i hs; exact ⟨x, by simp, hs, h⟩
+    · obtain ⟨y, hy, hys, hyt⟩ := createTTFirst_spec h
+      exact ⟨y, by simp [hy], hys, hyt⟩
 
 theorem createTT_wf : ∀ (c : Cond) (t : TT), createTT c = some t → wfTT t
   | ⟨e, o, cv, ch⟩, t, h => by
     rw [createTT_mk] at h
     split at h
-    · split at h
-      · simp at h
-      · rename_i x xs
-        exact createTT_wf x t h
+    · obtain ⟨x, hx, -, hxt⟩ := createTTFirst_spec h
+      exact createTT_wf x t hxt
     · split at h
       · split at h
         · simp at h
@@ -125,11 +130,10 @@ theorem createTT_struct : ∀ (c : Cond), (createTT c).isSome = true → isStruc
     split at h
     · rename_i hl
       simp only [hl, ite_true]
-      split at h
-      · simp at h
-      · rename_i x xs
-        rw [List.any_eq_true]
-        exact ⟨x, by simp, createTT_struct x h⟩
+      obtain ⟨t, ht⟩ := Option.isSome_iff_exists.1 h
+      obtain ⟨x, hx, hxs, -⟩ := createTTFirst_spec ht
+      rw [List.any_eq_true]
+      exact ⟨x, hx, hxs⟩
     · rename_i hl
       simp only [hl, Bool.false_eq_true, ite_false]
       split at h
@@ -139,12 +143,6 @@ theorem createTT_struct : ∀ (c : Cond), (createTT c).isSome = true → isStruc
         · split at h
           · rename_i _ _ h12; simp only [Bool.or_eq_true, beq_iff_eq] at h12; simp; omega
           · simp at h
-termination_by c => sizeOf c
-decreasing_by
-  all_goals simp_wf
-  all_goals first
-    | (subst_vars; simp only [List.cons.sizeOf_spec]; omega)
-    | (have := List.sizeOf_lt_of_mem ‹_ ∈ _›; omega)
 
 theorem hasTT_good : ∀ c : Cond, hasTT c = true → good c = true
   | ⟨e, o, cv, ch⟩, h => by
@@ -207,15 +205,19 @@ decreasing_by
 section
 variable {V S C Ch : Type} {W : World V S C} {step : C → Ch → Option C}
 
-theorem extendAll_eq (l : List Cond) (t : TT) : extendAll l t = l.map (extendC · t) := by
+theorem extendAll_eq (l : List Cond) (t : TT) (v : Bool) :
+    extendAll l t v = l.map (extendC · t v) := by
   induction l with
   | nil => rw [extendAll]; rfl
   | cons x xs ih => rw [extendAll, ih]; rfl
 
-theorem extendC_op (c : Cond) (t : TT) : (extendC c t).op = c.op ∧ (extendC c t).enc = c.enc := by
+theorem extendC_op (c : Cond) (t : TT) (v : Bool) :
+    (extendC c t v).op = c.op ∧ (extendC c t v).enc = c.enc := by
   rw [extendC]; split
   · exact ⟨rfl, rfl⟩
-  · split <;> exact ⟨rfl, rfl⟩
+  · split
+    · exact ⟨rfl, rfl⟩
+    · split <;> exact ⟨rfl, rfl⟩
 
 theorem ext_pad_rep (hW : W.Ok step) {e o : Nat} {cv : List Nat} (he : e = 3 ∨ e = 5)
     (h0 : o ≠ 0) (h1 : o ≠ 1) (h2 : o ≠ 2) (h5 : o ≠ 5) (ss : List (V → Thunk S C)) :
@@ -244,9 +246,9 @@ theorem countP_pos {l : List Cond} (h : l.any isStruct = true) : 0 < l.countP is
   exact List.countP_pos_iff.2 ⟨x, hx, hs⟩
 
 theorem extendC_same (hW : W.Ok step) :
-    ∀ (c : Cond) (t : TT), good c = true → wfTT t = true →
-      Same W (extendC c t) c ∧ good (extendC c t) = true := by
-  intro c t hc ht
+    ∀ (c : Cond) (t : TT) (v : Bool), good c = true → wfTT t = true →
+      Same W (extendC c t v) c ∧ good (extendC c t v) = true := by
+  intro c t v hc ht
   have hgood := hc
   rw [good_eq] at hgood
   simp only [Bool.and_eq_true, List.all_eq_true] at hgood
@@ -255,18 +257,20 @@ theorem extendC_same (hW : W.Ok step) :
   split
   · -- logical: every child extended with the same tree
     rename_i hl
-    have ih : ∀ x ∈ c.ch, Same W (extendC x t) x ∧ good (extendC x t) = true :=
-      fun x hx => extendC_same hW x t (hgch x hx) ht
+    have ih : ∀ x ∈ c.ch, Same W (extendC x t v) x ∧ good (extendC x t v) = true :=
+      fun x hx => extendC_same hW x t v (hgch x hx) ht
     rw [extendAll_eq]
-    have hpw : Pw W (c.ch.map (extendC · t)) c.ch := Pw.of_map fun x hx => (ih x hx).1
+    have hpw : Pw W (c.ch.map (extendC · t v)) c.ch := Pw.of_map fun x hx => (ih x hx).1
     refine ⟨same_congr c hpw, ?_⟩
     rw [good_eq]
     simp only [Bool.and_eq_true, List.all_eq_true, List.mem_map]
     exact ⟨by rw [hpw.any_struct]; exact hne, by rintro _ ⟨x, hx, rfl⟩; exact (ih x hx).2⟩
   · split
-    · rename_i hl hct
+    · exact ⟨Same.refl _, hc⟩
+    split
+    · rename_i hl _ hct
       simp only [Bool.and_eq_true, beq_iff_eq] at hct
-      obtain ⟨hcx, hte⟩ := hct
+      obtain ⟨⟨hcx, hte⟩, -⟩ := hct
       have htw := ht
       rw [wfTT_eq] at htw
       simp only [Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, List.all_eq_true] at htw
@@ -307,10 +311,10 @@ theorem extendC_same (hW : W.Ok step) :
               · exact hg y hy
           | cons t' ts =>
             by_cases hsx : isStruct x = true
-            · have hxe := extendC_same hW x t' hx (hts t' (by simp))
+            · have hxe := extendC_same hW x t' false hx (hts t' (by simp))
               obtain ⟨cs', ps, he, hpw, hg, hp, hlen⟩ := ihx ts hxs'
                 (fun t hm => hts t (by simp [hm])) (fun t hm => hsz t (by simp [hm]))
-              refine ⟨extendC x t' :: cs', ps, ?_, .cons hxe.1 hpw, ?_, hp, ?_⟩
+              refine ⟨extendC x t' false :: cs', ps, ?_, .cons hxe.1 hpw, ?_, hp, ?_⟩
               · rw [extendS, ite_pos' hsx, he]; rfl
               · intro y hy
                 rcases List.mem_cons.1 hy with rfl | hy
@@ -428,8 +432,9 @@ theorem getElem!_set_eq {l : List Cond} {i k : Nat} {x : Cond} :
     · simp [h2]
   · simp [h1]
 
-theorem isPaddeable_extendC (c : Cond) (t : TT) : isPaddeable (extendC c t) = isPaddeable c := by
-  have := extendC_op c t
+theorem isPaddeable_extendC (c : Cond) (t : TT) (v : Bool) :
+    isPaddeable (extendC c t v) = isPaddeable c := by
+  have := extendC_op c t v
   rcases c with ⟨e, o, cv, ch⟩
   simp only [isPaddeable, isLogical, isComplex] at this ⊢
   rw [this.1, this.2]
@@ -441,7 +446,7 @@ def PadInv (W : World V S C) (cs acc : List Cond) : Prop :=
 
 theorem padInv_step (hW : W.Ok step) {cs acc : List Cond} {i : Nat} {t : TT}
     (h : PadInv W cs acc) (hi : isPaddeable acc[i]! = true) (ht : wfTT t = true) :
-    PadInv W cs (acc.set i (extendC acc[i]! t)) := by
+    PadInv W cs (acc.set i (extendC acc[i]! t true)) := by
   obtain ⟨hlen, hk⟩ := h
   refine ⟨by simp [hlen], fun k hkl => ?_⟩
   rw [getElem!_set_eq]
@@ -450,7 +455,7 @@ theorem padInv_step (hW : W.Ok step) {cs acc : List Cond} {i : Nat} {t : TT}
     obtain ⟨rfl, hil⟩ := hik
     obtain ⟨hs, hp, hg⟩ := hk i (hlen ▸ hil)
     have hgi : good acc[i]! = true := hg (hp ▸ hi)
-    have := extendC_same hW acc[i]! t hgi ht
+    have := extendC_same hW acc[i]! t true hgi ht
     exact ⟨this.1.trans hs, by rw [isPaddeable_extendC, hp], fun _ => this.2⟩
   · exact hk k hkl
 

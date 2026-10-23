@@ -1,4 +1,4 @@
-import { Condition, Operator } from "../../types"
+import { Condition, Encoding, Operator } from "../../types"
 import {
   createTypeTree,
   isArray,
@@ -7,7 +7,7 @@ import {
   TypeTree,
   typeTreeId,
 } from "../typeTree"
-import { isStructural } from "./effects"
+import { isInlined, isStructural } from "./effects"
 
 export function padToMatchTypeTree(condition: Condition): Condition {
   /*
@@ -54,10 +54,11 @@ export function padToMatchTypeTree(condition: Condition): Condition {
     for (let j = 0; j < nextChildren.length; j++) {
       if (j == i || !isPaddeable(nextChildren[j])) continue
 
-      nextChildren[i] = extendWithPassNodes(
-        nextChildren[i],
-        createTypeTree(nextChildren[j])!
-      )
+      // a logical node whose first child reads no parameter has no type tree
+      const typeTree = createTypeTree(nextChildren[j])
+      if (!typeTree) continue
+
+      nextChildren[i] = extendWithPassNodes(nextChildren[i], typeTree, true)
     }
   }
 
@@ -79,27 +80,36 @@ export function padToMatchTypeTree(condition: Condition): Condition {
  */
 function extendWithPassNodes(
   condition: Condition | undefined | null,
-  typeTree: TypeTree
+  typeTree: TypeTree,
+  variant = false
 ): Condition {
-  if (!condition) {
-    condition = {
-      operator: Operator.Pass,
-      paramType: typeTree.paramType,
-    }
-  }
+  if (!condition) return passFor(typeTree)
 
   if (isLogical(condition)) {
     return {
       ...condition,
       children: condition.children!.map((child) =>
-        extendWithPassNodes(child, typeTree)
+        extendWithPassNodes(child, typeTree, variant)
       ),
     }
   }
 
+  // A call interpretation that is itself a variant needs no padding (the
+  // contract accepts calldata variants of different types), and padding it
+  // with another interpretation's parameters would make it require them.
+  if (variant && condition.paramType === Encoding.AbiEncoded) {
+    return condition
+  }
+
   // only extend a node with a type tree of its own encoding: appending
-  // children to, e.g., an array would change what it checks
-  if (isComplex(condition) && condition.paramType === typeTree.paramType) {
+  // children to, e.g., an array would change what it checks. And never an
+  // inlined tuple: more fields make it longer, so every later parameter would
+  // be read at a different place.
+  if (
+    isComplex(condition) &&
+    condition.paramType === typeTree.paramType &&
+    !isInlined(condition)
+  ) {
     const children = (condition.children || []) as Condition[]
 
     /*
@@ -110,7 +120,7 @@ function extendWithPassNodes(
     let field = 0
     const extended = children.map((child) =>
       isStructural(child) && field < typeTree.children.length
-        ? extendWithPassNodes(child, typeTree.children[field++])
+        ? extendWithPassNodes(child, typeTree.children[field++], false)
         : child
     )
     return {
@@ -127,6 +137,17 @@ function extendWithPassNodes(
   }
 
   return condition
+}
+
+/** A Pass node that only describes the type tree. */
+function passFor(typeTree: TypeTree): Condition {
+  const node: Condition = {
+    operator: Operator.Pass,
+    paramType: typeTree.paramType,
+  }
+  return isComplex(node)
+    ? { ...node, children: typeTree.children.map(passFor) }
+    : node
 }
 
 /** createTypeTree succeeds on every node below (and including) `condition` */

@@ -26,6 +26,17 @@ import {
  * holds the rules for reordering and removing children.
  */
 export function normalizeCondition(condition: Condition): Condition {
+  // A Pluck's array and a Zip's fields must keep their types exactly (the
+  // contract checks that each Zip field matches the plucked element type),
+  // so their subtrees are left as written.
+  if (
+    condition.operator === Operator.Pluck ||
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+  ) {
+    return condition
+  }
+
   let result: Condition = {
     ...condition,
     children: condition.children?.map((child) => normalizeCondition(child)),

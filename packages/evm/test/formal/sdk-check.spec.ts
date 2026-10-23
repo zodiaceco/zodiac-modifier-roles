@@ -526,9 +526,429 @@ function mutateFlat(fs: FlatNode[]): FlatNode[] {
       break;
     }
     default:
-      if (i > 0) out[i].parent = int(i);
+      // a parent at or before the node (itself included); the root's parent
+      // field is ignored by the check
+      out[i].parent = i > 0 ? int(i + 1) : int(out.length + 2);
       break;
   }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Targeted cases: every operator with every encoding, and each rule at the
+// boundaries of its limits, inside contexts that are otherwise accepted
+// ---------------------------------------------------------------------------
+
+const S = () => node(E.Static, O.Pass);
+const D = () => node(E.Dynamic, O.Pass);
+const SEL = () => Uint8Array.from([0, 4, ...bytes(4)]);
+const call = (ch: N[]) => node(E.Abi, O.Matches, ch, SEL());
+const word = (v: number) => [
+  v >>> 24,
+  (v >>> 16) & 255,
+  (v >>> 8) & 255,
+  v & 255,
+];
+
+/** A WithinRatio compValue: slots, decimals, ratios, then raw adapter bytes. */
+const wrCv = (
+  s0: number,
+  d0: number,
+  s1: number,
+  d1: number,
+  min: number,
+  max: number,
+  tail: number[] = [],
+) => Uint8Array.from([s0, d0, s1, d1, ...word(min), ...word(max), ...tail]);
+/** An adapter blob of `n` bytes (`n` in the length byte, `m` bytes follow). */
+const blob = (n: number, m = n) => [n, ...bytes(m)];
+
+/**
+ * Calldata with static Plucks in slots 0 and 1 and array Plucks (of statics)
+ * in slots 2 and 3, then `args`; with `extras`, the root is
+ * `And(calldata, ...extras)`.
+ */
+function withPlucks(args: N[], extras: N[] = [], elem: () => N = S): N {
+  const root = call([
+    node(E.Static, O.Pluck, [], Uint8Array.from([0])),
+    node(E.Static, O.Pluck, [], Uint8Array.from([1])),
+    node(E.Array, O.Pluck, [elem()], Uint8Array.from([2])),
+    node(E.Array, O.Pluck, [elem()], Uint8Array.from([3])),
+    ...args,
+  ]);
+  return extras.length ? node(E.None, O.And, [root, ...extras]) : root;
+}
+
+const zip = (op: number, slots: number[], fields: N[]) =>
+  node(E.None, op, [node(E.Tuple, O.Matches, fields)], Uint8Array.from(slots));
+
+/** A compValue each operator accepts (in the `withPlucks` context). */
+function goodCv(op: number): Uint8Array {
+  switch (op) {
+    case O.Slice:
+      return Uint8Array.from([0, 0, 4]);
+    case O.Pluck:
+      return Uint8Array.from([7]);
+    case O.ZipSome:
+    case O.ZipEvery:
+      return Uint8Array.from([2, 3]);
+    case O.EqualTo:
+    case O.GreaterThan:
+    case O.LessThan:
+    case O.SGT:
+    case O.SLT:
+    case O.WithinAllowance:
+    case O.CallWithinAllowance:
+      return bytes(32);
+    case O.Bitmask:
+      return bytes(4);
+    case O.Custom:
+      return bytes(20);
+    case O.WithinRatio:
+      return wrCv(0, 18, 1, 6, 1, 2);
+    default:
+      return new Uint8Array(0);
+  }
+}
+
+type Case = { fs: FlatNode[]; modes: number[] };
+
+function targetedCases(): Case[] {
+  const out: Case[] = [];
+  const add = (root: N, modes = [0, 1]) =>
+    out.push({ fs: flattenN(root), modes });
+  const addFlat = (fs: FlatNode[], modes = [0, 1]) => out.push({ fs, modes });
+  /** `x` as an argument and as a sibling of the calldata under `And`. */
+  const both = (x: () => N) => {
+    add(withPlucks([x()]));
+    add(withPlucks([], [x()]));
+  };
+
+  // every operator (and placeholder codes) with every encoding (and an
+  // invalid one), with no, one or two children, and a few compValues
+  const kidSets: (() => N[])[] = [
+    () => [],
+    () => [S()],
+    () => [S(), S()],
+    () => [node(E.Tuple, O.Matches, [S(), S()])],
+  ];
+  for (const op of [...ALL_OPS, 3, 31])
+    for (let e = 0; e <= 7; e++)
+      for (const kids of kidSets)
+        for (const cv of [
+          () => goodCv(op),
+          () => new Uint8Array(0),
+          () => bytes(1),
+          () => bytes(32),
+        ])
+          both(() => node(e, op, kids(), cv()));
+
+  // compValue lengths at and around each operator's limits
+  const lens = (
+    mk: (cv: Uint8Array) => N,
+    ls: number[],
+    fill: (n: number) => Uint8Array = bytes,
+  ) => {
+    for (const l of ls) both(() => mk(fill(l)));
+  };
+  lens((cv) => node(E.Static, O.Custom, [], cv), [19, 20, 65535, 65536]);
+  lens((cv) => node(E.Dynamic, O.EqualTo, [], cv), [32, 63, 64, 65535]);
+  lens(
+    (cv) => node(E.Tuple, O.EqualTo, [S(), D()], cv),
+    [31, 32, 63, 64, 65535],
+  );
+  lens((cv) => node(E.Tuple, O.EqualTo, [S()], cv), [31, 32, 33]);
+  lens((cv) => node(E.Array, O.EqualTo, [S()], cv), [31, 32, 63, 64]);
+  lens((cv) => node(E.Dynamic, O.Bitmask, [], cv), [2, 4, 65534]);
+  for (const e of [E.Static, E.Ether])
+    for (const b of [0, 27, 28])
+      lens(
+        (cv) => node(e, O.WithinAllowance, [], cv),
+        [31, 32, 33, 34, 53, 54, 55, 65535],
+        (n) => {
+          const cv = bytes(n);
+          if (n > 33) [cv[32], cv[33]] = chance(0.5) ? [b, 0] : [0, b];
+          return cv;
+        },
+      );
+  for (const l of [0, 31, 32, 33])
+    both(() => node(E.None, O.CallWithinAllowance, [], bytes(l)));
+  for (const lb of [0, 1, 4, 31, 32, 33])
+    for (const extra of [0, 1, -1])
+      both(() =>
+        node(
+          E.Abi,
+          O.Matches,
+          [S()],
+          Uint8Array.from([0, lb, ...bytes(Math.max(lb + extra, 0))]),
+        ),
+      );
+  for (const e of [E.Static, E.Dynamic])
+    for (const size of [0, 1, 31, 32, 33])
+      both(() =>
+        node(
+          e,
+          O.Slice,
+          [node(E.Static, O.EqualTo, [], bytes(32))],
+          Uint8Array.from([0, int(4), size]),
+        ),
+      );
+  for (const slot of [253, 254, 255])
+    for (const e of [E.Static, E.Ether, E.Array])
+      both(() =>
+        node(e, O.Pluck, e === E.Array ? [S()] : [], Uint8Array.from([slot])),
+      );
+  // operators that take no compValue (or no children), with one
+  for (const op of [O.And, O.Or])
+    both(() => node(E.None, op, [S()], bytes(pick([1, 32]))));
+  for (const op of [O.ArraySome, O.ArrayEvery, O.ArrayTailMatches]) {
+    both(() => node(E.Array, op, [S()], bytes(1)));
+    both(() => node(E.Array, op, [S(), S()]));
+  }
+  for (const e of [E.None, E.Static, E.Tuple, E.Array, E.Ether, E.Abi])
+    both(() =>
+      node(
+        e,
+        O.Custom,
+        e === E.Tuple || e === E.Array || e === E.Abi ? [S()] : [],
+        bytes(20),
+      ),
+    );
+
+  // inlined sizes around 8191 bytes, and child counts around 1023
+  const statics = (k: number) => Array.from({ length: k }, S);
+  for (const k of [255, 256])
+    add(call([node(E.Tuple, O.Matches, statics(k))]), [1]);
+  add(
+    call([
+      node(E.Tuple, O.Matches, [
+        node(E.None, O.And, [node(E.Ether, O.Pass), S()]),
+        ...statics(255),
+      ]),
+    ]),
+    [1],
+  );
+  add(call(statics(1023)), [1]);
+  add(call(statics(1024)), [1]);
+
+  // WithinRatio compValues around each rule
+  const wrs: Uint8Array[] = [];
+  for (const [d0, d1] of [
+    [0, 0],
+    [27, 27],
+    [28, 0],
+    [0, 28],
+  ])
+    wrs.push(wrCv(0, d0, 1, d1, 1, 2));
+  for (const [mn, mx] of [
+    [0, 0],
+    [0, 5],
+    [5, 0],
+    [1, 2],
+    [2, 1],
+    [3, 3],
+    [0x01000000, 0x00ffffff],
+    [0x00ffffff, 0x01000000],
+  ])
+    wrs.push(wrCv(0, 18, 1, 6, mn, mx));
+  const tails = [
+    [0],
+    [0, 0],
+    [0, 0, 0],
+    blob(1),
+    blob(5),
+    blob(19),
+    blob(20),
+    blob(21),
+    blob(255),
+    blob(20, 19),
+    blob(20, 21),
+    [...blob(20), 0],
+    [0, ...blob(20)],
+    [...blob(20), ...blob(32)],
+    [...blob(20), ...blob(5)],
+    [...blob(20), ...blob(20, 19)],
+    [...blob(20), ...blob(20), 0],
+    [...blob(20), ...blob(20, 21)],
+  ];
+  for (const t of tails) wrs.push(wrCv(0, 18, 1, 6, 1, 2, t));
+  wrs.push(wrCv(0, 18, 1, 6, 1, 2).slice(0, 11));
+  for (const cv of wrs)
+    add(withPlucks([], [node(E.None, O.WithinRatio, [], cv)]));
+  // ... over an ether Pluck, an array Pluck, a missing slot
+  for (const [a, b] of [
+    [0, 4],
+    [4, 1],
+    [0, 2],
+    [3, 1],
+    [0, 9],
+  ])
+    add(
+      withPlucks(
+        [],
+        [
+          node(E.Ether, O.Pluck, [], Uint8Array.from([4])),
+          node(E.None, O.WithinRatio, [], wrCv(a, 18, b, 6, 1, 2)),
+        ],
+      ),
+    );
+  // ... in `Or` (each branch must assign the slots), over slots a Slice or a
+  // non-`Matches` container reads
+  for (const first of [true, false]) {
+    const wr = node(E.None, O.WithinRatio, [], wrCv(0, 18, 9, 6, 1, 2));
+    const other = node(E.Ether, O.Pass);
+    add(
+      withPlucks([], [node(E.None, O.Or, first ? [wr, other] : [other, wr])]),
+    );
+  }
+  const pluck9 = () => node(E.Static, O.Pluck, [], Uint8Array.from([9]));
+  const wr09 = () => node(E.None, O.WithinRatio, [], wrCv(0, 18, 9, 6, 1, 2));
+  for (const e of [E.Static, E.Dynamic])
+    add(
+      withPlucks(
+        [node(e, O.Slice, [pluck9()], Uint8Array.from([0, 0, 4]))],
+        [wr09()],
+      ),
+    );
+  for (const op of [O.Pass, O.Matches, O.Custom, O.EqualTo])
+    add(
+      withPlucks(
+        [
+          node(
+            E.Tuple,
+            op,
+            [pluck9(), S()],
+            op === O.Custom
+              ? bytes(20)
+              : op === O.EqualTo
+                ? bytes(64)
+                : new Uint8Array(0),
+          ),
+        ],
+        [wr09()],
+      ),
+    );
+
+  // Zips: repeated slots, Plucks below the Zip, slots of non-array Plucks
+  for (const op of [O.ZipSome, O.ZipEvery]) {
+    add(withPlucks([], [zip(op, [2, 3], [S(), S()])]));
+    add(withPlucks([], [zip(op, [2, 2, 3], [S(), S(), S()])]));
+    add(withPlucks([], [zip(op, [2, 3, 2], [S(), S(), S()])]));
+    add(withPlucks([], [zip(op, [2, 3], [pluck9(), S()])]));
+    add(
+      withPlucks(
+        [],
+        [
+          zip(
+            op,
+            [2, 3],
+            [
+              S(),
+              node(E.Static, O.Slice, [pluck9()], Uint8Array.from([0, 0, 4])),
+            ],
+          ),
+        ],
+      ),
+    );
+    add(withPlucks([], [zip(op, [2, 0], [S(), S()])]));
+    add(
+      withPlucks(
+        [],
+        [
+          zip(op, [2, 4], [S(), S()]),
+          node(E.Ether, O.Pluck, [], Uint8Array.from([4])),
+        ],
+      ),
+    );
+    add(withPlucks([], [zip(op, [2, 9], [S(), S()])]));
+    // the root's parent field pointing below the Zip
+    const fs = flattenN(withPlucks([], [zip(op, [2, 3], [S(), S()])]));
+    const z = fs.findIndex((f) => f.operator === op);
+    for (const p of [z, z + 1, 1]) {
+      const g = fs.map((f) => ({ ...f }));
+      g[0].parent = p;
+      addFlat(g);
+    }
+  }
+  // Zip field types vs the arrays' element types (variants of `bytes`)
+  const callS = () => call([S()]);
+  const callD = () => call([D()]);
+  for (const [elem, fields] of [
+    [callS, [D(), D()]],
+    [D, [callS(), callS()]],
+    [callS, [callD(), callS()]],
+    [D, [D(), node(E.None, O.Or, [D(), callS()])]],
+    [S, [D(), S()]],
+    [
+      () => node(E.Tuple, O.Matches, [S(), D()]),
+      [node(E.Tuple, O.Matches, [S(), D()]), S()],
+    ],
+  ] as [() => N, N[]][])
+    add(withPlucks([], [zip(O.ZipSome, [2, 3], fields)], elem));
+
+  // And/Or (in argument position and at the root) over types and Zips
+  const tup = (...ts: N[]) => node(E.Tuple, O.Matches, ts);
+  const kinds: (() => N)[] = [
+    S,
+    D,
+    () => node(E.Ether, O.Pass),
+    () => tup(S(), S()),
+    () => tup(S(), D()),
+    () => tup(tup(S())),
+    () => tup(tup(D())),
+    callS,
+    () => zip(O.ZipSome, [2, 3], [S(), S()]),
+  ];
+  for (const op of [O.And, O.Or])
+    for (const a of kinds)
+      for (const b of kinds) {
+        add(withPlucks([node(E.None, op, [a(), b()])]));
+        add(withPlucks([node(E.Array, O.Matches, [a(), b()])]));
+      }
+  for (const op of [O.And, O.Or])
+    for (const b of kinds) {
+      add(node(E.None, op, [callS(), b()]));
+      add(node(E.None, op, [b(), callS()]));
+      add(node(E.None, op, [b(), b()]));
+    }
+  add(node(E.None, O.Or, [callS(), call([D()])]));
+
+  // topology: the root's parent field, self-parents, BFS order at the end
+  for (const base of [
+    () => flattenN(call([node(E.Tuple, O.Matches, [S(), D()]), S()])),
+    () => flattenN(withPlucks([S()], [node(E.Ether, O.Pass)])),
+  ])
+    for (const mod of [
+      (g: FlatNode[]) => (g[0].parent = 1),
+      (g: FlatNode[]) => (g[0].parent = 5),
+      (g: FlatNode[]) =>
+        g.push({
+          parent: g.length,
+          paramType: E.Static,
+          operator: O.Pass,
+          compValue: new Uint8Array(0),
+        }),
+      (g: FlatNode[]) => (g[g.length - 1].parent = g.length - 1),
+      (g: FlatNode[]) => (g[1].parent = 1),
+      (g: FlatNode[]) =>
+        g.push({
+          parent: Math.max(g[g.length - 1].parent - 1, 0),
+          paramType: E.Static,
+          operator: O.Pass,
+          compValue: new Uint8Array(0),
+        }),
+      (g: FlatNode[]) =>
+        g.push({
+          parent: g[g.length - 1].parent + 1,
+          paramType: E.Static,
+          operator: O.Pass,
+          compValue: new Uint8Array(0),
+        }),
+    ]) {
+      const g = base().map((f) => ({ ...f }));
+      mod(g);
+      addFlat(g);
+    }
   return out;
 }
 
@@ -553,13 +973,20 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
 
   it(`agrees on ${CASES} random flat arrays (both strictness modes)`, function () {
     if (!existsSync(LEAN_BIN)) this.skip();
+    // the empty array is not `Packable` (the driver cannot express it)
+    for (const s of [false, true])
+      expect(checkStored([], s)).to.equal(undefined);
     rand = mulberry32(SEED);
-    const arrays = Array.from({ length: CASES }, () => {
-      if (chance(0.3)) return genFlat();
-      const fs = flattenN(genTree());
-      return chance(0.35) ? mutateFlat(fs) : fs;
-    });
-    const queries = arrays.flatMap((fs) => [0, 1].map((s) => ({ s, fs })));
+    const cases: Case[] = [
+      ...Array.from({ length: CASES }, () => {
+        if (chance(0.3)) return genFlat();
+        const fs = flattenN(genTree());
+        return chance(0.35) ? mutateFlat(fs) : fs;
+      }).map((fs) => ({ fs, modes: [0, 1] })),
+      ...targetedCases(),
+    ];
+    const arrays = cases.map((c) => c.fs);
+    const queries = cases.flatMap((c) => c.modes.map((s) => ({ s, fs: c.fs })));
     const res = spawnSync(LEAN_BIN, {
       input: queries.map((q) => line(q.s, q.fs)).join("\n") + "\n",
       maxBuffer: 1 << 28,
@@ -577,7 +1004,7 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
       tally.set(k, (tally.get(k) ?? 0) + 1);
       if (lean !== ts)
         mismatches.push(
-          `${line(q.s, q.fs)}\n    lean: ${lean}\n    ts:   ${ts}`,
+          `${line(q.s, q.fs).slice(0, 4000)}\n    lean: ${lean}\n    ts:   ${ts}`,
         );
     });
     for (const [k, n] of [...tally].sort()) console.log(`      ${k}: ${n}`);
