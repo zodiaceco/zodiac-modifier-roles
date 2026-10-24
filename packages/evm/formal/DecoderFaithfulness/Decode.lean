@@ -449,25 +449,31 @@ theorem size_static {data : Bytes} {l : Nat} {c : Condition} {w : Bytes}
   rw [ite_eq_right (by omega)]
   simp
 
-theorem noNav_eq (c : Condition) : noNav c = (!isNavOp c.operator && noNavAll c.children) := by
+theorem exactTy_eq (c : Condition) : exactTy c =
+    (c.encoding == .AbiEncoded || c.operator == .Slice || (!isNavOp c.operator && exactTyAll c.children)) := by
   rcases c with ⟨e, op, cs, i, sz, lb, cv⟩; rfl
 
-theorem noNavAll_get : ∀ {cs : List Condition}, noNavAll cs = true →
-    ∀ k (hk : k < cs.length), noNav cs[k] = true
-  | c :: cs, h, 0, _ => by simp only [noNavAll, Bool.and_eq_true] at h; exact h.1
+theorem exactTyAll_get : ∀ {cs : List Condition}, exactTyAll cs = true →
+    ∀ k (hk : k < cs.length), exactTy cs[k] = true
+  | c :: cs, h, 0, _ => by simp only [exactTyAll, Bool.and_eq_true] at h; exact h.1
   | c :: cs, h, k + 1, hk => by
-    simp only [noNavAll, Bool.and_eq_true] at h
-    exact noNavAll_get h.2 k (by simp at hk; omega)
+    simp only [exactTyAll, Bool.and_eq_true] at h
+    exact exactTyAll_get h.2 k (by simp at hk; omega)
 
-theorem noNav_parts {c : Condition} (h : noNav c = true) :
-    isNavOp c.operator = false ∧ noNavAll c.children = true := by
-  rw [noNav_eq] at h; simpa using h
+theorem exactTy_parts {c : Condition} (h : exactTy c = true) (he : c.encoding ≠ .AbiEncoded)
+    (ho : c.operator ≠ .Slice) : isNavOp c.operator = false ∧ exactTyAll c.children = true := by
+  rw [exactTy_eq] at h; simpa [he, ho] using h
+
+theorem ne_slice_of {op : Operator} (h : (isNavOp op = false ∧ True) ∨ op ≠ .Slice) : op ≠ .Slice := by
+  rcases h with ⟨h, -⟩ | h
+  · intro e; rw [e] at h; simp [isNavOp] at h
+  · exact h
 
 mutual
   /-- `AbiLocation.size` returns the length of the spec encoding, for a node
       whose subtree does not navigate (what `__input` reads the size of). -/
   theorem Desc.size_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, Desc s c u → noNav c = true → At data l (enc u) →
+      ∀ {c u l}, Desc s c u → exactTy c = true → At data l (enc u) →
       size data l (annotate c) = (enc u).length
     | _, _, _, .word he _ _ hw, _, hat => by
       simp only [enc] at hat ⊢; rw [hw]; exact size_static he hw hat
@@ -477,7 +483,10 @@ mutual
     | _, _, _, .sliceBytes he _ _ _ _ _ hu, _, hat => size_dynamicNode hlen (.inl he) hu hat
     | _, _, _, .call he _ _ _ _ _, _, hat => size_dynamicNode hlen (.inr he) trivial hat
     | c, _, l, .tuple (vs := vs) he hne hk hall0 hpre hop, hnn, hat => by
-      have hp := noNav_parts hnn
+      have hp := exactTy_parts hnn (by rw [he]; decide) (ne_slice_of (by
+        rcases hop with ⟨h, -⟩ | h
+        · exact .inl ⟨h, trivial⟩
+        · rw [h]; exact .inr (by decide)))
       have hkeq : c.children.length = vs.length := by
         by_cases hlt : c.children.length < vs.length
         · have := (hpre hlt).2
@@ -502,10 +511,13 @@ mutual
         intro l' hl'
         simp only [List.getElem_map]
         exact DescAll.sizes hlen hall hp.2 k hkc hkv l' hl'
-    | c, _, l, .array (vs := vs) c0 cs he hch h0 _ _ _, hnn, hat => by
-      have hp := noNav_parts hnn
-      have hn0 : noNav c0 = true := by
-        have := noNavAll_get hp.2 0 (by rw [hch]; simp)
+    | c, _, l, .array (vs := vs) c0 cs he hch h0 _ _ hop, hnn, hat => by
+      have hp := exactTy_parts hnn (by rw [he]; decide) (ne_slice_of (by
+        rcases hop with ⟨h, -⟩ | h | h | h | h
+        · exact .inl ⟨h, trivial⟩
+        all_goals (rw [h]; exact .inr (by decide))))
+      have hn0 : exactTy c0 = true := by
+        have := exactTyAll_get hp.2 0 (by rw [hch]; simp)
         simpa [hch] using this
       have hb := hat.bound
       rw [enc_array] at hat hb ⊢
@@ -527,25 +539,25 @@ mutual
       rw [sizeArrayLoop_eq hlen (l + 32) (annotate c0) rfl vs 0 (headLen vs) h0
         (fun l' v hv hat' => DescS.size_eq hlen (h0 v hv) hn0 hat') h1 h2 h3]
       simp [encTuple]
-    | _, _, _, .logical _ _ hop _ _ _ _, hnn, _ => by
-      have hp := noNav_parts hnn
+    | _, _, _, .logical _ he hop _ _ _ _, hnn, _ => by
+      have hp := exactTy_parts hnn (by rw [he]; decide) (by rcases hop with h | h <;> rw [h] <;> decide)
       rcases hop with h | h <;> (rw [h] at hp; simp [isNavOp] at hp)
 
   theorem DescS.size_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {c u l}, DescS s c u → noNav c = true → At data l (enc u) →
+      ∀ {c u l}, DescS s c u → exactTy c = true → At data l (enc u) →
       size data l (annotate c) = (enc u).length
     | _, _, _, .desc h, hnn, hat => Desc.size_eq hlen h hnn hat
     | _, _, _, .stray _ hb hu, _, hat => BytesLike.size_eq hlen hb hu hat
 
   theorem DescAll.sizes {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
-      ∀ {cs vs}, DescAll s cs vs → noNavAll cs = true →
+      ∀ {cs vs}, DescAll s cs vs → exactTyAll cs = true →
       ∀ k (hk : k < cs.length) (hkv : k < vs.length) l, At data l (enc vs[k]) →
       size data l (annotate cs[k]) = (enc vs[k]).length
     | _, _, .cons h _, hnn, 0, _, _, _, hat => by
-      simp only [noNavAll, Bool.and_eq_true] at hnn
+      simp only [exactTyAll, Bool.and_eq_true] at hnn
       exact DescS.size_eq hlen h hnn.1 hat
     | _, _, .cons _ hs, hnn, k + 1, hk, hkv, l, hat => by
-      simp only [noNavAll, Bool.and_eq_true] at hnn
+      simp only [exactTyAll, Bool.and_eq_true] at hnn
       simp only [List.getElem_cons_succ] at hat ⊢
       exact DescAll.sizes hlen hs hnn.2 k (by simp at hk; omega) (by simp at hkv; omega) l hat
 end

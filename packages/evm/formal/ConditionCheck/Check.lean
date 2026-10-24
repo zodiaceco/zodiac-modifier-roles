@@ -238,18 +238,18 @@ def isArrayOp (op : Operator) : Bool :=
 
 /-- One node, given its children's kinds `ks`. A container that reads its
     whole value (`EqualTo` on a tuple, ...) has a type description below it,
-    no navigating node (`noNavAll`). -/
+    no navigating node (`exactTyAll`). -/
 def classifyNode (s : Bool) (e : Encoding) (op : Operator) (cs : List Condition) (lb : Nat)
     (cv : Bytes) (ks : List K) : Option K :=
   match e with
   | .Static => if leafOk cs op || sliceOk op cs cv ks then some (.ty .static) else none
   | .Dynamic => if leafOk cs op || sliceOk op cs cv ks then some (.ty .dynamic) else none
   | .Tuple =>
-    if !cs.isEmpty && ((!isNavOp op && noNavAll cs) || op == .Matches) then
+    if !cs.isEmpty && ((!isNavOp op && exactTyAll cs) || op == .Matches) then
       (allTy ks).map fun ts => .ty (.tuple ts (op == .Matches))
     else none
   | .Array =>
-    if (!isNavOp op && noNavAll cs) || isArrayOp op then
+    if (!isNavOp op && exactTyAll cs) || isArrayOp op then
       match ks with
       | .ty t :: rest =>
         -- the template `children[0]` reads every element: the most specific
@@ -259,7 +259,7 @@ def classifyNode (s : Bool) (e : Encoding) (op : Operator) (cs : List Condition)
       | _ => none
     else none
   | .AbiEncoded =>
-    if !cs.isEmpty && (op == .Matches || (op == .Pass && noNavAll cs)) then
+    if !cs.isEmpty && (op == .Matches || (op == .Pass && exactTyAll cs)) then
       (allTy ks).map fun ts => .ty (.call lb ts (op == .Matches))
     else none
   | .None =>

@@ -655,9 +655,16 @@ const logicalTy = (s: boolean, ks: readonly K[]): Ty | undefined => {
   return undefined
 }
 
-/** `noNav`: no node of the subtree navigates (a type description). */
-const noNav = (c: Node): boolean =>
-  !isNavOp(c.operator) && c.children.every(noNav)
+/**
+ * `exactTy`: a type description, as the children of a node that reads its
+ * whole value must be (their sizes give the length read). No node of the
+ * subtree navigates, except below nested calldata (sized as `bytes`) and a
+ * `Slice` (a word or `bytes`), whose own children do not change their size.
+ */
+const exactTy = (c: Node): boolean =>
+  c.encoding === Enc.AbiEncoded ||
+  c.operator === Op.Slice ||
+  (!isNavOp(c.operator) && c.children.every(exactTy))
 
 const logicalKind = (s: boolean, ks: readonly K[]): K | undefined => {
   if (ks.length === 0) return undefined
@@ -690,7 +697,7 @@ const classifyNode = (
       if (
         !(
           cs.length > 0 &&
-          ((!isNavOp(op) && cs.every(noNav)) || op === Op.Matches)
+          ((!isNavOp(op) && cs.every(exactTy)) || op === Op.Matches)
         )
       )
         return undefined
@@ -698,7 +705,7 @@ const classifyNode = (
       return ts && { k: "ty", t: { k: "tuple", ts, o: op === Op.Matches } }
     }
     case Enc.Array: {
-      if (!((!isNavOp(op) && cs.every(noNav)) || isArrayOp(op)))
+      if (!((!isNavOp(op) && cs.every(exactTy)) || isArrayOp(op)))
         return undefined
       const k0 = ks[0]
       if (k0 === undefined || k0.k !== "ty") return undefined
@@ -713,7 +720,7 @@ const classifyNode = (
       if (
         !(
           cs.length > 0 &&
-          (op === Op.Matches || (op === Op.Pass && cs.every(noNav)))
+          (op === Op.Matches || (op === Op.Pass && cs.every(exactTy)))
         )
       )
         return undefined

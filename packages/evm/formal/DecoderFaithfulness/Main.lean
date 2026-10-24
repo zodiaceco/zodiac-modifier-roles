@@ -569,11 +569,12 @@ theorem isNavOp_annotate (c : Condition) : isNavOp (annotate c).operator = isNav
   rw [annotate_operator]; split <;> simp_all [isNavOp]
 
 /-- A described node that does not navigate has a subtree that does not. -/
-theorem Desc.noNav_of {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
-    (hn : isNavOp c.operator = false) : noNav c = true := by
-  rw [noNav_eq, hn]
+theorem Desc.exactTy_of {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
+    (hn : isNavOp c.operator = false) : exactTy c = true := by
+  rw [exactTy_eq, hn]
+  suffices h : exactTyAll c.children = true by simp [h]
   match hD with
-  | .word _ hch _ _ | .bytes _ hch _ _ => simp [hch, noNavAll]
+  | .word _ hch _ _ | .bytes _ hch _ _ => simp [hch, exactTyAll]
   | .sliceWord _ h _ _ _ _ _ | .sliceBytes _ h _ _ _ _ _ => rw [h] at hn; simp [isNavOp] at hn
   | .tuple _ _ _ _ _ h =>
     rcases h with ⟨_, h⟩ | h
@@ -601,7 +602,7 @@ theorem Desc.input_eq {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {
     rw [hmeta.2]
     cases hs : u.isStatic
     · simp only [Bool.false_eq_true, ite_false]
-      simp [Desc.size_eq hlen hD (hD.noNav_of hn) hat]
+      simp [Desc.size_eq hlen hD (hD.exactTy_of hn) hat]
     · simp only [ite_true]
       rw [ite_eq_left (by omega)]
   unfold input
@@ -951,7 +952,7 @@ theorem decoder_custom_operand {s : Bool}
     rw [hmeta.2]
     cases hs : u.isStatic
     · simp only [Bool.false_eq_true, ite_false]
-      simp [Desc.size_eq hlen hD0 (hD0.noNav_of (by rw [← isNavOp_annotate, hop]; rfl)) key]
+      simp [Desc.size_eq hlen hD0 (hD0.exactTy_of (by rw [← isNavOp_annotate, hop]; rfl)) key]
     · simp only [ite_true]
       rw [ite_eq_left (by omega)]
   · right; right; left

@@ -379,7 +379,7 @@ theorem node_word {s : Bool} {e : Encoding} {op : Operator} {cs : List Condition
 theorem node_tuple {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .Tuple op cs lb cv ks = some k) :
     ∃ ts, k = .ty (.tuple ts (op == .Matches)) ∧ cs ≠ [] ∧
-      ((isNavOp op = false ∧ noNavAll cs = true) ∨ op = .Matches) ∧ allTy ks = some ts := by
+      ((isNavOp op = false ∧ exactTyAll cs = true) ∨ op = .Matches) ∧ allTy ks = some ts := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
@@ -409,13 +409,13 @@ theorem meetOf_spec {s : Bool} {ks : List K} {t : Ty} (h : meetOf s ks = some t)
 theorem node_array {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .Array op cs lb cv ks = some k) :
     ∃ t0, k = .ty (.array t0) ∧
-      ((isNavOp op = false ∧ noNavAll cs = true) ∨ isArrayOp op = true) ∧
+      ((isNavOp op = false ∧ exactTyAll cs = true) ∨ isArrayOp op = true) ∧
       ks ≠ [] ∧ (∀ k', k' ∈ ks → ∃ t', k' = .ty t' ∧ Ty.le s t0 t' = true) ∧
       ((∃ rest, ks = .ty t0 :: rest) ∨ (s = true ∧ t0 = .dynamic ∧ ∀ k', k' ∈ ks → K.bytesLikeTy k' = true)) := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
-    have hc' : (isNavOp op = false ∧ noNavAll cs = true) ∨ isArrayOp op = true := by
+    have hc' : (isNavOp op = false ∧ exactTyAll cs = true) ∨ isArrayOp op = true := by
       simpa [Bool.or_eq_true, Bool.and_eq_true] using hc
     split at h
     · rename_i t rest
@@ -446,7 +446,7 @@ theorem node_array {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
 theorem node_abi {s : Bool} {op : Operator} {cs : List Condition} {lb : Nat}
     {cv : Bytes} {ks : List K} {k : K} (h : classifyNode s .AbiEncoded op cs lb cv ks = some k) :
     ∃ ts, k = .ty (.call lb ts (op == .Matches)) ∧ cs ≠ [] ∧
-      (op = .Matches ∨ (op = .Pass ∧ noNavAll cs = true)) ∧ allTy ks = some ts := by
+      (op = .Matches ∨ (op = .Pass ∧ exactTyAll cs = true)) ∧ allTy ks = some ts := by
   simp only [classifyNode] at h
   split at h
   · rename_i hc
@@ -614,7 +614,7 @@ theorem Desc.call_inv {s : Bool} {c : Condition} {u : Val} (hD : Desc s c u)
     ∃ pre args, u = .call pre args ∧ c.leadingBytes = pre.length ∧
       c.children.length ≤ args.length ∧ DescAll s c.children (args.take c.children.length) ∧
       (c.operator = .Matches ∨
-        (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true)) := by
+        (c.operator = .Pass ∧ c.children.length = args.length ∧ exactTyAll c.children = true)) := by
   cases hD with
   | call _ hlb _ hk hall hop => exact ⟨_, _, rfl, hlb, hk, hall, hop⟩
   | _ => simp_all
@@ -898,7 +898,7 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
       | nil => rw [hc] at hlen; exact absurd (List.eq_nil_of_length_eq_zero hlen) hne
       | cons c0 cs => exact ⟨c0, cs, rfl⟩
     have hm0 : c0 ∈ c.children := by rw [hcs]; simp
-    have hop' : (isNavOp c.operator = false ∧ noNavAll c.children = true) ∨
+    have hop' : (isNavOp c.operator = false ∧ exactTyAll c.children = true) ∨
         c.operator = .Matches ∨ c.operator = .ArraySome ∨
         c.operator = .ArrayEvery ∨ c.operator = .ArrayTailMatches := by
       rcases hop with h | h
@@ -934,7 +934,7 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
           simp only [List.getElem_take]
           exact (ih _ (List.getElem_mem h1) hc (hg2 i (by simp at h2; omega) (by omega))).1
       have hop' : c.operator = .Matches ∨
-          (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true) := by
+          (c.operator = .Pass ∧ c.children.length = args.length ∧ exactTyAll c.children = true) := by
         rcases hop with h | ⟨h, hn'⟩
         · exact .inl h
         · refine .inr ⟨h, ?_, hn'⟩

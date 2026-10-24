@@ -151,6 +151,30 @@ suite("checkStored()", () => {
     expect(verdict(tree)).toBe("C4(S,..)")
   })
 
+  it("accepts nested calldata and Slice below a whole-value check", () => {
+    const slice: N = {
+      e: Enc.Static,
+      o: Op.Slice,
+      cv: "0x001f01",
+      ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
+    }
+    // AbiLocation.size reads nested calldata as bytes and a Slice as its
+    // word, whatever checks sit below them
+    const plucked = call([
+      pluck(Enc.Array, 0, [call([pass(Enc.Static)], "0x0004aabbccdd")]),
+    ])
+    expect(verdict(plucked)).not.toBe("rejected")
+    const tuple = call([pass(Enc.Tuple, [slice, pass(Enc.Static)])])
+    expect(verdict(tuple)).toBe("C4(T(S,S),..)")
+    // a logical node or a tuple Matches below one has no exact type
+    const or: N = { e: Enc.None, o: Op.Or, ch: [eqWord(1), eqWord(2)] }
+    expect(verdict(call([pass(Enc.Tuple, [or, pass(Enc.Static)])]))).toBe(
+      "rejected"
+    )
+    const inner: N = { e: Enc.Tuple, o: Op.Matches, ch: [pass(Enc.Dynamic)] }
+    expect(verdict(call([pass(Enc.Tuple, [inner])]))).toBe("rejected")
+  })
+
   it("accepts variants only with s = true", () => {
     const a = call([pass(Enc.Static)], "0x000411111111")
     const b = call([pass(Enc.Dynamic)], "0x000422222222")

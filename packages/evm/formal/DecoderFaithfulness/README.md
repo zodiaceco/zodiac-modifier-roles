@@ -147,9 +147,11 @@ by hand; `MockLocator` does not expose them.
   calldata describe the first fields of a value (trailing `Pass` children
   pruned; a tuple only if it is not inlined), and requires the children of
   an operator that reads its whole value (`EqualTo` on a tuple, ..., and
-  `Pass` containers) to be a type description without navigating nodes
-  (`noNav`): their sizes give the length read. Integrity accepts a `Matches`
-  there; the theorems say nothing about such trees. Also assumed: inlined sizes ≤ 8191 bytes
+  `Pass` containers) to be a type description (`exactTy`): their sizes give
+  the length read. No node of it navigates, except below nested calldata
+  (sized as `bytes`) and a `Slice` (a word or `bytes`), whose own children do
+  not change their size. Integrity also accepts a tuple `Matches` or an
+  `And`/`Or` there; the theorems say nothing about such trees. Also assumed: inlined sizes ≤ 8191 bytes
   (Integrity rejects larger), and the flat-BFS-array-to-tree view of `Topology`.
 - **Pluck slots** (in `Eval`): when a Zip reads slot `k`, it holds a location
   where the Pluck node with slot `k` was evaluated. Integrity makes the slot's

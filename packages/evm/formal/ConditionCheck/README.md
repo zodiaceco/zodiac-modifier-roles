@@ -45,7 +45,7 @@ as structural with a type, non-structural (`ns`), or a Zip:
 | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | `Static` / `Dynamic` leaf                  | no children, operator not `And`/`Or`/`Matches`/array/`Slice`/`Zip`                                                                                                            | `static`/`dynamic` |
 | `Static` / `Dynamic` `Slice`               | one `Static` child of kind `static` (a leaf or another slice), slice size 1–32                                                                                                | `static`/`dynamic` |
-| `Tuple`                                    | ≥ 1 child, all structural; operator `Matches` or a non-navigating one (`Pass`, `EqualTo`, ...)                                                                                | `tuple ts`         |
+| `Tuple`                                    | ≥ 1 child, all structural; operator `Matches`, or a non-navigating one (`Pass`, `EqualTo`, ...) over type descriptions (`exactTy`)                                          | `tuple ts`         |
 | `Array`                                    | ≥ 1 child, all structural with the same type `t` (or, with `s = true`, all bytes-like: a variant array, typed `array dynamic`); `Matches`, array iterators, or non-navigating | `array t`          |
 | `AbiEncoded`                               | ≥ 1 child, all structural; `Matches` or `Pass`                                                                                                                                | `call lb ts`       |
 | `None` / `EtherValue` leaf                 | no children, non-navigating operator                                                                                                                                          | `ns`               |
@@ -174,12 +174,16 @@ unmutated and mutated runs, every difference fell into one of these classes.
   `MockEvaluator` read the following parameter correctly. The decoder proof
   doesn't model it, so the check rejects it; the SDK has no reason to produce
   it.
-- a navigating node (`Matches`, `And`, `Or`, ...) below an operator that reads
-  its whole value (`EqualTo`, a comparison or `Custom` on a tuple or array,
-  or below a `Pass` container). The operator hashes or passes the whole
-  value; the children only describe its type, through their sizes. `Desc`
-  requires such a type description (`noNav`): a pruned `Matches` there would
-  give a shorter size. The SDK only produces `Pass` descriptions.
+- a tuple `Matches` or an `And`/`Or` below an operator that reads its whole
+  value (`EqualTo`, a comparison, `Pluck` or `Custom` on a tuple or array, or
+  below a `Pass` container). The operator hashes or passes the whole value;
+  the children only describe its type, through their sizes. `Desc` requires
+  such a type description (`exactTy`): a pruned `Matches` there would give a
+  shorter size, and an `Or` of different types has none. Nested calldata
+  and `Slice` nodes are allowed there with any checks below them:
+  `AbiLocation.size` reads them as `bytes` or a word. (In a fuzz run of 3,000
+  trees the check rejected 232 trees Integrity accepts, 334 before nested
+  calldata and `Slice` were allowed; about half of the rest are this class.)
 
 **Integrity rejects, but the tree is read correctly; the check accepts:**
 

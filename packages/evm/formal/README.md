@@ -634,10 +634,9 @@ rejected by Integrity or ran out of gas on corrupted array lengths).
 `checkStored` instead of Integrity, packed by the SDK's `packConditions` and
 evaluated from that buffer without Integrity
 (`MockEvaluator.evaluatePackedWith`), as the `...Packed` setters store them.
-3,000 cases: 1,220 compared, 0 differences. 167 trees the SDK check accepts
-and Integrity rejects (`UnsuitableChildTypeTree`) were evaluated too; all
-fall in the three documented classes (`ConditionCheck/README.md`), one of
-them new.
+3,000 cases (seed 31): 1,147 compared, 0 differences. 237 of them are trees
+the SDK check accepts and Integrity rejects (`UnsuitableChildTypeTree`; see
+`ConditionCheck/README.md` for the classes).
 
 Found: `AbiLocation.children` allocates the location array before decoding,
 so an array length above $`2^{64}-1`$ panics there; the decoder transcription

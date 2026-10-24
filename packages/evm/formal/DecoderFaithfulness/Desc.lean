@@ -48,14 +48,17 @@ def isNavOp : Operator → Bool
   | _ => false
 
 mutual
-  /-- No node of the subtree navigates: a type description, as the
-      children of an operator that reads its whole value (`EqualTo` on a
-      tuple, ...) are. Their sizes give the length of the value read. -/
-  def noNav : Condition → Bool
-    | ⟨_, op, cs, _, _, _, _⟩ => !isNavOp op && noNavAll cs
-  def noNavAll : List Condition → Bool
+  /-- A type description: what the children of an operator that reads its
+      whole value (`EqualTo` on a tuple, `Pluck`, ...) must be, since their
+      sizes give the length of the value read. No node of the subtree
+      navigates, except below nested calldata (which `AbiLocation.size`
+      reads as `bytes`) and a `Slice` (a word or `bytes`): their own
+      children do not change their size. -/
+  def exactTy : Condition → Bool
+    | ⟨e, op, cs, _, _, _, _⟩ => e == .AbiEncoded || op == .Slice || (!isNavOp op && exactTyAll cs)
+  def exactTyAll : List Condition → Bool
     | [] => true
-    | c :: cs => noNav c && noNavAll cs
+    | c :: cs => exactTy c && exactTyAll cs
 end
 
 /-- Values encoded as `bytes`: plain bytes, or nested calldata. -/
@@ -165,7 +168,7 @@ mutual
         c.encoding = .Tuple → c.children ≠ [] → c.children.length ≤ vs.length →
         DescAll s c.children (vs.take c.children.length) →
         (c.children.length < vs.length → isInlined c = false ∧ c.operator = .Matches) →
-        ((isNavOp c.operator = false ∧ noNavAll c.children = true) ∨ c.operator = .Matches) →
+        ((isNavOp c.operator = false ∧ exactTyAll c.children = true) ∨ c.operator = .Matches) →
         Desc s c (.tuple vs)
     | array {c : Condition} {vs : List Val} (c0 : Condition) (cs : List Condition) :
         c.encoding = .Array → c.children = c0 :: cs →
@@ -174,7 +177,7 @@ mutual
           DescS s c.children[i] vs[i]) →
         (∀ j (hj : j < c.children.length) (hk : c.children.length ≤ vs.length),
           DescS s c.children[j] (vs[vs.length - c.children.length + j]'(by omega))) →
-        ((isNavOp c.operator = false ∧ noNavAll c.children = true) ∨ c.operator = .Matches ∨
+        ((isNavOp c.operator = false ∧ exactTyAll c.children = true) ∨ c.operator = .Matches ∨
           c.operator = .ArraySome ∨ c.operator = .ArrayEvery ∨ c.operator = .ArrayTailMatches) →
         Desc s c (.array vs)
     /-- The children describe the first arguments (all of them under `Pass`). -/
@@ -183,7 +186,7 @@ mutual
         c.children.length ≤ args.length →
         DescAll s c.children (args.take c.children.length) →
         (c.operator = .Matches ∨
-          (c.operator = .Pass ∧ c.children.length = args.length ∧ noNavAll c.children = true)) →
+          (c.operator = .Pass ∧ c.children.length = args.length ∧ exactTyAll c.children = true)) →
         Desc s c (.call pre args)
     | logical {c : Condition} {u : Val} (ch0 : Condition) :
         c.encoding = .None → (c.operator = .And ∨ c.operator = .Or) →
