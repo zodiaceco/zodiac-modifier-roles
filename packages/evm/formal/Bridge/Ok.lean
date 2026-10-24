@@ -15,7 +15,7 @@ namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
 section
-variable (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat)
+variable (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) (P : Nat → Option Condition)
 
 theorem headD_mem_or {α} {P : α → Prop} {l : List α} {d : α} (hd : P d) (h : ∀ x ∈ l, P x) :
     P (l.headD d) := by
@@ -114,9 +114,59 @@ theorem sliceT_ok (P : T → Prop) (hf : P failT) (e : Nat) (cv : List Nat) (kid
     · repeat' split
       all_goals first | exact hf | exact hk _
 
+/-- A thunk that picks a thunk by the slots it starts from. -/
+theorem keeps_pick {f : Slots → T} (h : ∀ sl, KeepsT (f sl)) : KeepsT fun sl cs => f sl sl cs :=
+  fun sl cs => h sl sl cs
+
+theorem pure_pick {f : Slots → T} (h : ∀ sl, PureT (f sl)) : PureT fun sl cs => f sl sl cs := by
+  refine ⟨fun sl => Classical.choose (h sl) sl, fun sl cs => ?_⟩
+  exact Classical.choose_spec (h sl) sl cs
+
+theorem charger_pick {step : CM → Bytes × Nat → Option CM} {f : Slots → T}
+    (h : ∀ sl, ChargerT step (f sl)) : ChargerT step fun sl cs => f sl sl cs := by
+  refine ⟨fun sl => Classical.choose (h sl) sl, fun sl cs => ?_⟩
+  exact Classical.choose_spec (h sl) sl cs
+
+theorem zipF_ok (Q : T → Prop) (hf : Q failT)
+    (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l))
+    (hor : ∀ l : List T, (∀ t ∈ l, Q t) → Q (orT l))
+    (every : Bool) (ks : List Nat) (kid : Val' → T) (hk : ∀ w, Q (kid w)) (sl : Slots) :
+    Q (zipF data P every ks kid sl) := by
+  unfold zipF
+  split
+  · exact hf
+  · rename_i fl _
+    split
+    · have hl : ∀ t ∈ (List.range (fl.headD (default, [])).2.length).map
+          (fun i => kid (zipAt fl i)), Q t := by
+        intro t ht
+        simp only [List.mem_map] at ht
+        obtain ⟨i, -, rfl⟩ := ht
+        exact hk _
+      split
+      · exact hseq _ hl
+      · exact hor _ hl
+    · exact hf
+
+theorem zipF_every_ok (Q : T → Prop) (hf : Q failT)
+    (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l))
+    (ks : List Nat) (kid : Val' → T) (hk : ∀ w, Q (kid w)) (sl : Slots) :
+    Q (zipF data P true ks kid sl) := by
+  unfold zipF
+  split
+  · exact hf
+  · rename_i fl _
+    split
+    · simp only [ite_true]
+      exact hseq _ fun t ht => by
+        simp only [List.mem_map] at ht
+        obtain ⟨i, -, rfl⟩ := ht
+        exact hk _
+    · exact hf
+
 theorem contractWorld_keeps (e o : Nat) (cv : List Nat) (ss : List (Val' → T)) (h14 : o ≠ 14)
     (hss : ∀ s ∈ ss, ∀ v, KeepsT (s v)) (v : Val') :
-    KeepsT ((contractWorld avatar env data n).ext e o cv ss v) := by
+    KeepsT ((contractWorld avatar env data n P).ext e o cv ss v) := by
   have kid : ∀ w, KeepsT ((ss.headD passK) w) := fun w =>
     headD_mem_or (P := fun s => KeepsT (s w)) (fun _ _ => rfl) (fun s hs => hss s hs w)
   have hf : KeepsT failT := fun _ _ => rfl
@@ -132,11 +182,13 @@ theorem contractWorld_keeps (e o : Nat) (cv : List Nat) (ss : List (Val' → T))
     | exact tailT_ok data KeepsT hf (fun _ h => seqT_keeps h) _ _ hss v
     | exact matchesArrT_ok data KeepsT hf (fun _ h => seqT_keeps h) _ _ _ hss v
     | exact sliceT_ok data KeepsT hf _ _ _ kid v
+    | exact keeps_pick (f := zipF data P _ _ _) fun sl => zipF_ok data P KeepsT hf
+        (fun _ h => seqT_keeps h) (fun _ h => orT_keeps h) _ _ _ kid sl
 
 theorem contractWorld_pure (e o : Nat) (cv : List Nat) (ss : List (Val' → T))
     (h14 : o ≠ 14) (h22 : o ≠ 22) (h28 : o ≠ 28) (h30 : o ≠ 30)
     (hss : ∀ s ∈ ss, ∀ v, PureT (s v)) (v : Val') :
-    PureT ((contractWorld avatar env data n).ext e o cv ss v) := by
+    PureT ((contractWorld avatar env data n P).ext e o cv ss v) := by
   have kid : ∀ w, PureT ((ss.headD passK) w) := fun w =>
     headD_mem_or (P := fun s => PureT (s w)) (passK_pure w) (fun s hs => hss s hs w)
   simp only [contractWorld]
@@ -153,11 +205,13 @@ theorem contractWorld_pure (e o : Nat) (cv : List Nat) (ss : List (Val' → T))
     | exact tailT_ok data PureT failT_pure (fun _ h => seqT_pure h) _ _ hss v
     | exact matchesArrT_ok data PureT failT_pure (fun _ h => seqT_pure h) _ _ _ hss v
     | exact sliceT_ok data PureT failT_pure _ _ _ kid v
+    | exact pure_pick (f := zipF data P _ _ _) fun sl => zipF_ok data P PureT failT_pure
+        (fun _ h => seqT_pure h) (fun _ h => orT_pure h) _ _ _ kid sl
 
 theorem contractWorld_charger (e o : Nat) (cv : List Nat) (ss : List (Val' → T))
     (h14 : o ≠ 14) (h2 : o ≠ 2) (h6 : o ≠ 6) (h10 : o ≠ 10)
     (hss : ∀ s ∈ ss, ∀ v, ChargerT (consumeM env.balance) (s v)) (v : Val') :
-    ChargerT (consumeM env.balance) ((contractWorld avatar env data n).ext e o cv ss v) := by
+    ChargerT (consumeM env.balance) ((contractWorld avatar env data n P).ext e o cv ss v) := by
   have hf : ChargerT (consumeM env.balance) failT := failT_pure.charger _
   have kid : ∀ w, ChargerT (consumeM env.balance) ((ss.headD passK) w) := fun w =>
     headD_mem_or (P := fun s => ChargerT (consumeM env.balance) (s w))
@@ -177,13 +231,16 @@ theorem contractWorld_charger (e o : Nat) (cv : List Nat) (ss : List (Val' → T
     | exact matchesArrT_ok data (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h)
         _ _ _ hss v
     | exact sliceT_ok data (ChargerT (consumeM env.balance)) hf _ _ _ kid v
+    | exact h10 rfl |> False.elim
+    | exact charger_pick (f := zipF data P _ _ _) fun sl => zipF_every_ok data P
+        (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h) _ _ kid sl
 
 /-- **The contract satisfies the normalization proof's assumptions.** -/
-theorem contractWorld_ok : (contractWorld avatar env data n).Ok (consumeM env.balance) where
+theorem contractWorld_ok : (contractWorld avatar env data n P).Ok (consumeM env.balance) where
   comm := consumeM_comm env.balance
-  keeps := contractWorld_keeps avatar env data n
-  pure := contractWorld_pure avatar env data n
-  charger := contractWorld_charger avatar env data n
+  keeps := contractWorld_keeps avatar env data n P
+  pure := contractWorld_pure avatar env data n P
+  charger := contractWorld_charger avatar env data n P
 
 end
 end Bridge

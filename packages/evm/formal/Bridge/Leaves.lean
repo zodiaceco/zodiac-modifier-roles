@@ -165,7 +165,7 @@ theorem bitmaskStatus_ne_revert (b : BitmaskStatus) : bitmaskStatus b ≠ revert
 theorem toOp_eq (o : Nat) : toOp o = opN o := rfl
 
 section
-variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n f l : Nat)
+variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : Nat) (P : Nat → Option Condition) (f l : Nat)
   (d m : Condition) (e o : Nat) (cv : List Nat) (ss : List (Val' → T)) (cons : List Consumption)
   (sl : Slots)
 
@@ -175,8 +175,8 @@ theorem checkT_apply (b : Slots → Bool) (cs : CM) : checkT b sl cs = (if b sl 
 theorem cmp_rel (ho : 15 ≤ o ∧ o ≤ 20) (hop : d.operator = opN o)
     (hin : input data l d = inputAt data e m l) (hcv : d.compValue = cmpValue avatar e o cv m) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e o cv ss (m, l) sl (toMap cons)) := by
-  have hext : extW avatar env data n e o cv ss (m, l) =
+      (extW avatar env data n P e o cv ss (m, l) sl (toMap cons)) := by
+  have hext : extW avatar env data n P e o cv ss (m, l) =
       checkT fun _ => cmpOk avatar env data e o cv (m, l) := by
     obtain ⟨h1, h2⟩ := ho
     have : o = 15 ∨ o = 16 ∨ o = 17 ∨ o = 18 ∨ o = 19 ∨ o = 20 := by omega
@@ -198,7 +198,7 @@ theorem cmp_rel (ho : 15 ≤ o ∧ o ≤ 20) (hop : d.operator = opN o)
 theorem bitmask_rel (hop : d.operator = .Bitmask) (hcv : d.compValue = toBytes cv)
     (hlay : d.inlined = m.inlined ∧ d.size = m.size) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 21 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 21 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_bitmask env data n f l d cons sl hop]
   show Rel _ (checkT (fun _ => bitmaskOk data cv (m, l)) sl (toMap cons))
   rw [checkT_apply]
@@ -208,7 +208,7 @@ theorem bitmask_rel (hop : d.operator = .Bitmask) (hcv : d.compValue = toBytes c
 
 theorem empty_rel (hop : d.operator = .Empty) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 4 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 4 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_empty env data n f l d cons sl hop]
   show Rel _ (checkT (fun _ => data.length = 0) sl (toMap cons))
   rw [checkT_apply]
@@ -220,7 +220,7 @@ theorem empty_rel (hop : d.operator = .Empty) :
 include henv in
 theorem ratio_rel (hop : d.operator = .WithinRatio) (hcv : d.compValue = toBytes cv) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 23 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 23 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_ratio env data n f l d cons sl hop]
   show Rel _ (checkT (fun sl => env.ratio (toBytes cv) sl.values = sOk) sl (toMap cons))
   rw [checkT_apply, hcv]
@@ -229,7 +229,7 @@ theorem ratio_rel (hop : d.operator = .WithinRatio) (hcv : d.compValue = toBytes
 include henv in
 theorem cwa_rel (hop : d.operator = .CallWithinAllowance) (hcv : d.compValue = toBytes cv) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 30 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 30 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_cwa env data n f l d cons sl hop]
   show Rel _ (chargesT env.balance (fun _ => (charge env (toBytes cv) 1).map ([·])) sl (toMap cons))
   unfold chargesT
@@ -242,7 +242,7 @@ include henv in
 theorem wa_rel (hop : d.operator = .WithinAllowance) (hcv : d.compValue = toBytes cv)
     (hin : input data l d = inputAt data e m l) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 28 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 28 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_wa env data n f l d cons sl hop]
   show Rel _ (chargesT env.balance (fun _ => allowanceCharge env data e cv (m, l)) sl (toMap cons))
   unfold chargesT allowanceCharge
@@ -267,7 +267,7 @@ include henv in
 theorem custom_rel (hop : d.operator = .Custom) (hcv : d.compValue = toBytes cv)
     (hcs : (if d.size ≠ 0 then d.size else size data l d) = customSize data e m l) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 22 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 22 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_custom env data n f l d cons sl hop]
   show Rel _ (chargesT env.balance (customCharges env data e cv (m, l)) sl (toMap cons))
   unfold chargesT customCharges
@@ -287,7 +287,7 @@ theorem cvAt_toBytes (cv : List Nat) : cvAt (toBytes cv) 0 = cv.head?.map (· % 
 theorem pluck_rel (hop : d.operator = .Pluck) (hcv : d.compValue = toBytes cv)
     (hin : input data l d = inputAt data e m l) (hk : ∃ k ∈ cv.head?, k % 256 < n) :
     Rel (evalC env data n (f + 1) l d cons sl)
-      (extW avatar env data n e 14 cv ss (m, l) sl (toMap cons)) := by
+      (extW avatar env data n P e 14 cv ss (m, l) sl (toMap cons)) := by
   rw [evalC_pluck env data n f l d cons sl hop]
   show Rel _ (pluckT env data n e cv (m, l) sl (toMap cons))
   unfold pluckT

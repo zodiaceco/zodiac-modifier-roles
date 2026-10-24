@@ -12,9 +12,9 @@ namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
 section
-variable (avatar : Bytes)
+variable (avatar : Bytes) (P : Nat → Option Condition)
 
-local notation "F" => fun (c : Cond) (m : Condition) => Fits avatar c (D avatar c) m
+local notation "F" => fun (c : Cond) (m : Condition) => Fits avatar P c (D avatar c) m
 
 /-- The layout metadata depend on the encoding and the children only. -/
 theorem raw_same {c c' : Cond} (he : c.enc = c'.enc) (hc : c.ch = c'.ch) :
@@ -71,7 +71,7 @@ theorem PDesc.fits {c : Cond} {m : Condition} (h : PDesc avatar c m) : F c m := 
 theorem PDesc.raw {c : Cond} {m : Condition} (h : PDesc avatar c m) :
     isInl c = m.inlined ∧ (isInl c = true → rawSz avatar c = m.size) ∧
       (m.inlined = true → 0 < m.size) ∧ (m.inlined = false → m.size = 0) :=
-  (h.fits avatar).raw avatar (isStruct_pass (h.op avatar) (h.enc avatar))
+  (h.fits avatar fun _ => none).raw avatar (fun _ => none) (isStruct_pass (h.op avatar) (h.enc avatar))
 
 theorem D_encoding_same {c c' : Cond} (he : c.enc = c'.enc) : (D avatar c).encoding = (D avatar c').encoding := by
   rw [D_encoding, D_encoding, he]
@@ -140,11 +140,12 @@ theorem normalize_fits : ∀ (k : Nat) (c : Cond) (m : Condition), F c m → F (
     rw [normalize]
     split
     · exact h
+    rename_i hkw
     dsimp only
     have IH : ∀ x m', F x m' → F (normalize k x) m' := fun x m' => normalize_fits k x m'
-    exact sortB_fits avatar (pushDownOr_fits avatar _ (fun n hn => IH n m hn)
-      (unwrap_fits avatar (dedupe_fits avatar (flatten_fits avatar
-        (prune_fits avatar (fits_children avatar k IH h))))))
+    exact sortB_fits avatar P (pushDownOr_fits avatar P _ (fun n hn => IH n m hn)
+      (unwrap_fits avatar P (dedupe_fits avatar P (flatten_fits avatar P
+        (prune_fits avatar P (fits_children avatar P k IH h (by simpa using hkw)))))))
 
 end
 end Bridge

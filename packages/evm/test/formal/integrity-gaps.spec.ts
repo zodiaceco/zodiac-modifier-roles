@@ -1561,6 +1561,7 @@ describe("Integrity gaps (fuzz)", function () {
     let sdkStricter = 0;
     const sdkLooser = new Map<string, { n: number; example: string }>();
     const looserLines: string[] = [];
+    const stricterLines: string[] = [];
     const chain: (string | undefined)[] = [];
     for (let c = 0; c < queries.length; c++) {
       if (c % 200 === 0) await fresh();
@@ -1581,7 +1582,10 @@ describe("Integrity gaps (fuzz)", function () {
         }
         if (verdict === undefined) {
           rejected++;
-          if (intErr === undefined) sdkStricter++;
+          if (intErr === undefined) {
+            sdkStricter++;
+            stricterLines.push(q.line.split(" ").pop()!);
+          }
           chain.push(undefined);
           continue;
         }
@@ -1627,7 +1631,10 @@ describe("Integrity gaps (fuzz)", function () {
       }
     }
     const asked = queries.filter((_, c) => chain[c] !== undefined);
-    if (REPORT && PACKED) writeFileSync(REPORT + ".looser", looserLines.join("\n") + "\n");
+    if (REPORT && PACKED) {
+      writeFileSync(REPORT + ".looser", looserLines.join("\n") + "\n");
+      writeFileSync(REPORT + ".stricter", stricterLines.join("\n") + "\n");
+    }
     if (REPORT) {
       writeFileSync(REPORT, asked.map((q) => q.line).join("\n") + "\n");
       writeFileSync(

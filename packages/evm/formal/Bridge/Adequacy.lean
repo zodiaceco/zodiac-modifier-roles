@@ -97,11 +97,12 @@ theorem height_mem {c x : Cond} (h : x ∈ c.ch) : height x < height c := by
 
 theorem cvOk_eq (n : Nat) (c : Cond) :
     CvOk n c = ((c.op = 5 → (prefixOf c.enc c.cv).length ≤ 32) ∧ (c.op = 13 → 3 ≤ c.cv.length) ∧
-      (c.op = 14 → ∃ k ∈ c.cv.head?, k % 256 < n) ∧ ∀ x ∈ c.ch, CvOk n x) := by
+      (c.op = 14 → ∃ k ∈ c.cv.head?, k % 256 < n) ∧ (c.op = 10 ∨ c.op = 11 → ∀ k ∈ c.cv, k % 256 < n) ∧
+      ∀ x ∈ c.ch, CvOk n x) := by
   rcases c with ⟨e, o, cv, ch⟩
   rw [CvOk]
 
 theorem CvOk.child {n : Nat} {c x : Cond} (h : CvOk n c) (hx : x ∈ c.ch) : CvOk n x := by
-  rw [cvOk_eq] at h; exact h.2.2.2 x hx
+  rw [cvOk_eq] at h; exact h.2.2.2.2 x hx
 
 end Bridge

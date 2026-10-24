@@ -36,21 +36,27 @@ theorem Rel.agree {r r' : Res} {x : Option CM × Slots} (h : Rel r x) (h' : Rel 
 
 section
 variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : Nat)
+  (P : Nat → Option Condition)
 
 include henv in
 /-- **Normalization keeps the contract's verdict** on every calldata that
-    decodes as the layout both trees fit. -/
+    decodes as the layout both trees fit, from slots that hold sound
+    locations for the slots `A`, when neither tree's Zips read a slot
+    outside `A` that no Pluck wrote before (`za`). -/
 theorem normalize_calldata (k : Nat) {c : Cond} {m : Condition}
-    (hc : Fits avatar c (D avatar c) m) (hc' : Fits avatar (normalize k c) (D avatar (normalize k c)) m)
+    (hc : Fits avatar P c (D avatar c) m) (hc' : Fits avatar P (normalize k c) (D avatar (normalize k c)) m)
     (hcv : CvOk n c) (hcv' : CvOk n (normalize k c)) (l : Nat) (hdec : Decodable data m l)
     (fuel fuel' : Nat) (hf : height c < fuel) (hf' : height (normalize k c) < fuel')
-    (cons : List Consumption) (sl : Slots) :
+    (cons : List Consumption) (sl : Slots) (A : Nat → Bool) (hA : Inv data P A sl)
+    (hza : (za c A).isSome) (hza' : (za (normalize k c) A).isSome) :
     Agree (evalC env data n fuel l (D avatar c) cons sl)
       (evalC env data n fuel' l (D avatar (normalize k c)) cons sl) := by
-  have h1 := adequacy avatar env henv data n hc fuel l cons sl hf hcv hdec
-  have h2 := adequacy avatar env henv data n hc' fuel' l cons sl hf' hcv' hdec
-  rw [normalize_sound (contractWorld_ok avatar env data n) k c] at h2
-  exact h1.agree h2
+  obtain ⟨B, hB⟩ := Option.isSome_iff_exists.1 hza
+  obtain ⟨B', hB'⟩ := Option.isSome_iff_exists.1 hza'
+  have h1 := adequacy avatar env henv data n P hc fuel l cons sl A B hf hcv hdec hB hA
+  have h2 := adequacy avatar env henv data n P hc' fuel' l cons sl A B' hf' hcv' hdec hB' hA
+  rw [normalize_sound (contractWorld_ok avatar env data n P) k c] at h2
+  exact h1.rel.agree h2.rel
 
 end
 end Bridge

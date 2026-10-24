@@ -14,9 +14,9 @@ namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
 section
-variable (avatar : Bytes)
+variable (avatar : Bytes) (P : Nat → Option Condition)
 
-local notation "F" => fun (c : Cond) (m : Condition) => Fits avatar c (D avatar c) m
+local notation "F" => fun (c : Cond) (m : Condition) => Fits avatar P c (D avatar c) m
 
 /-! ## Containers -/
 
@@ -66,7 +66,7 @@ theorem lay_transfer {c c' : Cond} {m : Condition} (h : isInl c = isInl c' ∧ (
 def env0 : Env := ⟨0, fun _ => 0, fun _ _ => (0, 0), fun _ _ _ _ => .inl 1, fun _ _ => 0⟩
 
 theorem isStruct_normalize (k : Nat) (c : Cond) : isStruct (normalize k c) = isStruct c :=
-  (normalize_same (W := contractWorld [] env0 [] 0) (contractWorld_ok [] env0 [] 0) k c).2
+  (normalize_same (W := contractWorld [] env0 [] 0 fun _ => none) (contractWorld_ok [] env0 [] 0 fun _ => none) k c).2
 
 theorem Plain.ch {c : Cond} (h : Plain c) : ∀ x ∈ c.ch, Plain x := by
   rcases h with ⟨_, _, _, _, h⟩; exact h
@@ -117,7 +117,7 @@ theorem layEq_abi {x x' : Cond} {m : Condition} (he : x.enc = 5) (he' : x'.enc =
   exact ⟨by rw [b1, ← a1]; exact hl.1, by rw [b2, ← a2]; exact hl.2⟩
 
 /-- A check of the plain `bytes` value of a variant is plain. -/
-theorem Fits.plain_dyn {c : Cond} {d : Condition} (h : Fits avatar c d dynLay) (he : c.enc = 2) :
+theorem Fits.plain_dyn {c : Cond} {d : Condition} (h : Fits avatar P c d dynLay) (he : c.enc = 2) :
     Plain c := by
   cases h with
   | pass _ _ _ _ hp _ _ => exact hp
@@ -129,6 +129,8 @@ theorem Fits.plain_dyn {c : Cond} {d : Condition} (h : Fits avatar c d dynLay) (
   | arr _ h _ _ _ _ _ _ _ => omega
   | varAbi _ h _ _ _ _ _ _ _ _ => omega
   | varDyn hv _ _ _ => simp [dynLay, isVarLay] at hv
+  | zip _ h => omega
+  | zipLogical _ h => omega
 
 /-- A `Matches` on calldata that fits a call layout: the `tup` facts. -/
 theorem Fits.abi_tup {c : Cond} {k : Condition} (h : F c k) (h5 : c.op = 5) (he : c.enc = 5)
@@ -148,6 +150,8 @@ theorem Fits.abi_tup {c : Cond} {k : Condition} (h : F c k) (h5 : c.op = 5) (he 
   | leaf hop => simp [leafOp, h5] at hop
   | varAbi _ _ _ hv _ _ _ _ _ _ => simp [isVarLay, hke] at hv
   | varDyn _ he' => omega
+  | zip hop => omega
+  | zipLogical hop => omega
 
 theorem fits_children_tup (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m') {c : Cond}
     {m : Condition} (h5 : c.op = 5) (he : c.enc = 3 ∨ c.enc = 5)
@@ -165,8 +169,8 @@ theorem fits_children_tup (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x)
   have hraw := container_raw avatar (c := c) (c' := { c with ch := c.ch.map (normalize k) }) rfl
     hlen.symm (fun i h1 h2 => by
       simp only [List.getElem_map]
-      have r1 := (hch i h1).raw avatar (hs _ (List.getElem_mem h1))
-      have r2 := (IH _ _ (hch i h1)).raw avatar
+      have r1 := (hch i h1).raw avatar P (hs _ (List.getElem_mem h1))
+      have r2 := (IH _ _ (hch i h1)).raw avatar P
         (by rw [isStruct_normalize]; exact hs _ (List.getElem_mem h1))
       refine ⟨r1.1.trans r2.1.symm, fun hi => (r1.2.1 hi).trans (r2.2.1 (r2.1.trans (r1.1.symm.trans hi))).symm⟩)
   obtain ⟨hsn', hl'⟩ := lay_transfer avatar hraw hsn hl
@@ -176,24 +180,80 @@ theorem fits_children_tup (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x)
   obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hx'
   rw [isStruct_normalize]; exact hs x hx
 
+theorem NsOk.noZip {c : Cond} (h : NsOk c) : hasZip c = false := by
+  induction h with
+  | @leaf c _ hch hop =>
+    rw [hasZip_eq, hch]
+    unfold nsOp at hop
+    simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true, decide_eq_true_eq] at hop
+    have h10 : c.op ≠ 10 := by omega
+    have h11 : c.op ≠ 11 := by omega
+    simp [h10, h11]
+  | @logical c hop _ _ ih =>
+    rw [hasZip_eq]
+    have h10 : c.op ≠ 10 := by omega
+    have h11 : c.op ≠ 11 := by omega
+    have : c.ch.any hasZip = false := by
+      rw [List.any_eq_false]; intro x hx; simp [ih x hx]
+    simp [h10, h11, this]
+
+/-- An `And`/`Or` whose children all fit `m` fits `m`. -/
+theorem logical_withCh {c : Cond} {m : Condition} (hop : c.op = 1 ∨ c.op = 2) (he : c.enc = 0)
+    (l : List Cond) (hl : ∀ x ∈ l, F x m) : F { c with ch := l } m := by
+  by_cases hs : isStruct { c with ch := l } = true
+  · obtain ⟨hl', hsn'⟩ := logical_lay avatar P (c := { c with ch := l }) hop he hs hl
+    exact .logical hop he hs rfl hl' hl hsn'
+  · have hs' : ∀ x ∈ l, isStruct x = false := by
+      intro x hx
+      rw [isStruct_eq] at hs
+      have : (c.op == 1 || c.op == 2) = true := by rcases hop with h | h <;> simp [h]
+      simp only [this, ite_true, Bool.not_eq_true, List.any_eq_false] at hs
+      simpa using hs x hx
+    have hk := fun x hx => (hl x hx).nsOk avatar P (hs' x hx)
+    have h10 : c.op ≠ 10 := by omega
+    have h11 : c.op ≠ 11 := by omega
+    have h14 : c.op ≠ 14 := by omega
+    by_cases hz : ∃ x ∈ l, hasZip x = true
+    · obtain ⟨x, hx, hzx⟩ := hz
+      have hm : m.inlined = false := by
+        rcases hk x hx with ⟨hn, -⟩ | ⟨-, hm⟩
+        · rw [hn.noZip] at hzx; cases hzx
+        · exact hm
+      refine .zipLogical hop he (by simpa using hs) ?_ rfl hm hl
+      rw [hasZip_eq]; simp only [Bool.or_eq_true, List.any_eq_true]; exact Or.inr ⟨x, hx, hzx⟩
+    · have hall : ∀ x ∈ l, NsOk x ∧ ∀ k ∈ plucks x, P k = none := by
+        intro x hx
+        rcases hk x hx with h | ⟨hzx, -⟩
+        · exact h
+        · exact absurd ⟨x, hx, hzx⟩ hz
+      have hns : NsOk { c with ch := l } := .logical hop he fun x hx => (hall x hx).1
+      refine .ns hns.isStruct hns rfl fun k hk' => ?_
+      rw [plucks_eq] at hk'
+      simp only [h14, ite_false, List.nil_append, List.mem_flatMap] at hk'
+      obtain ⟨x, hx, hkx⟩ := hk'
+      exact (hall x hx).2 k hkx
+
 theorem fits_children (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m') {c : Cond}
-    {m : Condition} (h : F c m) : F { c with ch := c.ch.map (normalize k) } m := by
+    {m : Condition} (h : F c m) (hkw : keepsAsWritten c = false) :
+    F { c with ch := c.ch.map (normalize k) } m := by
   have h0 := h
   cases h with
+  | zip hop =>
+    unfold keepsAsWritten at hkw; rcases hop with h | h <;> simp [h] at hkw
   | pass _ _ _ _ hp _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
   | slice _ _ _ _ _ _ hp _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
   | leaf _ _ _ _ _ _ hp _ _ _ _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
-  | ns hs hns _ =>
+  | ns hs hns _ hpl =>
     cases hns with
     | leaf _ hch _ => rw [hch]; simp only [List.map_nil]; rw [← hch]; cases c; exact h0
     | logical hop he hall =>
-      have hall' : ∀ x ∈ c.ch.map (normalize k), NsOk x := by
-        intro x' hx'
+      exact logical_withCh avatar P hop he _ fun x' hx' => by
         obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hx'
-        have hf := IH x m (.ns (hall x hx).isStruct (hall x hx) rfl)
-        exact hf.nsOk avatar (by rw [isStruct_normalize]; exact (hall x hx).isStruct)
-      have hns' : NsOk { c with ch := c.ch.map (normalize k) } := .logical hop he hall'
-      exact .ns hns'.isStruct hns' rfl
+        exact IH x m (.ns (hall x hx).isStruct (hall x hx) rfl fun j hj => hpl j (plucks_child hx hj))
+  | zipLogical hop he _ _ _ _ hch =>
+    exact logical_withCh avatar P hop he _ fun x' hx' => by
+      obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hx'
+      exact IH x m (hch x hx)
   | logical hop he hs _ _ hch _ =>
     have hch' : ∀ x ∈ ({ c with ch := c.ch.map (normalize k) } : Cond).ch,
         F x m := by
@@ -202,15 +262,15 @@ theorem fits_children (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m')
       exact IH x m (hch x hx)
     have hs' : isStruct { c with ch := c.ch.map (normalize k) } = true := by
       rw [isStruct_withCh _ _ (any_map_normalize k c.ch)]; exact hs
-    obtain ⟨hl', hsn'⟩ := logical_lay avatar (c := { c with ch := c.ch.map (normalize k) }) hop he hs' hch'
+    obtain ⟨hl', hsn'⟩ := logical_lay avatar P (c := { c with ch := c.ch.map (normalize k) }) hop he hs' hch'
     exact .logical hop he hs' rfl hl' hch' hsn'
   | tup h5 he _ hm hl hlb hs hk hch hsn =>
-    exact fits_children_tup avatar k IH h5 he hm hl hlb hs hk hch hsn
+    exact fits_children_tup avatar P k IH h5 he hm hl hlb hs hk hch hsn
   | varAbi h5 he _ hv hl hmem hke hkey hu hf =>
-    obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar h5 he hke
+    obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar P h5 he hke
     exact .varAbi h5 he rfl hv (layEq_abi avatar he he hl) hmem hke hkey hu
-      (fits_children_tup avatar k IH h5 (.inr he) hm' hl' hlb' hs' hk' hch' hsn')
-  | varDyn _ he2 _ hf => rw [map_normalize_plain k (hf.plain_dyn avatar he2)]; cases c; exact h0
+      (fits_children_tup avatar P k IH h5 (.inr he) hm' hl' hlb' hs' hk' hch' hsn')
+  | varDyn _ he2 _ hf => rw [map_normalize_plain k (hf.plain_dyn avatar P he2)]; cases c; exact h0
   | arr hop he _ hm hl hne hs hch hsn =>
     have hraw : isInl c = isInl { c with ch := c.ch.map (normalize k) } ∧
         (isInl c = true → rawSz avatar c = rawSz avatar { c with ch := c.ch.map (normalize k) }) := by
@@ -344,50 +404,41 @@ theorem prune_fits {c : Cond} {m : Condition} (h : F c m) : F (prune c) m := by
       · unfold dynTuple at h'; simp at h'; omega
     | slice hop => omega
     | leaf hop => simp [leafOp, h5] at hop
-    | tup _ he _ hm hl hlb hs hk hch hsn => exact prune_tup avatar h5 he hcase hm hl hlb hs hk hch hsn
+    | tup _ he _ hm hl hlb hs hk hch hsn => exact prune_tup avatar P h5 he hcase hm hl hlb hs hk hch hsn
     | varAbi _ he _ hv hl hmem hke hkey hu hf =>
-      obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar h5 he hke
+      obtain ⟨hm', hl', hlb', hs', hk', hch', hsn'⟩ := hf.abi_tup avatar P h5 he hke
       exact .varAbi h5 he rfl hv (layEq_abi avatar he he hl) hmem hke hkey hu
-        (prune_tup avatar h5 (.inr he) hcase hm' hl' hlb' hs' hk' hch' hsn')
+        (prune_tup avatar P h5 (.inr he) hcase hm' hl' hlb' hs' hk' hch' hsn')
     | varDyn _ he2 _ _ =>
       exfalso
       rcases hcase with h' | h'
       · omega
       · unfold dynTuple at h'; simp [he2] at h'
+    | zip hop => omega
+    | zipLogical hop => omega
   · exact h
 
 /-! ## Logical nodes -/
-
-/-- An `And`/`Or` whose children all fit `m` fits `m`. -/
-theorem logical_withCh {c : Cond} {m : Condition} (hop : c.op = 1 ∨ c.op = 2) (he : c.enc = 0)
-    (l : List Cond) (hl : ∀ x ∈ l, F x m) : F { c with ch := l } m := by
-  by_cases hs : isStruct { c with ch := l } = true
-  · obtain ⟨hl', hsn'⟩ := logical_lay avatar (c := { c with ch := l }) hop he hs hl
-    exact .logical hop he hs rfl hl' hl hsn'
-  · have hns : NsOk { c with ch := l } := by
-      refine .logical hop he fun x hx => (hl x hx).nsOk avatar ?_
-      rw [isStruct_eq] at hs
-      have : (c.op == 1 || c.op == 2) = true := by rcases hop with h | h <;> simp [h]
-      simp only [this, ite_true, Bool.not_eq_true, List.any_eq_false] at hs
-      simpa using hs x hx
-    exact .ns hns.isStruct hns rfl
 
 /-- The children of a logical node that fits `m` fit `m`. -/
 theorem Fits.logical_ch {c : Cond} {m : Condition} (h : F c m) (hop : c.op = 1 ∨ c.op = 2) :
     c.enc = 0 ∧ ∀ x ∈ c.ch, F x m := by
   cases h with
   | logical _ he _ _ _ hch _ => exact ⟨he, hch⟩
-  | ns _ hns _ =>
+  | ns _ hns _ hpl =>
     cases hns with
     | leaf _ _ hop' => exfalso; rcases hop with h | h <;> simp [nsOp, h] at hop'
-    | logical _ he hall => exact ⟨he, fun x hx => .ns (hall x hx).isStruct (hall x hx) rfl⟩
+    | logical _ he hall =>
+      exact ⟨he, fun x hx => .ns (hall x hx).isStruct (hall x hx) rfl fun j hj => hpl j (plucks_child hx hj)⟩
+  | zipLogical _ he _ _ _ _ hch => exact ⟨he, hch⟩
+  | zip hop' => omega
   | pass h0 => omega
   | tup h5 => omega
   | arr hop' => omega
   | slice h13 => omega
   | leaf hop' => exfalso; rcases hop with h | h <;> simp [leafOp, h] at hop'
   | varAbi h5 => omega
-  | varDyn _ he2 _ hf => exact absurd hop (by have := hf.dyn_op avatar he2; omega)
+  | varDyn _ he2 _ hf => exact absurd hop (by have := hf.dyn_op avatar P he2; omega)
 
 theorem withCh_eq_self {c : Cond} {l : List Cond} (h : l = c.ch) : ({ c with ch := l } : Cond) = c := by
   subst h; cases c; rfl
@@ -397,15 +448,15 @@ theorem flatten_fits {c : Cond} {m : Condition} (h : F c m) : F (flatten c) m :=
   split
   · rename_i hlog
     have hop := logical_op hlog
-    obtain ⟨he, hch⟩ := h.logical_ch avatar hop
-    apply logical_withCh avatar hop he
+    obtain ⟨he, hch⟩ := h.logical_ch avatar P hop
+    apply logical_withCh avatar P hop he
     intro x hx
     unfold flattenCh at hx
     obtain ⟨y, hy, hxy⟩ := List.mem_flatMap.1 hx
     split at hxy
     · rename_i hyop
       have hyop' : y.op = 1 ∨ y.op = 2 := by simp at hyop; omega
-      exact ((hch y hy).logical_ch avatar hyop').2 x hxy
+      exact ((hch y hy).logical_ch avatar P hyop').2 x hxy
     · simp at hxy; subst hxy; exact hch x hy
   · exact h
 
@@ -428,15 +479,15 @@ theorem dedupe_fits {c : Cond} {m : Condition} (h : F c m) : F (dedupe c) m := b
   split
   · rename_i hc
     have hop := logical_op (by simp only [Bool.and_eq_true] at hc; exact hc.1)
-    obtain ⟨he, hch⟩ := h.logical_ch avatar hop
-    exact logical_withCh avatar hop he _ fun x hx => hch x (mem_dedupeL hx)
+    obtain ⟨he, hch⟩ := h.logical_ch avatar P hop
+    exact logical_withCh avatar P hop he _ fun x hx => hch x (mem_dedupeL hx)
   · exact h
 
 theorem unwrap_fits {c : Cond} {m : Condition} (h : F c m) : F (unwrap c) m := by
   unfold unwrap
   split
   · rename_i hlog
-    obtain ⟨_, hch⟩ := h.logical_ch avatar (logical_op hlog)
+    obtain ⟨_, hch⟩ := h.logical_ch avatar P (logical_op hlog)
     split
     · rename_i x hx; exact hch x (by rw [hx]; simp)
     · exact h
@@ -447,8 +498,8 @@ theorem sortB_fits {c : Cond} {m : Condition} (h : F c m) : F (sortB c) m := by
   split
   · rename_i hc
     have hop := logical_op (by simp only [Bool.and_eq_true] at hc; exact hc.1)
-    obtain ⟨he, hch⟩ := h.logical_ch avatar hop
-    exact logical_withCh avatar hop he _ fun x hx => hch x ((sortCh_perm c.ch).mem_iff.1 hx)
+    obtain ⟨he, hch⟩ := h.logical_ch avatar P hop
+    exact logical_withCh avatar P hop he _ fun x hx => hch x ((sortCh_perm c.ch).mem_iff.1 hx)
   · exact h
 
 /-! ## Step: pushing an `Or` down -/
@@ -493,9 +544,11 @@ theorem Fits.tup_inv {x : Cond} {m : Condition} (h : F x m) (h5 : x.op = 5) (he 
   | leaf hop => simp [leafOp, h5] at hop
   | varAbi _ _ _ hv => rw [hv] at hnv; cases hnv
   | varDyn hv => rw [hv] at hnv; cases hnv
+  | zip hop => omega
+  | zipLogical hop => omega
 
 theorem orNode_fits {hs : List Cond} {m : Condition} (h : ∀ x ∈ hs, F x m) : F (orNode hs) m := by
-  have := logical_withCh avatar (c := ⟨0, 2, [], []⟩) (Or.inr rfl) rfl hs h
+  have := logical_withCh avatar P (c := ⟨0, 2, [], []⟩) (Or.inr rfl) rfl hs h
   exact this
 
 theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
@@ -506,7 +559,7 @@ theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
     simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Bool.not_eq_true',
       List.all_eq_true, List.any_eq_false] at hcond
     obtain ⟨⟨⟨h2, hlen⟩, henc⟩, _⟩ := hcond
-    obtain ⟨_, hch⟩ := h.logical_ch avatar (Or.inr h2)
+    obtain ⟨_, hch⟩ := h.logical_ch avatar P (Or.inr h2)
     have hhead : c.ch.head! ∈ c.ch := by
       obtain ⟨x, xs, hc⟩ : ∃ x xs, c.ch = x :: xs := by
         cases hc : c.ch with
@@ -539,19 +592,19 @@ theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
       split at hm; · simp at hm
       simp only [Option.some.injEq] at hm
       subst hm
-      have hft := (hch _ hhead).tup_inv avatar (hall _ hhead) hhe' hnv'
+      have hft := (hch _ hhead).tup_inv avatar P (hall _ hhead) hhe' hnv'
       obtain ⟨hm1, hl1, hlb1, hs1, hk1, hch1, hsn1⟩ := hft
       -- the branches' children at the hinge fit the hinge's layout
       have hhinges : ∀ y ∈ c.ch.map (·.ch[hi]!), F y (m.children.getD hi default) := by
         intro y hy
         obtain ⟨o, ho, rfl⟩ := List.mem_map.1 hy
         have hoe : o.enc = 3 ∨ o.enc = 5 := by rw [henc o ho]; exact hhe'
-        have hfo := (hch o ho).tup_inv avatar (hall o ho) hoe hnv'
+        have hfo := (hch o ho).tup_inv avatar P (hall o ho) hoe hnv'
         have hol : o.ch.length = c.ch.head!.ch.length := by
           have := congrArg List.length (hsplit o ho); simp at this; omega
         rw [getElem!_eq (by omega)]
         exact hfo.2.2.2.2.2.1 hi (by omega)
-      have hor := orNode_fits avatar hhinges
+      have hor := orNode_fits avatar P hhinges
       have hhs : c.ch.head!.ch[hi] ∈ c.ch.map (·.ch[hi]!) :=
         List.mem_map.2 ⟨_, hhead, getElem!_eq hh⟩
       have hors : isStruct (orNode (c.ch.map (·.ch[hi]!))) = true := by
@@ -563,8 +616,8 @@ theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
           simp only [getElem_replaceAt]
           split
           · rename_i hih; subst hih
-            have r1 := (hch1 i h1).raw avatar (hs1 _ (List.getElem_mem h1))
-            have r2 := hor.raw avatar hors
+            have r1 := (hch1 i h1).raw avatar P (hs1 _ (List.getElem_mem h1))
+            have r2 := hor.raw avatar P hors
             exact ⟨r1.1.trans r2.1.symm, fun hi' => (r1.2.1 hi').trans (r2.2.1 (r2.1.trans (r1.1.symm.trans hi'))).symm⟩
           · exact ⟨rfl, fun _ => rfl⟩)
       obtain ⟨hsn', hl'⟩ := lay_transfer avatar hraw hsn1 hl1
@@ -595,19 +648,19 @@ theorem pushStep_fits_nv {c n : Cond} {m : Condition} (h : F c m)
         split at hm; · simp at hm
         simp only [Option.some.injEq] at hm
         subst hm
-        obtain ⟨he0, hch0⟩ := (hch _ hhead).logical_ch avatar (Or.inl (hall _ hhead))
+        obtain ⟨he0, hch0⟩ := (hch _ hhead).logical_ch avatar P (Or.inl (hall _ hhead))
         have hys : ∀ y ∈ c.ch.map (fun o => o.ch[hingeOf c.ch o]!), F y m := by
           intro y hy
           obtain ⟨o, ho, rfl⟩ := List.mem_map.1 hy
           have hlt := (hingeOk_spec hok' o ho).1
           rw [getElem!_eq hlt]
-          exact ((hch o ho).logical_ch avatar (Or.inl (hall o ho))).2 _ (List.getElem_mem hlt)
+          exact ((hch o ho).logical_ch avatar P (Or.inl (hall o ho))).2 _ (List.getElem_mem hlt)
         have h1h : c.ch.head!.op = 1 := hall _ hhead
-        apply logical_withCh avatar (c := c.ch.head!) (Or.inl h1h) he0
+        apply logical_withCh avatar P (c := c.ch.head!) (Or.inl h1h) he0
         intro y hy
         rcases mem_replaceAt hy with hy | rfl
         · exact hch0 y hy
-        · exact orNode_fits avatar hys
+        · exact orNode_fits avatar P hys
       · simp at hp
   · simp at hp
 
@@ -631,7 +684,9 @@ theorem Fits.var_inv {o : Cond} {m : Condition} (h : F o m) (hv : isVarLay m = t
   | slice h13 => omega
   | leaf hop => simp [leafOp, h5] at hop
   | varDyn _ he2 _ hf =>
-    exfalso; obtain ⟨_, _, h5', _, _⟩ := hf.plain_dyn avatar he2; exact h5' h5
+    exfalso; obtain ⟨_, _, h5', _, _⟩ := hf.plain_dyn avatar P he2; exact h5' h5
+  | zip hop => omega
+  | zipLogical hop => omega
 
 theorem KeyUnique.eq {m k k' : Condition} (hu : KeyUnique m k) (hm : k' ∈ m.children)
     (he : k'.compValue = k.compValue) : k' = k := by
@@ -641,9 +696,9 @@ theorem KeyUnique.eq {m k k' : Condition} (hu : KeyUnique m k) (hm : k' ∈ m.ch
 
 theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c = some n) : F n m := by
   cases hv : isVarLay m
-  · exact pushStep_fits_nv avatar h (fun _ => hv) hp
+  · exact pushStep_fits_nv avatar P h (fun _ => hv) hp
   cases hall : c.ch.all (·.op == 5)
-  · exact pushStep_fits_nv avatar h (fun h' => by rw [hall] at h'; cases h') hp
+  · exact pushStep_fits_nv avatar P h (fun h' => by rw [hall] at h'; cases h') hp
   -- a variant `Or` of call interpretations with one compValue: merged at
   -- their common candidate
   have hp' := hp
@@ -654,7 +709,7 @@ theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c 
     simp only [Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, Bool.not_eq_true',
       List.all_eq_true, List.any_eq_false] at hcond
     obtain ⟨⟨⟨h2, hlen⟩, _⟩, _⟩ := hcond
-    obtain ⟨he0, hch⟩ := h.logical_ch avatar (Or.inr h2)
+    obtain ⟨he0, hch⟩ := h.logical_ch avatar P (Or.inr h2)
     have hhead : c.ch.head! ∈ c.ch := by
       obtain ⟨x, xs, hc⟩ : ∃ x xs, c.ch = x :: xs := by
         cases hc : c.ch with
@@ -673,16 +728,16 @@ theorem pushStep_fits {c n : Cond} {m : Condition} (h : F c m) (hp : pushStep c 
         · rw [h'] at hc; simp at hc
         · rfl
       simpa using List.all_eq_true.1 hc' o ho
-    obtain ⟨he5, k0, hmem0, hke0, hkey0, hu0, _, hl0⟩ := (hch _ hhead).var_inv avatar hv (hall _ hhead)
+    obtain ⟨he5, k0, hmem0, hke0, hkey0, hu0, _, hl0⟩ := (hch _ hhead).var_inv avatar P hv (hall _ hhead)
     have hk : ∀ o ∈ c.ch, F o k0 := by
       intro o ho
-      obtain ⟨_, k, hmem, _, hkey, _, hf, _⟩ := (hch o ho).var_inv avatar hv (hall o ho)
+      obtain ⟨_, k, hmem, _, hkey, _, hf, _⟩ := (hch o ho).var_inv avatar P hv (hall o ho)
       have : k = k0 := hu0.eq hmem (by rw [hkey, hkey0, hcv o ho])
       exact this ▸ hf
     have hck : F c k0 := by
-      have := logical_withCh avatar (c := c) (Or.inr h2) he0 c.ch hk
+      have := logical_withCh avatar P (c := c) (Or.inr h2) he0 c.ch hk
       rwa [withCh_eq_self rfl] at this
-    have hn := pushStep_fits_nv avatar hck (fun _ => by simp [isVarLay, hke0]) hp
+    have hn := pushStep_fits_nv avatar P hck (fun _ => by simp [isVarLay, hke0]) hp
     exact .varAbi (hall c.ch.head! hhead) he5 rfl hv (layEq_abi avatar he5 he5 hl0) hmem0 hke0 hkey0 hu0 hn
   · simp at hp'
 
@@ -690,7 +745,7 @@ theorem pushDownOr_fits {c : Cond} {m : Condition} (f : Cond → Cond) (hf : ∀
     (h : F c m) : F (pushDownOr f c) m := by
   unfold pushDownOr
   split
-  · rename_i n hn; exact hf n (pushStep_fits avatar h hn)
+  · rename_i n hn; exact hf n (pushStep_fits avatar P h hn)
   · exact h
 
 end

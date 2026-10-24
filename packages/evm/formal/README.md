@@ -37,11 +37,13 @@ Not covered yet:
   with the fuzzer `test/formal/integrity-gaps.spec.ts`. The
   [condition check](#condition-check) proves the hypotheses for every tree it
   accepts instead, for clients that store trees with the `...Packed` setters.
-- **Pluck slots, fully.** That the slot a Zip reads holds the location where a
-  Pluck with that index was evaluated. The decoder model assumes it. The
-  condition check proves no unwritten slot is read, against a model of
-  `evaluate`'s control flow (`Run`); that `Run` matches the Solidity is
-  trusted.
+- **Pluck slots, in the decoder model.** That the slot a Zip reads holds the
+  location where a Pluck with that index was evaluated. The decoder model
+  assumes it. The condition check proves no unwritten slot is read, against a
+  model of `evaluate`'s control flow (`Run`). On the evaluator transcription
+  it is proven (`Bridge`): with Integrity's Pluck rule, every slot a Zip
+  reads holds a location that decodes as the plucked array (see
+  [adequacy](#adequacy-the-evaluator-computes-the-worlds-meaning)).
 - **Integrity ⇒ `Packable`.** The condition packing theorem assumes the width,
   order and compValue checks listed in its
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
@@ -388,7 +390,7 @@ written, consumptions start over in every branch. Every other operator is
 opaque. For every fuel $`n`$:
 
 ```math
-\forall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
+\forall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
 ```
 
 The opaque operators are assumed to (`World.Ok`): see their children only
@@ -484,7 +486,10 @@ The **contract world** (`Bridge/World.lean`) is the evaluator as a
 normalization world: a value is a layout (a `Condition` whose `inlined`,
 `size`, `leadingBytes` and children give the encoding) and a location;
 children are decoded with `AbiLocation` using the layout's metadata, so the
-world does not depend on the tree.
+world does not depend on the tree. A Zip decodes the arrays at its slots'
+locations with `P k`, the layout of the array plucked into slot `k`, and
+runs its tuple child on element `i` as a value whose fields are element `i`
+of each array.
 
 ### `contractWorld_ok`: the normalization proof's assumptions hold
 
@@ -492,14 +497,33 @@ The four assumptions `World.Ok` of `normalize_sound` are theorems for the
 contract world: charges commute (consumptions as a map from allowance key to
 balance and consumed), only `Pluck` writes slots, only `Custom`,
 `WithinAllowance` and `CallWithinAllowance` charge, only
-`ArraySome`/`ZipSome` choose.
+`ArraySome`/`ZipSome` choose. A Zip is like an array iterator: it reads slots
+and runs its child, so it inherits each property from it.
 
 ### `adequacy`: the evaluator computes the world's meaning
 
 `Fits c d m`: the tree `c` (evaluated as node `d`) fits layout `m`: every
 structural node has `m`'s `inlined` and `size`; containers list `m`'s
 children (a `Matches` on calldata or a dynamic tuple may leave out trailing
-ones); checks on a whole value see exactly `m`'s type. Zips are not covered.
+ones); checks on a whole value see exactly `m`'s type.
+
+**Zips.** A Zip's field $`f`$ fits the element layout of `P k`, the layout of
+the array plucked into the slot of compValue byte $`f`$, and every Pluck into
+a slot with a layout plucks a value of that layout (`Fits.zip`). The Zip's
+own value must not be inlined: a logical parent takes its metadata from its
+children, and a Zip's has nothing to do with the value. (This is the SDK
+check's rule against a Zip in a static `And`/`Or`.) An `And`/`Or` of Zips
+and checks that read no calldata fits too (`Fits.zipLogical`): normalization
+makes one when it merges `Or` branches that differ only in a Zip.
+
+**Slots.** A Zip decodes whatever location its slots hold, so adequacy runs
+from slots that are sound for the slots $`A`$ written so far: each holds a
+location that decodes as its layout (`Inv`). `za` is Integrity's Pluck rule
+(`_validatePluckAssignments`) for Zips: the slots written once a subtree
+passes, or `none` if a Zip may read a slot no Pluck wrote. Adequacy also
+proves every run keeps the slots sound (`Good`): each location a Pluck writes
+decodes as its layout, and a passing run leaves the slots $`\mathsf{za}`$ promises
+sound.
 
 **Call variants.** At a `bytes` parameter that a tree reads as different
 calls (`Or[Matches:AbiEncoded(f..), Matches:AbiEncoded(g..), Dynamic..]`), the
@@ -518,7 +542,7 @@ may accept malformed encodings (see Findings).
 overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
 
 ```math
-\mathsf{Fits}(c, D(c), m) \wedge \mathsf{Decodable}(\mathit{cd}, m, \ell) \wedge \mathsf{CvOk}_n(c)
+\mathsf{Fits}(c, D(c), m) \wedge \mathsf{Decodable}(\mathit{cd}, m, \ell) \wedge \mathsf{CvOk}_n(c) \wedge \mathsf{za}(c, A) \neq \bot \wedge \mathsf{Inv}(A, \sigma)
 \;\Longrightarrow\;
 \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{contract}}((m, \ell), \sigma, \kappa)
 ```
@@ -544,7 +568,8 @@ Also `cvOk_normalize`.
 
 ### `normalize_calldata'`: the contract's verdict does not change
 
-For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$:
+For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$,
+from slots sound for $`A`$, when $`\mathsf{za}`$ accepts both trees from $`A`$:
 
 ```math
 \mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \;\approx\; \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma)
@@ -555,9 +580,9 @@ from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
 `contractWorld_ok`.
 
 Covered since: call interpretations of different types under one `Or`, when
-their leading bytes tell them apart (variant layouts, above). Not covered:
-interpretations without distinct leading bytes, and Zips; the on-chain
-fuzzer covers both.
+their leading bytes tell them apart (variant layouts, above), and Zips.
+Not covered: interpretations without distinct leading bytes; the on-chain
+fuzzer covers them.
 
 ## The SDK pipeline, end to end
 
@@ -578,7 +603,18 @@ $`c_0`$ fits:
 
 The contract enforces exactly what it would enforce for the tree as written.
 Chains `pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree
-read back), `normalize_calldata'`.
+read back), `normalize_calldata'`, from empty slots when $`\mathsf{za}`$
+accepts both trees.
+
+### `sdk_pipeline_checked`
+
+Lean: `Bridge/Assigned.lean`
+
+The same for every user tree that Integrity's Pluck rule accepts, stored
+after the SDK check (`checkStored`) accepted $`\mathit{fs}`$: Integrity's rule
+(`assigned`) on the node the evaluator runs implies $`\mathsf{za}`$ on the
+tree (`za_of_assigned`), and `checkStored` includes `assigned` on the stored
+tree.
 
 Trusted: that `flattenCondition` produces an array that reads back as its
 input (tested through the driver's `buildCond` in the normalization and check

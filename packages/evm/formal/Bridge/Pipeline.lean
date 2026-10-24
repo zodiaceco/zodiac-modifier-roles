@@ -179,6 +179,7 @@ decreasing_by
 
 section
 variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata)
+  (P : Nat → Option Condition)
 
 include henv in
 /-- **The SDK pipeline keeps the contract's verdict.** A user tree `c0` that
@@ -189,17 +190,19 @@ include henv in
     written: both pass with the same allowance consumptions, or both fail; the
     same Pluck slots; neither reverts. -/
 theorem sdk_pipeline (c0 : Cond) (k : Nat) (fs : List Flat) (hP : Packable fs)
-    (hfs : nest fs 0 = normalize k c0) {m : Condition} (hfit : Fits avatar c0 (D avatar c0) m)
+    (hfs : nest fs 0 = normalize k c0) {m : Condition} (hfit : Fits avatar P c0 (D avatar c0) m)
     (hdec : Decodable data m 0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
-    (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp)) (hcv : CvOk mp c0) :
+    (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp)) (hcv : CvOk mp c0)
+    (hza : (za c0 fun _ => false).isSome) (hza' : (za (normalize k c0) fun _ => false).isSome) :
     Agree (run env data (D avatar c0) mp []) (run env data tree mp []) := by
   rw [pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, rfl⟩ := hu
   rw [unpacked_eq avatar fs hP 0, hfs]
   unfold run
-  exact normalize_calldata' avatar env henv data (maxPluck fs) k hfit hcv 0 hdec _ _
-    (by rw [depth_D]; omega) (by rw [depth_D]; omega) [] Slots.empty
+  exact normalize_calldata' avatar env henv data (maxPluck fs) P k hfit hcv 0 hdec _ _
+    (by rw [depth_D]; omega) (by rw [depth_D]; omega) [] Slots.empty (fun _ => false)
+    (fun _ _ h => by cases h) hza hza'
 
 end
 end Bridge

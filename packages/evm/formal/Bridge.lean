@@ -14,3 +14,4 @@ import Bridge.NormalizeFits
 import Bridge.CvOkPres
 import Bridge.Final
 import Bridge.Pipeline
+import Bridge.Assigned

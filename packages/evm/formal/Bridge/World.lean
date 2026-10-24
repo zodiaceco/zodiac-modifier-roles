@@ -262,15 +262,83 @@ def allowanceCharge (env : Env) (data : Calldata) (e : Nat) (cv : List Nat) (v :
   | .overflow => none
   | x => (charge env (toBytes cv) (amountOf env x)).map ([·])
 
+/-! ## Zips
+
+A Zip reads its arrays at the locations Pluck nodes wrote into the slots.
+The world decodes them with `P k`, the layout of the array plucked into slot
+`k` (`Fits` ties it to the Pluck nodes and the Zip fields). Element `i` of a
+Zip is a value whose fields are element `i` of each array: `zipEl` is that
+value's layout, which `fields` reads back (it is no ABI layout: its
+encoding is `None`). -/
+
+/-- The layout of a Zip element: one wrapper per field, holding the field's
+    layout and (as `size`) its location. -/
+def zipEl (ps : List (Condition × Nat)) : Condition :=
+  ⟨.None, .ZipSome, ps.map fun p => ⟨.None, .Pass, [p.1], false, p.2, 0, []⟩, false, 0, 0, []⟩
+
+def isZipEl (m : Condition) : Bool := m.operator == .ZipSome && m.encoding == .None
+
+def zipElFields (m : Condition) : List Val' := m.children.map fun w => (w.children.headD default, w.size)
+
+theorem zipElFields_zipEl (ps : List (Condition × Nat)) : zipElFields (zipEl ps) = ps := by
+  unfold zipElFields zipEl
+  simp only [List.map_map]
+  conv => rhs; rw [← List.map_id ps]
+  exact List.map_congr_left fun p _ => rfl
+
+theorem isZipEl_zipEl (ps : List (Condition × Nat)) : isZipEl (zipEl ps) = true := rfl
+
+theorem isZipEl_of_ne {m : Condition} (h : m.encoding ≠ .None) : isZipEl m = false := by
+  unfold isZipEl; simp [h]
+
+/-- `_zipLocations` with the plucked layouts: each array's element layout and
+    element locations, or `none` (no layout, a revert, an overflow). -/
+def zipLocsW (data : Calldata) (P : Nat → Option Condition) (sl : Slots) :
+    List Nat → Option (List (Condition × List Nat))
+  | [] => some []
+  | k :: ks =>
+    match P k with
+    | none => none
+    | some ma =>
+      match childrenE data (sl.locations k) ma with
+      | .inr (some ls) => (zipLocsW data P sl ks).map ((tmpl ma, ls) :: ·)
+      | _ => none
+
+/-- The values of element `i`. -/
+def zipAt (fl : List (Condition × List Nat)) (i : Nat) : Val' :=
+  (zipEl (fl.map fun p => (p.1, p.2.getD i 0)), 0)
+
+/-- `_zipIterator` once the arrays are decoded: every element (`ZipEvery`)
+    or some element (`ZipSome`, each from the same consumptions) passes the
+    tuple child `kid`; arrays of different lengths fail. -/
+def zipF (data : Calldata) (P : Nat → Option Condition) (every : Bool) (ks : List Nat)
+    (kid : Val' → T) (sl : Slots) : T :=
+  match zipLocsW data P sl ks with
+  | none => failT
+  | some fl =>
+    if fl.all (·.2.length == (fl.headD (default, [])).2.length) then
+      let els := (List.range (fl.headD (default, [])).2.length).map fun i => kid (zipAt fl i)
+      if every then seqT els else orT els
+    else failT
+
+/-- A Zip: the arrays are decoded at the slots' locations when it runs. -/
+def zipT (data : Calldata) (P : Nat → Option Condition) (every : Bool) (ks : List Nat)
+    (kid : Val' → T) : T := fun sl cs => zipF data P every ks kid sl sl cs
+
+/-- The slots a Zip reads (one compValue byte per field). -/
+def zipKeys (cv : List Nat) : List Nat := cv.map (· % 256)
+
 /-- Every operator `Normalize.sem` leaves to the world. -/
-def extW (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) (e o : Nat) (cv : List Nat)
-    (ss : List (Val' → T)) (v : Val') : T :=
+def extW (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) (P : Nat → Option Condition)
+    (e o : Nat) (cv : List Nat) (ss : List (Val' → T)) (v : Val') : T :=
   match o with
   | 4 => emptyT data
   | 5 => matchesArrT data e cv ss v
   | 6 => iterT data false e (ss.headD passK) v
   | 7 => iterT data true e (ss.headD passK) v
   | 8 => tailT data e ss v
+  | 10 => zipT data P false (zipKeys cv) (ss.headD passK)
+  | 11 => zipT data P true (zipKeys cv) (ss.headD passK)
   | 13 => sliceT data e cv (ss.headD passK) v
   | 14 => pluckT env data n e cv v
   | 15 | 16 | 17 | 18 | 19 | 20 => checkT fun _ => cmpOk avatar env data e o cv v
@@ -281,14 +349,17 @@ def extW (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) (e o : Nat) (c
   | 30 => chargesT env.balance fun _ => (charge env (toBytes cv) 1).map ([·])
   | _ => failT
 
-/-- The contract as a normalization world. -/
-def contractWorld (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat) : World Val' Slots CM where
-  fields e v := match decodeAt data e (layAt data e v) v.2 with
+/-- The contract as a normalization world. `P k` is the layout of the array
+    plucked into slot `k`, which a Zip decodes it with. -/
+def contractWorld (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat)
+    (P : Nat → Option Condition) : World Val' Slots CM where
+  fields e v := if isZipEl v.1 then zipElFields v.1 else
+    match decodeAt data e (layAt data e v) v.2 with
     | some locs => (layAt data e v).children.zip locs
     | none => []
   dflt := (default, 0)
-  gate e cv v := (leadingCheck data (adjust e v.2) (prefixOf e cv)).isNone &&
-    (decodeAt data e (layAt data e v) v.2).isSome
-  ext := extW avatar env data n
+  gate e cv v := isZipEl v.1 || ((leadingCheck data (adjust e v.2) (prefixOf e cv)).isNone &&
+    (decodeAt data e (layAt data e v) v.2).isSome)
+  ext := extW avatar env data n P
 
 end Bridge
