@@ -147,8 +147,11 @@ const calldataMatchesScopings =
     }
 
     // A Matches may only have children that read a parameter, so the
-    // allowance goes next to it: And[Matches, CallWithinAllowance], or the
-    // allowance alone for a function without parameters.
+    // allowance goes next to it: And[Matches, CallWithinAllowance]. Without
+    // parameters there is no Matches (it needs children): at the top level
+    // the allowance alone (a condition that reads no calldata); on a `bytes`
+    // parameter a Pass describing the bytes stands next to it, so the
+    // parameter keeps its type.
     const allowance: Condition | undefined = callWithinAllowance
       ? {
           paramType: Encoding.None,
@@ -156,10 +159,15 @@ const calldataMatchesScopings =
           compValue: encodeKey(callWithinAllowance),
         }
       : undefined
-    const parts: Condition[] = [
-      ...(paramTypes.length > 0 || !allowance ? [matchesCondition] : []),
-      ...(allowance ? [allowance] : []),
-    ]
+    const parts: Condition[] =
+      paramTypes.length > 0 || !allowance
+        ? [matchesCondition, ...(allowance ? [allowance] : [])]
+        : abiType
+          ? [
+              { paramType: Encoding.Dynamic, operator: Operator.Pass },
+              allowance,
+            ]
+          : [allowance]
 
     if (selector) {
       if (selector.length !== 10) {

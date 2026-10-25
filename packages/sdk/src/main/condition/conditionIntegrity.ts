@@ -2,7 +2,8 @@ import { Condition, Operator, Encoding } from "../types"
 
 export const checkRootConditionIntegrity = (condition: Condition): void => {
   const rootType = scopedType(condition)
-  if (rootType !== Encoding.AbiEncoded) {
+  // a root may also read no calldata at all (e.g. an allowance alone)
+  if (rootType !== Encoding.AbiEncoded && rootType !== Encoding.None) {
     throw new Error(
       `Root param type must be \`AbiEncoded\`, got \`${Encoding[rootType]}\``
     )

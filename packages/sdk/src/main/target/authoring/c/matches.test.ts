@@ -6,6 +6,7 @@ import { encodeKey } from "../../../keys"
 import { AbiCoder } from "ethers"
 import { checkStoredConditions } from "../../../condition/checkStored"
 import { flattenCondition } from "../../../condition/flattenCondition"
+import { checkRootConditionIntegrity } from "../../../condition/conditionIntegrity"
 
 describe("calldataMatches", () => {
   it("correctly encodes CallWithinAllowance conditions", () => {
@@ -13,12 +14,33 @@ describe("calldataMatches", () => {
       callWithinAllowance: encodeKey("test-allowance"),
     })()
 
-    // no parameters: the allowance alone
+    // no parameters: the allowance alone (a root that reads no calldata)
     expect(result).toEqual({
       paramType: Encoding.None,
       operator: Operator.CallWithinAllowance,
       compValue: encodeKey("test-allowance"),
     })
+    expect(() => checkRootConditionIntegrity(result)).not.toThrow()
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
+  })
+
+  it("scopes a bytes parameter with a nested allowance-only call", () => {
+    const inner = calldataMatches([], [], { callWithinAllowance: "test" })
+    const result = calldataMatches([inner], ["bytes"])()
+    expect(result.children![0]).toEqual({
+      paramType: Encoding.None,
+      operator: Operator.And,
+      children: [
+        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+        {
+          paramType: Encoding.None,
+          operator: Operator.CallWithinAllowance,
+          compValue: encodeKey("test"),
+        },
+      ],
+    })
+    expect(() => checkRootConditionIntegrity(result)).not.toThrow()
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
   })
 
   it("puts CallWithinAllowance next to the Matches, as v3 requires", () => {
