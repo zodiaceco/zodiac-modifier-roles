@@ -33,21 +33,14 @@
 <text x="610.0" y="390" text-anchor="middle" fill="#555">1000</text>
 <text x="344" y="410" text-anchor="middle" fill="#555">condition nodes</text>
 <path d="M79.1,369.5 L79.6,369.2 L80.7,368.7 L82.8,367.7 L87.0,365.6 L95.6,361.5 L112.6,353.0 L115.8,351.4 L119.0,349.8 L122.2,348.2 L125.3,346.5 L128.5,344.9 L129.6,344.4 L146.6,335.5 L180.7,317.2 L214.7,298.0 L282.8,257.2 L350.9,213.1 L419.0,165.8 L422.2,163.5 L425.4,161.2 L450.9,142.5" fill="none" stroke="#8a5a00" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<path d="M79.6,369.3 L80.7,368.8 L82.8,368.0 L87.0,366.3 L95.6,362.8 L112.6,355.8 L115.8,354.4 L119.0,353.1 L122.2,351.7 L125.3,350.4 L128.5,349.0 L129.6,348.5 L146.6,341.1 L180.7,325.7 L214.7,309.5 L282.8,274.7 L350.9,236.8 L419.0,195.8 L422.2,193.9 L425.4,191.9 L450.9,175.6 L472.2,161.7 L487.1,151.8 L493.5,147.5 L514.8,133.0 L536.1,118.2 L557.3,103.2 L583.9,83.9 L610.5,64.1" fill="none" stroke="#8a5a00" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="86" y2="86" stroke="#8a5a00" stroke-width="3"/>
 <text x="640" y="90" fill="#111">v2</text>
 <path d="M79.1,369.4 L79.6,369.2 L80.7,368.9 L82.8,368.2 L87.0,366.8 L95.6,364.0 L112.6,358.2 L115.8,357.1 L119.0,355.9 L122.2,354.8 L125.3,353.7 L128.5,352.6 L129.6,352.2 L146.6,346.1 L180.7,333.4 L214.7,320.0 L282.8,291.3 L350.9,260.0 L419.0,226.1 L422.2,224.4" fill="none" stroke="#1f6feb" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<path d="M79.6,369.3 L80.7,369.0 L82.8,368.5 L87.0,367.6 L95.6,365.6 L112.6,361.5 L115.8,360.7 L119.0,360.0 L122.2,359.2 L125.3,358.4 L128.5,357.6 L129.6,357.4 L146.6,353.1 L180.7,344.3 L214.7,335.1 L282.8,315.5 L350.9,294.4 L419.0,271.7 L422.2,270.6 L425.4,269.5 L450.9,260.5 L472.2,252.9 L487.1,247.4 L493.5,245.1 L514.8,237.2 L536.1,229.1 L557.3,220.8 L583.9,210.3 L610.5,199.6" fill="none" stroke="#1f6feb" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="104" y2="104" stroke="#1f6feb" stroke-width="3"/>
-<text x="640" y="108" fill="#111">v3 packed</text>
-<path d="M79.1,369.4 L79.6,369.2 L80.7,368.9 L82.8,368.2 L87.0,366.8 L95.6,364.0 L112.6,358.2 L115.8,357.1 L119.0,355.9 L122.2,354.8 L125.3,353.7" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<path d="M79.6,369.3 L80.7,369.0 L82.8,368.5 L87.0,367.6 L95.6,365.6 L112.6,361.5 L115.8,360.7 L119.0,360.0 L122.2,359.2 L125.3,358.4 L128.5,357.6" fill="none" stroke="#c2410c" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
-<line x1="616" x2="636" y1="122" y2="122" stroke="#c2410c" stroke-width="3"/>
-<text x="640" y="126" fill="#111">v3 checked</text>
-<line x1="616" x2="636" y1="148" y2="148" stroke="#555" stroke-width="2"/><text x="640" y="152" fill="#555">checks</text>
-<line x1="616" x2="636" y1="166" y2="166" stroke="#555" stroke-width="2" stroke-dasharray="5 4"/><text x="640" y="170" fill="#555">trailing Pass</text>
-<text x="616" y="200" fill="#555" font-size="11">Whole transaction, up to</text>
-<text x="616" y="215" fill="#555" font-size="11">the largest tree each</text>
-<text x="616" y="230" fill="#555" font-size="11">can store. v3 packed and</text>
-<text x="616" y="245" fill="#555" font-size="11">checked evaluate alike.</text>
+<text x="640" y="108" fill="#111">v3</text>
+<text x="616" y="152" fill="#555" font-size="11">Every node a check with</text>
+<text x="616" y="167" fill="#555" font-size="11">a 32-byte compValue.</text>
+<text x="616" y="182" fill="#555" font-size="11">Whole transaction, up to</text>
+<text x="616" y="197" fill="#555" font-size="11">the largest tree each</text>
+<text x="616" y="212" fill="#555" font-size="11">version can store.</text>
 </svg>

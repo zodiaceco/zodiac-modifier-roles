@@ -29,8 +29,8 @@ an already-deployed tree again (another role or function) costs about 61k.
 
 ![Evaluation gas by node count](docs/gas-evaluation.svg)
 
-A permitted call, whole transaction. Packed and checked storing store the same
-bytes, so they evaluate alike.
+A permitted call, whole transaction. How the condition was stored doesn't
+matter: both v3 setters store the same bytes.
 
 - v3: about 4.2k gas per check node, 2.8k per trailing `Pass` (more for a
   `Pass` describing a tuple or array: about 4.2k for an array, 5.3–6.1k for a
