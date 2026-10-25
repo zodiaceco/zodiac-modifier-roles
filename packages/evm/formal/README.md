@@ -361,7 +361,9 @@ slot), `packableB_sound`, and `checkCondition_avatar` (the avatar stored in
 ```
 
 (`equalTo_intended`, `compare_word`, signed variants likewise, `checked_equalTo`
-end to end), assuming keccak256 has no collisions.
+end to end), for an operand and compValue of one length class (both 32 bytes,
+or both longer), assuming keccak256 has no second preimage of the compValue.
+The check keeps a static operand's compValue at exactly its size.
 
 ### Findings
 

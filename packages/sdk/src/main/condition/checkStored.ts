@@ -472,7 +472,12 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
           return 64 <= len && len <= 65535
         case Enc.Tuple:
         case Enc.Array:
-          return (isInlinedFlat(fs, j) ? 32 : 64) <= len && len <= 65535
+          // a static tuple's encoding has exactly its size: a longer
+          // compValue would be hashed and compared with a word the caller
+          // chooses
+          return isInlinedFlat(fs, j)
+            ? len === inlinedSizeFlat(fs, j)
+            : 64 <= len && len <= 65535
         default:
           return false
       }

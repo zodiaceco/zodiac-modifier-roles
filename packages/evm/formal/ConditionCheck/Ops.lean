@@ -101,8 +101,11 @@ def opOk (fs : List Flat) (j : Nat) : Bool :=
     match e with
     | .Static | .EtherValue => len == 32
     | .Dynamic => 64 ≤ len && len ≤ 65535
+    -- a static tuple's encoding has exactly its size: a longer compValue would be
+    -- hashed and compared with a word the caller chooses
     | .Tuple | .Array =>
-      (if ConditionPacking.isInlined (shapes fs) j then 32 else 64) ≤ len && len ≤ 65535
+      if ConditionPacking.isInlined (shapes fs) j then len == ConditionPacking.inlinedSize (shapes fs) j
+      else 64 ≤ len && len ≤ 65535
     | _ => false
   | .GreaterThan | .LessThan | .SignedIntGreaterThan | .SignedIntLessThan =>
     (e == .Static || e == .EtherValue) && len == 32

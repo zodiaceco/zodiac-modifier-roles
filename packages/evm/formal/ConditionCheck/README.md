@@ -133,8 +133,17 @@ Pluck with that index, and `ZipOK` constrains every such Pluck.
 ### Comparison operators (`Compare.lean`)
 
 `comparePasses` transcribes the comparison branch of `evaluate` (`__compare`,
-`__compareSigned`) on `__input`'s result. keccak256 is a parameter; the
-`EqualTo` theorems assume it has no collisions (`KeyInjective`).
+`__compareSigned`) on `__input`'s result. keccak256 is a parameter.
+`__compare` compares a 32-byte value as the word itself and a longer one by
+its hash, so the `EqualTo` theorems take an operand and a compValue of one
+length class (`SameClass`) and assume no other value of that class has the
+compValue's key (`CollisionFree`): a theorem for words
+(`collisionFree_word`), keccak256's second-preimage resistance for longer
+compValues. Across classes nothing could be assumed: a word the caller
+chooses can equal any hash. The check keeps a static operand and its
+compValue in one class: `EqualTo` on a static tuple needs a compValue of
+exactly the tuple's size (before, a one-field static tuple with a longer
+compValue passed on the word `keccak256(compValue)`).
 
 - `equalTo_iff`: an `EqualTo` on a parameter `u` passes exactly when
   `enc(u)` equals the stored compValue.
@@ -312,5 +321,8 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
 - `comparePasses` matches `__compare`/`__compareSigned` (hand transcription;
   the fuzzer's reference evaluator agrees with `evaluate` on `EqualTo` and
   comparisons end to end).
-- keccak256 has no collisions (`KeyInjective`), for the `EqualTo` theorems.
+- keccak256 has no second preimages of compValues longer than 32 bytes
+  (`CollisionFree`), for the `EqualTo` theorems; for an operand that is not
+  inlined, a 32-byte encoding is an empty value (fixed bytes), so matching a
+  longer compValue needs a preimage of it.
 - `opsOk` is not proven; it only makes the check stricter.

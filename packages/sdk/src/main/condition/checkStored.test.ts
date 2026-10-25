@@ -151,6 +151,19 @@ suite("checkStored()", () => {
     expect(verdict(tree)).toBe("C4(S,..)")
   })
 
+  it("needs EqualTo on a static tuple to have exactly its size", () => {
+    // a longer compValue is hashed and compared with the tuple's one word,
+    // which the caller can set to that hash
+    const tuple = (cv: string): N => ({
+      e: Enc.Tuple,
+      o: Op.EqualTo,
+      cv,
+      ch: [pass(Enc.Static)],
+    })
+    expect(verdict(call([tuple(word(1))]))).toBe("C4(T(S),..)")
+    expect(verdict(call([tuple(word(1) + word(2).slice(2))]))).toBe("rejected")
+  })
+
   it("rejects a Slice over a Slice (one Slice with the combined shift does the same)", () => {
     const inner: N = {
       e: Enc.Static,
