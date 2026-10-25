@@ -2,13 +2,7 @@ import { Encoding, Condition, Operator } from "../../types"
 
 import { conditionId } from "../conditionId"
 import { pushDownOr } from "./pushDownOr"
-import {
-  canReorderAnd,
-  canReorderOr,
-  charges,
-  isStructural,
-  writesSlots,
-} from "./effects"
+import { canReorderAnd, canReorderOr, charges, writesSlots } from "./effects"
 
 /**
  * Normalizes a condition by transforming its structure without altering its semantics.
@@ -23,6 +17,10 @@ import {
  * That the rewrites keep the meaning is proven in Lean, against a
  * transcription of this code (packages/evm/formal/Normalize); effects.ts
  * holds the rules for reordering and removing children.
+ *
+ * Children of a `Matches` are never removed, trailing `Pass` nodes included:
+ * the contract computes every child's location before evaluating any, so
+ * dropping one would change which calldata it accepts.
  */
 export function normalizeCondition(condition: Condition): Condition {
   // A Pluck's array and a Zip's fields must keep their types exactly (the
@@ -42,7 +40,6 @@ export function normalizeCondition(condition: Condition): Condition {
   }
 
   result = cleanEmptyFields(result) // Remove undefined fields
-  result = prunePassNodes(result) // Trim trailing Pass nodes
 
   result = flattenNestedBranches(result) // Collapse nested AND/OR
   result = dedupeChildren(result) // Remove duplicate branches
@@ -52,54 +49,6 @@ export function normalizeCondition(condition: Condition): Condition {
   result = sortBranchesCanonical(result) // Establish canonical ordering
 
   return result
-}
-
-/**
- * Removes trailing Pass nodes from Matches on AbiEncoded and dynamic tuples (as long as the tuple stays marked dynamic).
- * Non-structural children (e.g. CallWithinAllowance) read no parameter, so Pass nodes before them are trailing too.
- */
-const prunePassNodes = (condition: Condition): Condition => {
-  if (!condition.children) return condition
-  if (condition.operator !== Operator.Matches) return condition
-
-  const isDynamicTuple =
-    condition.paramType === Encoding.Tuple && isDynamicParamType(condition)
-
-  // We must not apply this to static tuples since removing Static Pass nodes would cause word shifts in the encoding.
-  const canPrune = condition.paramType === Encoding.AbiEncoded || isDynamicTuple
-
-  if (!canPrune) return condition
-
-  // CallWithinAllowance children read no parameter and are moved to the end,
-  // unless that could change the evaluation (see canReorderAnd)
-  const isGlobalAllowance = (child: Condition) =>
-    child.operator === Operator.CallWithinAllowance && !isStructural(child)
-  const children = canReorderAnd(condition.children)
-    ? [
-        ...condition.children.filter((child) => !isGlobalAllowance(child)),
-        ...condition.children.filter(isGlobalAllowance),
-      ]
-    : condition.children
-
-  // Always keep the first child, even if it is a Pass, because children must not be empty.
-  // For tuples keep all children up to the first dynamic child.
-  const keepChildrenUntil = isDynamicTuple
-    ? children.findIndex(isDynamicParamType)
-    : 0
-
-  // the trailing run of Pass and non-structural children
-  let cut = children.length
-  for (let i = children.length - 1; i > keepChildrenUntil; i--) {
-    const child = children[i]
-    if (child.operator !== Operator.Pass && isStructural(child)) break
-    cut = i
-  }
-
-  condition.children = [
-    ...children.slice(0, cut),
-    ...children.slice(cut).filter((child) => child.operator !== Operator.Pass),
-  ]
-  return condition
 }
 
 /** flatten nested AND/OR conditions */
@@ -224,21 +173,4 @@ const cleanEmptyFields = (condition: Condition): Condition => {
   if ("compValue" in condition && !condition.compValue)
     delete condition.compValue
   return condition
-}
-
-const isDynamicParamType = (condition: Condition): boolean => {
-  switch (condition.paramType) {
-    case Encoding.Static:
-    case Encoding.EtherValue:
-      return false
-    case Encoding.Dynamic:
-    case Encoding.Array:
-      return true
-    case Encoding.Tuple:
-    case Encoding.AbiEncoded:
-    case Encoding.None:
-      return condition.children?.some(isDynamicParamType) ?? false
-    default:
-      throw new Error(`Unknown paramType: ${condition.paramType}`)
-  }
 }

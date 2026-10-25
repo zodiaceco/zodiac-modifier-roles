@@ -153,193 +153,56 @@ suite("normalizeCondition()", () => {
     )
   })
 
-  it("prunes trailing Static Pass nodes on AbiEncoded", () => {
-    expect(
-      normalizeCondition({
+  it("keeps trailing Pass nodes: the contract computes every child's location", () => {
+    const pass = (paramType: Encoding, children?: any[]) => ({
+      paramType,
+      operator: Operator.Pass,
+      ...(children ? { children } : {}),
+    })
+    for (const condition of [
+      {
         paramType: Encoding.AbiEncoded,
         operator: Operator.Matches,
         children: [
           DUMMY_COMP(0),
-          { paramType: Encoding.Static, operator: Operator.Pass },
-          { paramType: Encoding.Static, operator: Operator.Pass },
+          pass(Encoding.Static),
+          pass(Encoding.Dynamic),
         ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [DUMMY_COMP(0)],
-    })
-  })
-
-  it("prunes trailing Static Pass nodes on AbiEncoded", () => {
-    expect(
-      normalizeCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
-        children: [
-          DUMMY_COMP(0),
-          { paramType: Encoding.Static, operator: Operator.Pass },
-          { paramType: Encoding.Static, operator: Operator.Pass },
-        ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [DUMMY_COMP(0)],
-    })
-  })
-
-  it("prunes trailing Static Pass nodes on dynamic tuples", () => {
-    expect(
-      normalizeCondition({
+      },
+      {
         paramType: Encoding.Tuple,
         operator: Operator.Matches,
         children: [
-          {
-            paramType: Encoding.Dynamic,
-            operator: Operator.EqualToAvatar,
-          },
-          { paramType: Encoding.Static, operator: Operator.Pass },
-          { paramType: Encoding.Static, operator: Operator.Pass },
+          { paramType: Encoding.Dynamic, operator: Operator.EqualToAvatar },
+          pass(Encoding.Static),
+          pass(Encoding.Static),
         ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.Tuple,
-      operator: Operator.Matches,
-      children: [
-        {
-          paramType: Encoding.Dynamic,
-          operator: Operator.EqualToAvatar,
-        },
-      ],
-    })
-  })
-
-  it("prunes trailing static Tuple Pass nodes", () => {
-    expect(
-      normalizeCondition({
+      },
+      {
         paramType: Encoding.AbiEncoded,
         operator: Operator.Matches,
         children: [
           DUMMY_COMP(0),
-          {
-            paramType: Encoding.Tuple,
-            operator: Operator.Pass,
-            children: [
-              {
-                paramType: Encoding.Static,
-                operator: Operator.Pass,
-              },
-            ],
-          },
+          pass(Encoding.Tuple, [pass(Encoding.Static)]),
         ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [DUMMY_COMP(0)],
-    })
-  })
-
-  it("does not prune trailing Static Pass nodes on static tuples", () => {
-    expect(
-      normalizeCondition({
+      },
+      {
         paramType: Encoding.AbiEncoded,
         operator: Operator.Matches,
         children: [
           {
             paramType: Encoding.Tuple,
             operator: Operator.Matches,
-            children: [
-              DUMMY_COMP(0),
-              { paramType: Encoding.Static, operator: Operator.Pass },
-              { paramType: Encoding.Static, operator: Operator.Pass },
-            ],
+            children: [DUMMY_COMP(0), pass(Encoding.Static)],
           },
           DUMMY_COMP(1),
         ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [
-        {
-          paramType: Encoding.Tuple,
-          operator: Operator.Matches,
-          children: [
-            DUMMY_COMP(0),
-            { paramType: Encoding.Static, operator: Operator.Pass },
-            { paramType: Encoding.Static, operator: Operator.Pass },
-          ],
-        },
-        DUMMY_COMP(1),
-      ],
-    })
-  })
-
-  it("prunes even dynamic trailing Pass nodes on the toplevel Matches", () => {
-    expect(
-      normalizeCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
-        children: [
-          {
-            paramType: Encoding.Static,
-            operator: Operator.EqualToAvatar,
-          },
-          { paramType: Encoding.Static, operator: Operator.Pass },
-          { paramType: Encoding.Dynamic, operator: Operator.Pass },
-        ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [
-        {
-          paramType: Encoding.Static,
-          operator: Operator.EqualToAvatar,
-        },
-      ],
-    })
-  })
-
-  it("keeps CallWithinAllowance (moving it to the end) while pruning trailing Pass nodes on AbiEncoded.Matches", () => {
-    expect(
-      normalizeCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
-        children: [
-          {
-            paramType: Encoding.None,
-            operator: Operator.CallWithinAllowance,
-            compValue: encodeKey("test-allowance"),
-          },
-          {
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-          },
-          {
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-          },
-        ],
-      })
-    ).to.deep.equal({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
-      children: [
-        {
-          // first child is always kept
-          paramType: Encoding.Static,
-          operator: Operator.Pass,
-        },
-        {
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: encodeKey("test-allowance"),
-        },
-      ],
-    })
+      },
+    ]) {
+      expect(normalizeCondition(structuredClone(condition))).to.deep.equal(
+        condition
+      )
+    }
   })
 
   it("does not change the position of children other than CallWithinAllowance", async () => {
@@ -413,6 +276,7 @@ suite("normalizeCondition()", () => {
             },
           ],
         },
+        { paramType: Encoding.Static, operator: Operator.Pass },
       ],
     })
   })
