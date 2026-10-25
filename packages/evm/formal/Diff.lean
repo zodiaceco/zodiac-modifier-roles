@@ -3,6 +3,7 @@ import ConditionPacking.Model
 import ConditionCheck.Stored
 import Normalize.Defs
 import Evaluate.Model
+import Bridge.InvCheck
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -41,6 +42,13 @@ tree in the packing model and runs the evaluator model
 allowance balances `<allowances>` (`key:balance` joined by `,`, or `-`). It
 prints `<status> <consumptions>`: the `Status` number (255 for a revert) and
 the consumption list as `key:balance:consumed` joined by `,` (or `-`).
+
+A line `iv <nodes>` builds the SDK tree and runs `Bridge.invB` (the
+well-typedness `Bridge` assumes) and prints `ok`, or `bad <node> <clauses>`:
+the first node (BFS index) that fails and which clauses of `invP` fail
+(`ad` adOk, `enc` And/Or encoding, `lay` And/Or layouts, `ns` And/Or
+children that read nothing, `td` type descriptions, `st` children read a
+parameter, `sz` inlined size).
 
 Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
 -/
@@ -189,6 +197,29 @@ def runEval (value allowances hex nodesStr : String) : String :=
         s!"{(hexOf c.key).drop 2}:{c.balance}:{c.consumed}")
       s!"{r.status} {cons}"
 
+/-- The clauses of `invP` a node fails (see the `iv` query). -/
+def invWhy (c : Normalize.Cond) : List String :=
+  let av := zeros 32
+  let isLog := c.op == 1 || c.op == 2
+  let one (k : String) (b : Bool) := if b then [] else [k]
+  one "ad" (Bridge.adOkB c) ++
+  one "enc" (!isLog || c.enc == 0) ++
+  one "lay" (!isLog || c.ch.all fun x => c.ch.all fun y =>
+    !Normalize.isStruct x || !Normalize.isStruct y || Bridge.layB av x y) ++
+  one "ns" (!isLog || c.ch.all fun x => Normalize.isStruct x || Bridge.zB av x ||
+    c.ch.any fun y => Normalize.isStruct y && !Normalize.isInl y) ++
+  one "td" (!Bridge.descOp c.op || c.ch.all Bridge.tdB) ++
+  one "st" (isLog || Normalize.keepsAsWritten c ||
+    (c.ch.all Normalize.isStruct && (c.enc != 3 || !c.ch.isEmpty))) ++
+  one "sz" (!Normalize.isStruct c || !Normalize.isInl c || decide (0 < Bridge.rawSz av c))
+
+def runInv (c : Normalize.Cond) : String :=
+  if Bridge.invB (zeros 32) c then "ok" else
+  let nodes := (Normalize.bfsGo (Normalize.nodeCount c) [(c, 0)] #[]).toList
+  match (nodes.zipIdx).find? fun ((_, x), _) => !Bridge.invPB (zeros 32) x with
+  | some ((_, x), i) => s!"bad {i} {",".intercalate (invWhy x)}"
+  | none => "bad ? ?"
+
 def runLine (line : String) : String :=
   match ((line.splitOn "\n").headD "").splitOn " " with
   | ["ev", value, allowances, hex, nodesStr] => runEval value allowances hex nodesStr
@@ -198,6 +229,7 @@ def runLine (line : String) : String :=
          compValue := n.compValue } : ConditionPacking.Flat)
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
+  | ["iv", nodesStr] => runInv (buildCond (parseNodes nodesStr) 0)
   | ["nz", nodesStr] => showCond (Normalize.normalize 1000 (buildCond (parseNodes nodesStr) 0))
   | ["ck", sStr, nodesStr] =>
     let ns := (parseNodes nodesStr).toList

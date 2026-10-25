@@ -229,9 +229,11 @@ def logicalKind (s : Bool) (ks : List K) : Option K :=
 
 def leafOk (cs : List Condition) (op : Operator) : Bool := cs.isEmpty && !isNavOp op
 
+/-- A `Slice` over one `Static` leaf (a slice of a slice is one slice). -/
 def sliceOk (op : Operator) (cs : List Condition) (cv : Bytes) (ks : List K) : Bool :=
   op == .Slice && decide (1 ≤ sliceSize cv) && decide (sliceSize cv ≤ 32) &&
-    cs.map (·.encoding) == [.Static] && ks == [.ty .static]
+    cs.map (·.encoding) == [.Static] && cs.all (fun c => leafOk c.children c.operator) &&
+    ks == [.ty .static]
 
 def isArrayOp (op : Operator) : Bool :=
   op == .Matches || op == .ArraySome || op == .ArrayEvery || op == .ArrayTailMatches

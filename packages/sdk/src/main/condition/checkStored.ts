@@ -611,6 +611,7 @@ const leafOk = (cs: readonly Node[], op: number) =>
 
 const sliceSize = (cv: Uint8Array) => cvByte(cv, 2)
 
+/** A `Slice` over one `Static` leaf (a slice of a slice is one slice). */
 const sliceOk = (
   op: number,
   cs: readonly Node[],
@@ -622,6 +623,7 @@ const sliceOk = (
   sliceSize(cv) <= 32 &&
   cs.length === 1 &&
   cs[0].encoding === Enc.Static &&
+  leafOk(cs[0].children, cs[0].operator) &&
   ks.length === 1 &&
   kEq(ks[0], { k: "ty", t: STATIC })
 

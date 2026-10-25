@@ -11,3 +11,4 @@ import Bridge.TyLay
 import Bridge.ReadNorm
 import Bridge.Final
 import Bridge.Pipeline
+import Bridge.InvCheck

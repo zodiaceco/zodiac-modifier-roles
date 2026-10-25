@@ -99,7 +99,8 @@ end
 theorem classifyNode_congr {s : Bool} {e : Encoding} {op : Operator} {cs cs' : List Condition}
     {lb : Nat} {cv cv' : Bytes} {ks : List K}
     (hcs : cs'.map (·.encoding) = cs.map (·.encoding)) (hcv : op = .Slice → cv' = cv)
-    (hnn : exactTyAll cs' = exactTyAll cs) :
+    (hnn : exactTyAll cs' = exactTyAll cs)
+    (hlf : cs'.all (fun c => leafOk c.children c.operator) = cs.all (fun c => leafOk c.children c.operator)) :
     classifyNode s e op cs' lb cv' ks = classifyNode s e op cs lb cv ks := by
   have hl : cs'.isEmpty = cs.isEmpty := by
     have := congrArg List.length hcs
@@ -107,7 +108,9 @@ theorem classifyNode_congr {s : Bool} {e : Encoding} {op : Operator} {cs cs' : L
     cases cs <;> cases cs' <;> simp_all
   by_cases hop : op = .Slice
   · rw [hcv hop]
-    unfold classifyNode leafOk sliceOk
+    unfold classifyNode sliceOk
+    rw [hlf]
+    unfold leafOk
     rw [hl, hcs, hnn]
   · have hs : ∀ c c' : Bytes, sliceOk op cs' c' ks = sliceOk op cs c ks := by
       have hb : (op == Operator.Slice) = false := by simp [hop]
@@ -134,6 +137,10 @@ theorem classify_skel (s : Bool) (c : Condition) : classify s (skel c) = classif
   · simp [List.map_map, Function.comp_def]
   · intro hop; rw [skel_compValue, hop]; rfl
   · rw [← skelAll_eq]; exact exactTyAll_skel _
+  · rw [List.all_map]
+    apply List.all_congr
+    · rfl
+    · intro a; simp [leafOk]
 termination_by sizeOf c
 decreasing_by exact sizeOf_child hm
 

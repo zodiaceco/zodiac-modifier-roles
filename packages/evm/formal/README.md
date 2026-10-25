@@ -64,8 +64,17 @@ Not covered yet:
   (`inv`, node by node `invP` in `Bridge/ReadNorm.lean`): adequacy's
   `adOk`, the children of an `And`/`Or` that read a parameter share one
   layout, checks on a whole value have type descriptions as children, and
-  so on. Each clause is a rule of the SDK check, but that `checkStored`
-  implies `inv` is neither proven nor tested yet.
+  so on. Each clause is a rule of the SDK check. That `checkStored` implies
+  `inv` is tested, not proven: `invB` decides `inv` (`invB_sound`,
+  `Bridge/InvCheck.lean`, the driver's `iv` query), and the differential
+  tests ask it of every array `checkStored` accepts
+  (`test/formal/sdk-check.spec.ts`; 11,600 over 4 seeds, all well-typed,
+  while half the rejected ones are not) and of every user tree whose
+  normalized form it accepts (`test/formal/sdk-normalize.spec.ts`; 14,300
+  over 8 seeds, all well-typed as written). The test found one rule
+  missing: the check accepted a `Slice` over a `Slice`, which adequacy does
+  not model; it now requires a leaf below a `Slice` (one `Slice` with the
+  combined shift does the same).
 - **Malformed calldata, on the target.** `Bridge` holds on every calldata.
   Whether Roles and the target contract decode non-canonical encodings the
   same way is not covered. Not planned for now; it depends on each
@@ -620,7 +629,7 @@ back) and `normalize_meaning`. `sdk_pipeline_agree`: the contract's
 evaluations of the stored tree and of $`D(c_0)`$ agree whenever neither
 reverts.
 
-Trusted: that `checkStored` implies `inv` (see Not covered); that `flattenCondition` produces an array that reads back as its
+Trusted: that `checkStored` implies `inv` (tested, see Not covered); that `flattenCondition` produces an array that reads back as its
 input (tested through the driver's `buildCond` in the normalization and check
 differential tests); `EnvOk`; the evaluator transcription (next section).
 

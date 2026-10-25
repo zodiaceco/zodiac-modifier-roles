@@ -151,6 +151,18 @@ suite("checkStored()", () => {
     expect(verdict(tree)).toBe("C4(S,..)")
   })
 
+  it("rejects a Slice over a Slice (one Slice with the combined shift does the same)", () => {
+    const inner: N = {
+      e: Enc.Static,
+      o: Op.Slice,
+      cv: "0x000420",
+      ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
+    }
+    const outer: N = { e: Enc.Static, o: Op.Slice, cv: "0x000001", ch: [inner] }
+    expect(verdict(call([inner]))).toBe("C4(S,..)")
+    expect(verdict(call([outer]))).toBe("rejected")
+  })
+
   it("accepts nested calldata and Slice below a whole-value check", () => {
     const slice: N = {
       e: Enc.Static,

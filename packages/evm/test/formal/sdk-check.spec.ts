@@ -15,6 +15,10 @@
  * packable array, and against the contract (`MockPackerUnpacker.packUnchecked`)
  * on arrays `checkStored` accepts.
  *
+ * The third test checks that every array `checkStored` accepts is well-typed
+ * (`Bridge.invB`, the `iv` query): the hypothesis of the normalization proof
+ * on calldata.
+ *
  * Needs the Lean driver: `cd formal && lake build roles-model`. Skipped when it
  * is missing. `SDK_CHECK_CASES` sets the number of arrays (default 3000),
  * `SDK_CHECK_SEED` the seed.
@@ -1132,5 +1136,56 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     );
     expect(leanDiff.length).to.equal(0);
     expect(chainDiff).to.equal(0);
+  });
+
+  it(`accepted arrays are well-typed (${CASES} random flat arrays)`, function () {
+    if (!existsSync(LEAN_BIN)) this.skip();
+    rand = mulberry32(SEED + 2);
+    const arrays = [
+      ...Array.from({ length: CASES }, () => {
+        if (chance(0.3)) return genFlat();
+        const fs = flattenN(genTree());
+        return chance(0.35) ? mutateFlat(fs) : fs;
+      }),
+      ...targetedCases().map((c) => c.fs),
+    ];
+    const queries = [true, false].flatMap((s) =>
+      arrays
+        .filter((fs) => checkStored(fs, s) !== undefined)
+        .map((fs) => ({ s, fs })),
+    );
+    // the check has teeth: arrays both modes reject, with valid codes
+    const rejected = arrays.filter(
+      (fs) =>
+        fs.every((f) => f.paramType <= 6 && Object.values(O).includes(f.operator)) &&
+        checkStored(fs, false) === undefined,
+    );
+    const res = spawnSync(LEAN_BIN, {
+      input:
+        [...queries.map((q) => q.fs), ...rejected]
+          .map((fs) => line(0, fs).replace(/^ck 0 /, "iv "))
+          .join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const all = String(res.stdout).trim().split("\n");
+    expect(all.length).to.equal(queries.length + rejected.length);
+    const out = all.slice(0, queries.length);
+    const rejBad = all.slice(queries.length).filter((r) => r !== "ok").length;
+    const bad = queries
+      .map((q, i) => ({ ...q, r: out[i] }))
+      .filter((q) => q.r !== "ok");
+    const why = new Map<string, number>();
+    for (const b of bad) {
+      const k = `s=${b.s ? 1 : 0} ${b.r.split(" ")[2]}`;
+      why.set(k, (why.get(k) ?? 0) + 1);
+    }
+    console.log(
+      `      ${queries.length} accepted (s=1: ${queries.filter((q) => q.s).length}), ${bad.length} not well-typed; ${rejBad} of ${rejected.length} rejected are not well-typed`,
+    );
+    for (const [k, n] of [...why].sort()) console.log(`      ${k}: ${n}`);
+    for (const b of bad.slice(0, 5))
+      console.log(`      s=${b.s ? 1 : 0} ${b.r} on ${line(0, b.fs).slice(5, 2000)}`);
+    expect(bad.length).to.equal(0);
   });
 });

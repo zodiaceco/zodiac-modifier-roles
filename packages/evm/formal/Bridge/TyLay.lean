@@ -185,7 +185,7 @@ theorem classify_lay (s : Bool) : ∀ (r : Condition) (k : K), classify s r = so
       rcases Bool.or_eq_true _ _ ▸ hc with hc | hc
       · simp only [leafOk, Bool.and_eq_true, List.isEmpty_iff] at hc; rw [hc.1]; rfl
       · simp only [sliceOk, Bool.and_eq_true, beq_iff_eq] at hc
-        obtain ⟨⟨⟨_, _⟩, hen⟩, hk⟩ := hc
+        obtain ⟨⟨⟨⟨_, _⟩, hen⟩, _⟩, hk⟩ := hc
         obtain ⟨w, rfl⟩ : ∃ w, cs = [w] := by
           cases cs with
           | nil => simp at hen

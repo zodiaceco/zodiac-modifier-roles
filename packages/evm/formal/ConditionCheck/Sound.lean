@@ -360,7 +360,8 @@ theorem leafOk_iff {cs : List Condition} {op : Operator} :
 
 theorem sliceOk_iff {op : Operator} {cs : List Condition} {cv : Bytes} {ks : List K} :
     sliceOk op cs cv ks = true ↔ op = .Slice ∧ 1 ≤ sliceSize cv ∧ sliceSize cv ≤ 32 ∧
-      ∃ ch, cs = [ch] ∧ ch.encoding = .Static ∧ ks = [.ty .static] := by
+      ∃ ch, cs = [ch] ∧ ch.encoding = .Static ∧ leafOk ch.children ch.operator = true ∧
+        ks = [.ty .static] := by
   unfold sliceOk
   rcases cs with _ | ⟨ch, _ | ⟨_, _⟩⟩ <;> simp [and_assoc]
 
@@ -707,7 +708,7 @@ theorem win_of (s : Bool) (c : Condition) (h : classify s c = some (.ty .static)
   rcases (node_word (.inl rfl) hn).2 with hl | hsl
   · obtain ⟨hcs, hnav⟩ := leafOk_iff.mp hl
     exact .leaf he hcs hnav
-  · obtain ⟨hop, h1, h32, ch, hcs, hche, hks'⟩ := sliceOk_iff.mp hsl
+  · obtain ⟨hop, h1, h32, ch, hcs, hche, -, hks'⟩ := sliceOk_iff.mp hsl
     have hm : ch ∈ c.children := by rw [hcs]; simp
     obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
     rw [hks'] at hk
@@ -817,7 +818,7 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     have D : Desc s c (.word w) := by
       rcases hw' with hl | hsl
       · obtain ⟨hcs, hnav⟩ := leafOk_iff.mp hl; exact .word he hcs hnav hw
-      · obtain ⟨hop, h1, h32, ch, hcs, hche, hks'⟩ := sliceOk_iff.mp hsl
+      · obtain ⟨hop, h1, h32, ch, hcs, hche, -, hks'⟩ := sliceOk_iff.mp hsl
         have hm : ch ∈ c.children := by rw [hcs]; simp
         obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
         rw [hks'] at hk; simp only [List.mem_singleton] at hk; subst hk
@@ -830,7 +831,7 @@ theorem desc_of_ty (s : Bool) (c : Condition) : ∀ {t : Ty} {u : Val},
     have D : Desc s c u := by
       rcases hw' with hl | hsl
       · obtain ⟨hcs, hnav⟩ := leafOk_iff.mp hl; exact .bytes he hcs hnav hu'
-      · obtain ⟨hop, h1, h32, ch, hcs, hche, hks'⟩ := sliceOk_iff.mp hsl
+      · obtain ⟨hop, h1, h32, ch, hcs, hche, -, hks'⟩ := sliceOk_iff.mp hsl
         have hm : ch ∈ c.children := by rw [hcs]; simp
         obtain ⟨k, hk, hck⟩ := classifyAll_mem s hks hm
         rw [hks'] at hk; simp only [List.mem_singleton] at hk; subst hk

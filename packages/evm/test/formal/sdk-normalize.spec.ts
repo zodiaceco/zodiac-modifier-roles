@@ -12,6 +12,10 @@
  * compValues makes equal subtrees frequent. The TypeScript must not throw
  * on any of them.
  *
+ * The second test checks the hypothesis of the normalization proof on
+ * calldata: when `checkStored` accepts the normalized tree, the tree as
+ * written is well-typed (`Bridge.invB`, the `iv` query).
+ *
  * Needs the Lean driver: `cd formal && lake build roles-model`. Skipped when it
  * is missing. `SDK_NORMALIZE_CASES` sets the number of trees (default 3000),
  * `SDK_NORMALIZE_SEED` the seed, `SDK_NORMALIZE_SHOW_THROWS=1` prints why the
@@ -25,6 +29,7 @@ import { fileURLToPath } from "node:url";
 
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
 import { flattenCondition } from "../../../sdk/src/main/condition/flattenCondition.js";
+import { checkStoredConditions } from "../../../sdk/src/main/condition/checkStored.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LEAN_BIN = path.resolve(here, "../../formal/.lake/build/bin/roles-model");
@@ -310,5 +315,37 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     // normalizeCondition does not throw on these trees; a change that makes
     // it throw would otherwise go unnoticed (those trees are skipped)
     expect(threw, "normalizeCondition threw").to.equal(0);
+  });
+
+  it(`trees whose normalized form the SDK check accepts are well-typed`, function () {
+    this.timeout(600_000);
+    const qs: { input: string; norm: string }[] = [];
+    let total = 0;
+    for (let i = 0; i < CASES; i++) {
+      const tree = genRoot();
+      const normalized = normalizeCondition(structuredClone(tree) as any) as any;
+      total++;
+      if (checkStoredConditions(flattenCondition(normalized) as any, true) === undefined) continue;
+      qs.push({ input: flat(tree), norm: flat(normalized) });
+    }
+    const res = spawnSync(LEAN_BIN, {
+      input: qs.flatMap((q) => [`iv ${q.input}`, `iv ${q.norm}`]).join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const out = String(res.stdout).trim().split("\n");
+    expect(out.length).to.equal(2 * qs.length);
+    const badIn = qs.map((q, i) => ({ ...q, r: out[2 * i] })).filter((q) => q.r !== "ok");
+    const badNorm = qs.map((q, i) => ({ ...q, r: out[2 * i + 1] })).filter((q) => q.r !== "ok");
+    const why = new Map<string, number>();
+    for (const b of badIn) why.set(b.r.split(" ")[2], (why.get(b.r.split(" ")[2]) ?? 0) + 1);
+    console.log(
+      `      ${qs.length} of ${total} accepted after normalization; not well-typed: ${badIn.length} as written, ${badNorm.length} normalized`
+    );
+    for (const [k, n] of [...why].sort()) console.log(`      as written, ${k}: ${n}`);
+    for (const b of badIn.slice(0, 4)) console.log(`      ${b.r} on ${b.input}`);
+    for (const b of badNorm.slice(0, 2)) console.log(`      normalized ${b.r} on ${b.norm}`);
+    expect(badNorm.length).to.equal(0);
+    expect(badIn.length).to.equal(0);
   });
 });
