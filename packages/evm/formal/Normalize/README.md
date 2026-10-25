@@ -13,10 +13,10 @@ lake build Normalize
 
 | File            | Contents                                                                                                        |
 | --------------- | --------------------------------------------------------------------------------------------------------------- |
-| `Defs.lean`     | The transcription: `prune`, `flatten`, `dedupe`, `unwrap`, `pushDownOr`, `sortB`, `normalize` (with fuel)        |
+| `Defs.lean`     | The transcription: `flatten`, `dedupe`, `unwrap`, `pushDownOr`, `sortB`, `normalize` (with fuel)        |
 | `Sem.lean`      | `sem`: the meaning of a condition; effect classes (`KeepsT`, `PureT`, `ChargerT`); `World.Ok`                    |
 | `Effects.lean`  | The SDK's effect checks (`writes`, `charges`, `chooses`) imply effect classes; reordering lemmas                |
-| `Steps.lean`    | Each of prune, flatten, dedupe, unwrap, sort keeps the meaning                                                  |
+| `Steps.lean`    | Each of flatten, dedupe, unwrap, sort keeps the meaning                                                  |
 | `PushDown.lean` | `pushDownOr` keeps the meaning (distributivity)                                                                 |
 | `Sound.lean`    | `normalize_sound`; `consume_comm` (the contract's allowance charges commute)                                    |
 
@@ -47,7 +47,6 @@ pick charges depending on earlier ones.
 
 | Step         | Argument                                                                                                                   |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| prune        | Dropped `Pass` nodes pass; nothing after them reads a field. `CallWithinAllowance` moves only when `canReorderAnd` holds    |
 | flatten      | `And`/`Or` are associative                                                                                                 |
 | dedupe       | A duplicate that charges nothing (`And`) passed already; a duplicate in an `Or` failed already. Skipped next to `Pluck`s   |
 | unwrap       | `And[x] = Or[x] = x`                                                                                                       |

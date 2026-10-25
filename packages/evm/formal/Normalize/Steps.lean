@@ -114,7 +114,7 @@ theorem logical_op {c : Cond} (h : isLogical c = true) : c.op = 1 ∨ c.op = 2 :
 theorem seqT_pass_cons (l : List (Thunk S C)) : seqT (passT :: l) = seqT l := by
   funext sl cs; rfl
 
-/-! ## `prunePassNodes` -/
+/-! ## Matches children -/
 
 theorem assign_append (d : V) (a b : List Cond) (fs : List V) (v : V) :
     assign d (a ++ b) fs v = assign d a fs v ++ assign d b (fs.drop (a.countP isStruct)) v := by
@@ -127,121 +127,6 @@ theorem assign_append (d : V) (a b : List Cond) (fs : List V) (v : V) :
       congr 2
       cases fs <;> simp []
     · simp [h, ih]
-
-/-- Dropping `Pass` nodes from a tail of `Pass` and non-structural children. -/
-theorem seqT_prune_tail (B : List Cond) (hB : ∀ x ∈ B, (isPass x || !isStruct x) = true)
-    (fs1 fs2 : List V) (v : V) :
-    seqT ((assign W.dflt (B.filter fun x => !isPass x) fs1 v).map fun p => sem W p.1 p.2) =
-      seqT ((assign W.dflt B fs2 v).map fun p => sem W p.1 p.2) := by
-  induction B generalizing fs1 fs2 with
-  | nil => rfl
-  | cons x xs ih =>
-    have hxs : ∀ y ∈ xs, (isPass y || !isStruct y) = true := fun y hy => hB y (by simp [hy])
-    by_cases hp : isPass x = true
-    · have e : (x :: xs).filter (fun x => !isPass x) = xs.filter (fun x => !isPass x) := by
-        simp [hp]
-      rw [e]
-      simp only [Normalize.assign]
-      split <;> simp only [List.map_cons, sem_pass hp, seqT_pass_cons] <;> exact ih hxs _ _
-    · have hs : isStruct x = false := by
-        have := hB x (by simp); simp_all
-      have e : (x :: xs).filter (fun x => !isPass x) = x :: xs.filter (fun x => !isPass x) := by
-        simp [hp]
-      rw [e]
-      simp only [Normalize.assign, hs, Bool.false_eq_true, ite_false, List.map_cons]
-      funext sl cs
-      simp only [seqT_cons]
-      rw [ih hxs fs1 fs2]
-
-theorem mem_takeWhile {p : Cond → Bool} : ∀ {l : List Cond} {x : Cond}, x ∈ l.takeWhile p → p x = true
-  | [], _, h => by simp at h
-  | a :: l, x, h => by
-    simp only [List.takeWhile_cons] at h
-    split at h
-    · rename_i ha
-      rcases List.mem_cons.1 h with rfl | h
-      · exact ha
-      · exact mem_takeWhile h
-    · simp at h
-
-theorem mem_drop_cutIdx {ch : List Cond} {keep : Nat} {x : Cond}
-    (hx : x ∈ ch.drop (cutIdx ch keep)) : (isPass x || !isStruct x) = true := by
-  let p := fun x => isPass x || !isStruct x
-  let k := min (ch.reverse.takeWhile p).length (ch.length - (keep + 1))
-  have hdrop : ch.drop (cutIdx ch keep) = (ch.reverse.take k).reverse := by
-    rw [List.take_reverse]; simp [cutIdx, k, p]
-  have htake : ch.reverse.take k = (ch.reverse.takeWhile p).take k := by
-    have e := congrArg (List.take k) (List.takeWhile_append_dropWhile (p := p) (l := ch.reverse))
-    rw [List.take_append_of_le_length (Nat.min_le_left _ _)] at e
-    exact e.symm
-  rw [hdrop, List.mem_reverse, htake] at hx
-  exact mem_takeWhile (List.mem_of_mem_take hx)
-
-theorem seqT_pruneList (ch : List Cond) (keep : Nat) (fs : List V) (v : V) :
-    seqT ((assign W.dflt (pruneList ch keep) fs v).map fun p => sem W p.1 p.2) =
-      seqT ((assign W.dflt ch fs v).map fun p => sem W p.1 p.2) := by
-  have e : ch = ch.take (cutIdx ch keep) ++ ch.drop (cutIdx ch keep) := (List.take_append_drop _ _).symm
-  conv => rhs; rw [e]
-  funext sl cs
-  rw [pruneList, assign_append, assign_append, List.map_append, List.map_append, seqT_append,
-    seqT_append, seqT_prune_tail _ (fun x hx => mem_drop_cutIdx hx)]
-
-theorem assign_move (d : V) (g : Cond → Bool) :
-    ∀ (cs : List Cond), (∀ x ∈ cs, g x = true → isStruct x = false) → ∀ (fs : List V) (v : V),
-      (assign d (cs.filter (fun x => !g x) ++ cs.filter g) fs v).Perm (assign d cs fs v)
-  | [], _, _, _ => .nil
-  | x :: xs, hg, fs, v => by
-    have ih := assign_move d g xs (fun y hy => hg y (by simp [hy]))
-    by_cases hx : g x = true
-    · have hs := hg x (by simp) hx
-      have e1 : (x :: xs).filter (fun x => !g x) = xs.filter (fun x => !g x) := by
-        simp [hx]
-      have e2 : (x :: xs).filter g = x :: xs.filter g := by simp [hx]
-      have e3 : ∀ fs', assign d (x :: xs.filter g) fs' v = (x, v) :: assign d (xs.filter g) fs' v := by
-        intro fs'; simp [Normalize.assign, hs]
-      have e4 : assign d (x :: xs) fs v = (x, v) :: assign d xs fs v := by
-        simp [Normalize.assign, hs]
-      rw [e1, e2, assign_append, e3, e4]
-      refine List.perm_middle.trans (List.Perm.cons _ ?_)
-      rw [← assign_append]
-      exact ih fs v
-    · have e1 : (x :: xs).filter (fun x => !g x) = x :: xs.filter (fun x => !g x) := by
-        simp [hx]
-      have e2 : (x :: xs).filter g = xs.filter g := by simp [hx]
-      rw [e1, e2, List.cons_append]
-      simp only [Normalize.assign]
-      split
-      · exact List.Perm.cons _ (ih _ v)
-      · exact List.Perm.cons _ (ih _ v)
-
-theorem seqT_reorderGA (hW : W.Ok step) (cs : List Cond) (fs : List V) (v : V) :
-    seqT ((assign W.dflt (reorderGA cs) fs v).map fun p => sem W p.1 p.2) =
-      seqT ((assign W.dflt cs fs v).map fun p => sem W p.1 p.2) := by
-  unfold reorderGA
-  split
-  · rename_i hc
-    have hperm := assign_move W.dflt isGlobalAllowance cs
-      (fun x _ hx => by simp only [isGlobalAllowance, Bool.and_eq_true] at hx; simpa using hx.2) fs v
-    refine seqT_perm hW hperm ?_
-    rw [assign_fst, canReorderAnd_perm (List.perm_append_comm.trans (List.filter_append_perm _ _))]
-    exact hc
-  · rfl
-
-theorem prune_same (hW : W.Ok step) (c : Cond) : Same W (prune c) c := by
-  unfold prune
-  split
-  · rename_i hc
-    simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true, dynTuple] at hc
-    have ho : c.op = 5 := hc.1
-    have he : c.enc = 3 ∨ c.enc = 5 := by omega
-    constructor
-    · funext v
-      rw [sem_matches (c := { c with ch := pruneCh c }) ho he, sem_matches ho he]
-      show matchesT W c.enc c.cv (pruneCh c) v = _
-      exact congrFun (matchesT_congr fun fs v => by rw [pruneCh, seqT_pruneList, seqT_reorderGA hW]) v
-    · rw [struct_nonlog (c := { c with ch := pruneCh c }) (by simp [ho]) (by simp [ho]),
-        struct_nonlog (by simp [ho]) (by simp [ho])]
-  · exact Same.refl _
 
 /-! ## `flattenNestedBranches`, `dedupeChildren`, `unwrapSingleChild` -/
 

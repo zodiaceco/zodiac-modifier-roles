@@ -7,8 +7,8 @@ The children of a check that reads its whole value (`EqualTo` on a tuple,
 `Pass`, ...) only describe the value's type: `AbiLocation.size` and
 `__input` read their encodings and sizes, and nothing below a word, `bytes`
 or nested calldata (`TyEq`). `TD` lists the descriptions the SDK check
-accepts there (`exactTy`). Normalization rewrites inside them (it prunes a
-nested call's `Matches`, say), but keeps their type: `td_normalize`, with
+accepts there (`exactTy`). Normalization rewrites inside them (it sorts a
+nested call's `Or`, say), but keeps their type: `td_normalize`, with
 `RTy`, the same type on the SDK trees (`RTy.D`).
 -/
 
@@ -125,18 +125,16 @@ theorem rty_withCh {c : Cond} {l : List Cond} (hlen : l.length = c.ch.length)
 
 /-! ## Normalization inside a description -/
 
-/-- A node other than `And`/`Or` stays itself, with its children normalized
-    (and pruned, for a `Matches`). -/
+/-- A node other than `And`/`Or` stays itself, with its children normalized. -/
 theorem normalize_nonlog (k : Nat) {c : Cond} (h1 : c.op ≠ 1) (h2 : c.op ≠ 2)
     (hkw : keepsAsWritten c = false) :
-    normalize (k + 1) c = prune { c with ch := c.ch.map (normalize k) } := by
+    normalize (k + 1) c = { c with ch := c.ch.map (normalize k) } := by
   rw [normalize]
   split
   · rename_i h; rw [hkw] at h; cases h
   dsimp only
-  have hop : (prune { c with ch := c.ch.map (normalize k) }).op = c.op := by
-    unfold prune; split <;> rfl
-  generalize prune { c with ch := c.ch.map (normalize k) } = x at hop ⊢
+  have hop : ({ c with ch := c.ch.map (normalize k) } : Cond).op = c.op := rfl
+  generalize ({ c with ch := c.ch.map (normalize k) } : Cond) = x at hop ⊢
   have hl : isLogical x = false := by unfold isLogical; simp [hop, h1, h2]
   have hf : flatten x = x := by unfold flatten; simp [hl]
   have hd : dedupe x = x := by unfold dedupe; simp [hl]
@@ -144,11 +142,6 @@ theorem normalize_nonlog (k : Nat) {c : Cond} (h1 : c.op ≠ 1) (h2 : c.op ≠ 2
   have hp : pushDownOr (normalize k) x = x := by unfold pushDownOr pushStep; simp [hop, h2]
   have hs : sortB x = x := by unfold sortB; simp [hl]
   rw [hf, hd, hu, hp, hs]
-
-theorem prune_enc (c : Cond) : (prune c).enc = c.enc ∧ (prune c).op = c.op := by
-  unfold prune; split <;> exact ⟨rfl, rfl⟩
-
-theorem prune_of_ne5 {c : Cond} (h : c.op ≠ 5) : prune c = c := by unfold prune; simp [h]
 
 theorem navOp_false {o : Nat} (h : navOp o = false) : o ≠ 1 ∧ o ≠ 2 ∧ o ≠ 5 := by
   unfold navOp at h; simp only [Bool.or_eq_false_iff, beq_eq_false_iff_ne] at h; omega
@@ -164,15 +157,14 @@ theorem td_normalize : ∀ (k : Nat) (x : Cond), TD x → TD (normalize k x) ∧
     cases h with
     | abi he h1 h2 =>
       rw [normalize_nonlog k h1 h2 hkw']
-      obtain ⟨he', hop⟩ := prune_enc { x with ch := x.ch.map (normalize k) }
-      generalize prune { x with ch := x.ch.map (normalize k) } = y at he' hop ⊢
-      simp only at he' hop
-      rw [he] at he'
+      have he' : ({ x with ch := x.ch.map (normalize k) } : Cond).enc = 5 := he
+      have hop : ({ x with ch := x.ch.map (normalize k) } : Cond).op = x.op := rfl
+      generalize ({ x with ch := x.ch.map (normalize k) } : Cond) = y at he' hop ⊢
       refine ⟨.abi he' (by rw [hop]; exact h1) (by rw [hop]; exact h2), .mk (by rw [he', he])
         (by rw [isInl_abi he', isInl_abi he]) (fun hi => by rw [isInl_abi he'] at hi; cases hi)
         (fun _ _ h5 => absurd he' h5) (fun _ _ _ _ _ h5 => absurd he' h5)⟩
     | @slice _ w h13 he hch hw =>
-      rw [normalize_nonlog k (by omega) (by omega) hkw', prune_of_ne5 (by simp; omega)]
+      rw [normalize_nonlog k (by omega) (by omega) hkw']
       have hch' : ({ x with ch := x.ch.map (normalize k) } : Cond).ch = [normalize k w] := by
         simp [hch]
       have hw' : x.enc = 1 → AllN winEnc (normalize k w) := fun h1 =>
@@ -190,7 +182,7 @@ theorem td_normalize : ∀ (k : Nat) (x : Cond), TD x → TD (normalize k x) ∧
         · rw [isInl_dyn (c := { x with ch := _ }) e] at hi; cases hi
     | node hnav henc hch =>
       obtain ⟨h1, h2, h5⟩ := navOp_false hnav
-      rw [normalize_nonlog k h1 h2 hkw', prune_of_ne5 (by simpa using h5)]
+      rw [normalize_nonlog k h1 h2 hkw']
       refine ⟨.node hnav henc fun y hy => ?_, rty_withCh avatar (by simp) fun i h1 _ => ?_⟩
       · obtain ⟨z, hz, rfl⟩ := List.mem_map.1 hy; exact (IH z (hch z hz)).1
       · simp only [List.getElem_map]; exact (IH _ (hch _ (List.getElem_mem _))).2

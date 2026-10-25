@@ -42,8 +42,8 @@ Matches:AbiEncoded[
       Matches:Tuple[Pass:Dynamic, Pass:Static, EqualTo(2)] ] ]
 ```
 
-This is what the SDK's `normalizeCondition` leaves after pruning trailing
-`Pass` nodes. It no longer pads branches to one full type.
+Each branch lists only the fields it checks. The SDK stores it as written:
+it no longer pads branches to one full type.
 
 **Integrity:** the two tuples have 2 and 3 type children, so their hashes
 differ, and neither is `Dynamic`-ish.
@@ -134,6 +134,7 @@ item 1, a policy bypass):
 
 - **Zip placement:** a Zip directly under `Matches`, or first in an `And`.
 - **Exact type unknown:** an `And`/`Or` or a tuple `Matches` below a check that
-  reads its whole value. After pruning, its size isn't the value's.
+  reads its whole value. A `Matches` may list fewer fields, so its size
+  isn't the value's.
 - **Non-structural children** (`EtherValue`, `None`) inside a tuple or array
   type description.

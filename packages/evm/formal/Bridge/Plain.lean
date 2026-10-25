@@ -6,7 +6,7 @@ import Bridge.Normalize
 `normalize_plain`: plain nodes (type descriptions, leaf checks, `Slice`
 windows) are fixed points. `nodes_normalize`: a property of single nodes
 (their encoding, operator and compValue) that the fresh nodes normalization
-makes (`Or` nodes, `Pass` padding) satisfy holds of every node of the
+makes (`Or` nodes) satisfy holds of every node of the
 normalized tree if it holds of every node of the input (e.g. `CvOk`).
 -/
 
@@ -34,8 +34,6 @@ theorem normalize_plain : ∀ (k : Nat) (c : Cond), Plain c → normalize k c = 
         exact List.map_congr_left fun x hx => normalize_plain k x (hch x hx)
       rw [this]; cases c; rfl
     rw [hc1]
-    have hprune : prune c = c := by
-      unfold prune; simp [h5]
     have hlog : isLogical c = false := by
       unfold isLogical; simp [h1, h2]
     have hflat : flatten c = c := by unfold flatten; simp [hlog]
@@ -44,6 +42,6 @@ theorem normalize_plain : ∀ (k : Nat) (c : Cond), Plain c → normalize k c = 
     have hpush : pushDownOr (normalize k) c = c := by
       unfold pushDownOr pushStep; simp [h2]
     have hsort : sortB c = c := by unfold sortB; simp [hlog]
-    rw [hprune, hflat, hded, hunw, hpush, hsort]
+    rw [hflat, hded, hunw, hpush, hsort]
 
 end Bridge

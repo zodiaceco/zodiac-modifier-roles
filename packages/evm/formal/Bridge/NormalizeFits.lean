@@ -3,7 +3,7 @@ import Bridge.Preserve
 /-!
 # Normalization keeps a tree fitting its layout
 
-`normalize_fits`: every step of `normalize` (pruning, flattening, dedupe,
+`normalize_fits`: every step of `normalize` (flattening, dedupe,
 unwrap, pushing an `Or` down, sorting) keeps a tree that fits layout `m`
 fitting `m`.
 -/
@@ -73,7 +73,7 @@ theorem normalize_fits : ∀ (k : Nat) (c : Cond) (m : Condition), F c m → F (
     have IH : ∀ x m', F x m' → F (normalize k x) m' := fun x m' => normalize_fits k x m'
     exact sortB_fits avatar P (pushDownOr_fits avatar P _ (fun n hn => IH n m hn)
       (unwrap_fits avatar P (dedupe_fits avatar P (flatten_fits avatar P
-        (prune_fits avatar P (fits_children avatar P k IH h (by simpa using hkw)))))))
+        (fits_children avatar P k IH h (by simpa using hkw))))))
 
 end
 end Bridge

@@ -144,8 +144,8 @@ by hand; `MockLocator` does not expose them.
 - **Integrity**: the theorems are about trees satisfying `Desc`, `RootOK` and
   `ZipOK`. That `Integrity.enforce` only accepts such trees (for a given
   signature) is not proven here. `Desc` lets a `Matches` on a tuple or
-  calldata describe the first fields of a value (trailing `Pass` children
-  pruned; a tuple only if it is not inlined), and requires the children of
+  calldata describe the first fields of a value (trailing parameters left
+  out; a tuple only if it is not inlined), and requires the children of
   an operator that reads its whole value (`EqualTo` on a tuple, ..., and
   `Pass` containers) to be a type description (`exactTy`): their sizes give
   the length read. No node of it navigates, except below nested calldata

@@ -296,7 +296,7 @@ assignment rule, and a type check. `checkCondition s c` classifies every node
 bottom-up: structural with an ABI type $`t`$ (`static`, `dynamic`, `tuple`,
 `array`, `call lb ts`), non-structural, or a Zip. The type of a `Matches` on
 a tuple or calldata is *open*: it lists the first fields, the value may have
-more (as pruning leaves them). Containers need structural children of the
+more (a tree may leave trailing parameters out). Containers need structural children of the
 right types; the children of one `And`/`Or`, and the elements of an array,
 must all contain the most specific of them (`Ty.sub`: equal, a prefix of one
 dynamic tuple or call, or bytes-like interpretations of one value). A Zip may
@@ -321,8 +321,8 @@ For every avatar and memory contents:
 where $`c = \mathsf{tree}(\mathit{fs})`$ and $`v : t`$ is "the calldata
 $`v = \mathsf{call}(\mathit{pre}, \vec a)`$ has type $`t`$":
 $`|\mathit{pre}| = lb`$ and each argument has its type (for an open type,
-the first arguments; real calldata with the trailing parameters a pruned
-tree leaves out has the type too). Nested calldata has its
+the first arguments; real calldata with the trailing parameters a tree
+leaves out has the type too). Nested calldata has its
 `call` type only if it parses as such; with $`s = \mathsf{true}`$, any `bytes`
 value also counts. So every decoder theorem holds for every well-typed
 calldata. For $`\mathsf{noCalldata}`$, every node `evaluate` reaches reads only
@@ -351,8 +351,8 @@ Where Integrity and the check differ (details in the
 Integrity accepts trees `evaluate` misreads (backlog items 1, 2, 6), and
 rejects shapes that are read correctly: `Slice` next to plain checks
 (item 4), a Zip next to a `Tuple`/`Array` check (item 10), checks of a
-prefix of one dynamic tuple or call (what pruning leaves; the SDK no longer
-pads them to one type tree), and two checks of one array whose elements are
+prefix of one dynamic tuple or call (branches written with fewer
+parameters; the SDK no longer pads them to one type tree), and two checks of one array whose elements are
 different interpretations. Unique Pluck indices are not needed for safe
 decoding.
 
@@ -371,11 +371,16 @@ decoding.
 [Details](Normalize/README.md) · Lean: `Normalize/Sound.lean`
 
 The SDK normalizes every condition before it is stored (`normalizeCondition`:
-prune trailing `Pass` nodes, flatten, dedupe and unwrap `And`/`Or`, push `Or`
-down into `Matches`/`And`, sort). It used to pad branches to one type tree,
-as Integrity requires; the SDK stores trees with the `...Packed` setters, and
-its check accepts checks of a prefix of one tuple as siblings, so padding was
-removed (with it, bug 13 below and about 1,500 lines of proof). `Normalize/Defs.lean`
+flatten, dedupe and unwrap `And`/`Or`, push `Or` down into `Matches`/`And`,
+sort). It used to pad branches to one type tree, as Integrity requires; the
+SDK stores trees with the `...Packed` setters, and its check accepts checks
+of a prefix of one tuple as siblings, so padding was removed (with it, bug 13
+below and about 1,500 lines of proof). It also used to prune trailing `Pass`
+nodes. The contract locates every child of a `Matches` before evaluating
+any, so pruning could change the verdict on calldata (see the end of Findings
+on calldata); on the live mainnet permissions it saved 3.6% of storing gas
+and cost about 2.8k gas per call for each `Pass` it kept out. Pruning was
+removed. `Normalize/Defs.lean`
 transcribes it; `test/formal/sdk-normalize.spec.ts` checks the transcription
 against the TypeScript on random trees (40,000 over 8 seeds, no difference).
 
@@ -458,13 +463,13 @@ in the SDK with regression tests (`effects.test.ts`,
     the stored tree rejected calls the written one accepted (narrowing, on
     the packed path only: Integrity rejects the tree). Removed with padding.
 
-By design, not changed: `Pass` places no constraint on a value, including
+Removed with pruning: `Pass` places no constraint on a value, including
 whether it is well-formed. A trailing `Pass` still makes the contract locate
 the field (follow its offset), so on a malformed encoding the tree as written
-can fail where the pruned one passes. Example: `f(bytes b)` with
+could fail where the pruned one passed. Example: `f(bytes b)` with
 `Matches:AbiEncoded[EqualTo(1), Pass:Dynamic]` on `b` fails on
 `b = abi.encode(1)` (`CalldataOverflow`), its normalized form
-`Matches:AbiEncoded[EqualTo(1)]` passes. Roles never checks ABI
+`Matches:AbiEncoded[EqualTo(1)]` passed. Roles never checks ABI
 well-formedness (a `Pass:Static` field is not read, trailing data and
 non-canonical offsets are accepted), so this side effect is not a check to
 rely on. On top-level calldata a Solidity target rejects such calldata
@@ -549,7 +554,7 @@ or one a prefix of the other, e.g. no selector) on candidates whose fields
 have different layouts, such as `abi.encode(uint256)` and
 `abi.encode(bytes)`. The world reads a value with one layout per key, and
 the evaluator reads each branch with its own. On calldata valid for only one
-of them, pruning may change the verdict (see Findings).
+of them, the two can disagree (see Findings).
 
 `Decodable data m l`: decoding the calldata with `m` at `l` does not
 overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
@@ -573,10 +578,9 @@ Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/NormalizeFits.lean`
 \mathsf{Fits}(c, D(c), m) \;\Longrightarrow\; \mathsf{Fits}(\mathsf{normalize}_k(c), D(\mathsf{normalize}_k(c)), m)
 ```
 
-Pruning drops trailing `Pass` children of containers that are not inlined,
-and every rewrite of `And`/`Or` keeps each branch at the layout. Inside a type
-description, normalization may rewrite (it prunes a nested call's `Matches`,
-say) but keeps the description's type (`td_normalize`). At a
+Every rewrite of `And`/`Or` keeps each branch at the layout. Inside a type
+description, normalization may rewrite (it sorts a nested call's `Or`, say)
+but keeps the description's type (`td_normalize`). At a
 variant, pushing an `Or` down merges only call branches with the same
 compValue, which fit the same candidate: the merge is done at the candidate.
 Also `cvOk_normalize`.

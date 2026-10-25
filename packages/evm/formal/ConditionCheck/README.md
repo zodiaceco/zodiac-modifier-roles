@@ -178,8 +178,8 @@ unmutated and mutated runs, every difference fell into one of these classes.
   value (`EqualTo`, a comparison, `Pluck` or `Custom` on a tuple or array, or
   below a `Pass` container). The operator hashes or passes the whole value;
   the children only describe its type, through their sizes. `Desc` requires
-  such a type description (`exactTy`): a pruned `Matches` there would give a
-  shorter size, and an `Or` of different types has none. Nested calldata
+  such a type description (`exactTy`): a `Matches` listing fewer fields there
+  would give a shorter size, and an `Or` of different types has none. Nested calldata
   and `Slice` nodes are allowed there with any checks below them:
   `AbiLocation.size` reads them as `bytes` or a word. (In a fuzz run of 3,000
   trees the check rejected 232 trees Integrity accepts, 334 before nested
@@ -189,8 +189,8 @@ unmutated and mutated runs, every difference fell into one of these classes.
 
 - Checks of a prefix of one dynamic tuple or call in an `And`/`Or`, or as
   the elements of one array: `Or[Matches:Tuple[D, EqualTo], Matches:Tuple[D,
-  Pass, EqualTo]]` on `(bytes, uint, uint)`, as pruning trailing `Pass`
-  nodes leaves them. Integrity compares type hashes exactly; each check reads
+  Pass, EqualTo]]` on `(bytes, uint, uint)`, written with only the
+  fields each branch checks. Integrity compares type hashes exactly; each check reads
   the fields it lists where they are (`Desc` allows a `Matches` to describe
   the first fields of a value, `Ty` has open tuple and call types ordered by
   prefix, `Ty.sub`). This is why `normalizeCondition` no longer pads.

@@ -716,7 +716,7 @@ function targetedCases(): Case[] {
     );
 
   // prefix siblings: checks of the first fields of one tuple or call
-  // (pruned Matches), next to longer, closed or static ones
+  // (a Matches listing fewer fields), next to longer, closed or static ones
   const ptup = (o: number, ...ch: N[]) => node(E.Tuple, o, ch);
   const pcall = (o: number, ...ch: N[]) => node(E.Abi, o, ch);
   const eqS = () => node(E.Static, O.EqualTo, [], bytes(32));

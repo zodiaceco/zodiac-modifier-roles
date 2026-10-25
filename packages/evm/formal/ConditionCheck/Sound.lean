@@ -1232,7 +1232,7 @@ theorem checkCondition_sound {s : Bool} {root : Condition} {t : Ty}
 /-- The same for a root of type `call lb ts o` (an `AbiEncoded` root, or an
     `And`/`Or` of such): every calldata with `lb` leading bytes and arguments
     of types `ts`, followed by more arguments if the type is open (a
-    `Matches` root, whose trailing `Pass` children were pruned). -/
+    `Matches` root, which may leave trailing parameters out). -/
 theorem checkCondition_call {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o : Bool}
     (h : checkCondition s root = some (.call lb ts o)) {pre : Bytes} {args : List Val}
     (hpre : pre.length = lb) (hargs : if o then HasTPre s args ts else HasTAll s args ts) :

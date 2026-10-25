@@ -94,7 +94,7 @@ async function setup(signature: string) {
 describe("Integrity review: trees Integrity rejects, enforced as intended", () => {
   it("1. checks of a prefix of one tuple, side by side", async () => {
     const { check, ok, denied } = await setup("fn((bytes, uint256, uint256))");
-    // x.b == 1 || x.c == 2, as normalize leaves it (trailing Pass pruned)
+    // x.b == 1 || x.c == 2, each branch listing only the fields it checks
     await check(
       calldata([
         or([

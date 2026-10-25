@@ -51,17 +51,6 @@ include hloc in
 theorem AllN.withCh {c : Cond} (h : P c) {l : List Cond} (hl : ∀ x ∈ l, AllN P x) :
     AllN P { c with ch := l } := .mk ((hloc c l).2 h) hl
 
-theorem mem_pruneCh {c x : Cond} (h : x ∈ pruneCh c) : x ∈ c.ch := by
-  unfold pruneCh pruneList at h
-  have hre : ∀ y, y ∈ reorderGA c.ch → y ∈ c.ch := by
-    intro y hy; unfold reorderGA at hy; split at hy
-    · simp only [List.mem_append, List.mem_filter] at hy; rcases hy with h | h <;> exact h.1
-    · exact hy
-  simp only [List.mem_append, List.mem_filter] at h
-  rcases h with h | h
-  · exact hre x (List.mem_of_mem_take h)
-  · exact hre x (List.mem_of_mem_drop h.1)
-
 include hloc in
 theorem allN_get! (hP0 : AllN P (default : Cond)) {o : Cond} (h : AllN P o) (i : Nat) : AllN P o.ch[i]! := by
   by_cases hi : i < o.ch.length
@@ -126,10 +115,6 @@ theorem allN_normalize (hP0 : AllN P (default : Cond)) :
     have h1 : AllN P { c with ch := c.ch.map (normalize k) } :=
       AllN.withCh P hloc (AllN.self P h) fun y hy => by
         obtain ⟨x, hx, rfl⟩ := List.mem_map.1 hy; exact IH x (AllN.ch P h x hx)
-    have hpr : ∀ x, AllN P x → AllN P (prune x) := fun x hx => by
-      unfold prune; split
-      · exact AllN.withCh P hloc (AllN.self P hx) fun y hy => AllN.ch P hx y (mem_pruneCh hy)
-      · exact hx
     have hfl : ∀ x, AllN P x → AllN P (flatten x) := fun x hx => by
       unfold flatten; split
       · refine AllN.withCh P hloc (AllN.self P hx) fun y hy => ?_
@@ -158,7 +143,7 @@ theorem allN_normalize (hP0 : AllN P (default : Cond)) :
       · exact AllN.withCh P hloc (AllN.self P hx) fun y hy =>
           AllN.ch P hx y ((sortCh_perm x.ch).mem_iff.1 hy)
       · exact hx
-    exact hso _ (hpu _ (hun _ (hde _ (hfl _ (hpr _ h1)))))
+    exact hso _ (hpu _ (hun _ (hde _ (hfl _ h1))))
 
 end
 end Bridge

@@ -150,18 +150,6 @@ def canReorderOr (cs : List Cond) : Bool :=
   !cs.any fun c => writes c || charges c
 
 mutual
-  /-- `isDynamicParamType` (EtherValue counts as static). -/
-  def isDyn : Cond → Bool
-    | ⟨e, _, _, ch⟩ =>
-      if e == 1 || e == 6 then false
-      else if e == 2 || e == 4 then true
-      else isDynL ch
-  def isDynL : List Cond → Bool
-    | [] => false
-    | x :: xs => isDyn x || isDynL xs
-end
-
-mutual
   /-- `isInlined` (the contract's `Topology.isInlined`): no `Dynamic`,
       `Array` or `AbiEncoded` encoding in the subtree. -/
   def isInl : Cond → Bool
@@ -170,31 +158,6 @@ mutual
     | [] => true
     | x :: xs => isInl x && isInlL xs
 end
-
-/-! ## `prunePassNodes` -/
-
-def cutIdx (ch : List Cond) (keep : Nat) : Nat :=
-  ch.length - min (ch.reverse.takeWhile fun x => isPass x || !isStruct x).length
-    (ch.length - (keep + 1))
-
-def isGlobalAllowance (c : Cond) : Bool := c.op == 30 && !isStruct c
-
-/-- `CallWithinAllowance` children moved to the end, when allowed. -/
-def reorderGA (cs : List Cond) : List Cond :=
-  if canReorderAnd cs then cs.filter (fun x => !isGlobalAllowance x) ++ cs.filter isGlobalAllowance
-  else cs
-
-/-- Drop the `Pass` nodes of the trailing run of `Pass` and non-structural children. -/
-def pruneList (ch : List Cond) (keep : Nat) : List Cond :=
-  ch.take (cutIdx ch keep) ++ (ch.drop (cutIdx ch keep)).filter fun x => !isPass x
-
-def dynTuple (c : Cond) : Bool := c.enc == 3 && isDyn c
-
-def pruneCh (c : Cond) : List Cond :=
-  pruneList (reorderGA c.ch) (if dynTuple c then (reorderGA c.ch).findIdx isDyn else 0)
-
-def prune (c : Cond) : Cond :=
-  if c.op == 5 && (c.enc == 5 || dynTuple c) then { c with ch := pruneCh c } else c
 
 /-! ## `flattenNestedBranches`, `dedupeChildren`, `unwrapSingleChild` -/
 
@@ -392,6 +355,6 @@ def normalize : Nat → Cond → Cond
   | n + 1, c =>
     if keepsAsWritten c then c else
     let c1 := { c with ch := c.ch.map (normalize n) }
-    sortB (pushDownOr (normalize n) (unwrap (dedupe (flatten (prune c1)))))
+    sortB (pushDownOr (normalize n) (unwrap (dedupe (flatten c1))))
 
 end Normalize

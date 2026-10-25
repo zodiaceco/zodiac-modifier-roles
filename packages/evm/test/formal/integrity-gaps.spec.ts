@@ -76,7 +76,10 @@ import {
   tyKey,
 } from "../../../sdk/src/main/condition/checkStored.js";
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
-import { checkStoredConditions, toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import {
+  checkStoredConditions,
+  toFlatNodes,
+} from "../../../sdk/src/main/condition/checkStored.js";
 import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { Encoding, Operator, flattenCondition } from "../utils.js";
 
@@ -87,16 +90,11 @@ const REPORT = process.env.GAP_REPORT;
 const CHECK = process.env.GAP_CHECK === "1";
 const MUTATE = Number(process.env.GAP_MUTATE ?? 0);
 const NORMALIZE = process.env.GAP_NORMALIZE === "1";
-// by design: `Pass` constrains nothing, not even well-formedness (formal/README.md)
-const STRAY = "pruned-pass-accepts-malformed-encoding";
 const EVAL = Number(process.env.GAP_EVAL ?? 0);
 const PACKED = process.env.GAP_PACKED === "1";
 const GAS = BigInt(process.env.GAP_GAS ?? 16_000_000);
 /** Allowance keys used in `GAP_EVAL` mode. */
-const KEYS = [
-  "0x" + "a1".repeat(32),
-  "0x" + "b2".repeat(32),
-];
+const KEYS = ["0x" + "a1".repeat(32), "0x" + "b2".repeat(32)];
 const LEAN_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../formal/.lake/build/bin/roles-model",
@@ -1232,7 +1230,10 @@ describe("Integrity gaps (fuzz)", function () {
       tags = cases[c].tags;
       // trailing bytes are valid calldata; a misplaced read may land there
       const data = hexlify(
-        cat(raw(t, v), NORMALIZE && cases[c].suffix ? cases[c].suffix : new Uint8Array()),
+        cat(
+          raw(t, v),
+          NORMALIZE && cases[c].suffix ? cases[c].suffix : new Uint8Array(),
+        ),
       );
       const tagKey = [...tags].sort().join(" ") || "(none)";
 
@@ -1340,7 +1341,9 @@ describe("Integrity gaps (fuzz)", function () {
           } else {
             try {
               const s = Number(
-                await evaluator.evaluateUnchecked(data, nflat, { gasLimit: 16_000_000 }),
+                await evaluator.evaluateUnchecked(data, nflat, {
+                  gasLimit: 16_000_000,
+                }),
               );
               nOk = s === 0;
               nStatus = nOk ? "Ok" : `status ${s}`;
@@ -1348,14 +1351,16 @@ describe("Integrity gaps (fuzz)", function () {
               nStatus = `revert ${errName(e, evaluator.interface)}`;
             }
           }
-          if (integrityN || nOk !== ok || (expN !== "unk" && (expN === "ok") !== nOk))
+          if (
+            integrityN ||
+            nOk !== ok ||
+            (expN !== "unk" && (expN === "ok") !== nOk)
+          )
             normMismatches.push({
               kind: integrityN
                 ? "normalized-rejected"
-                : nOk && !ok && expN === "unk"
-                  ? STRAY
-                  : nOk && !ok
-                    ? "normalize-widens"
+                : nOk && !ok
+                  ? "normalize-widens"
                   : nOk !== ok
                     ? "normalize-narrows"
                     : "normalize-vs-ref",
@@ -1398,7 +1403,7 @@ describe("Integrity gaps (fuzz)", function () {
     await connection?.close();
 
     console.log(
-      `      ${CASES} cases: ${accepted} accepted by Integrity, ${compared} compared, ${unknown} unknown (malformed for a pruned Pass, by design), ${outOfGas} out of gas`,
+      `      ${CASES} cases: ${accepted} accepted by Integrity, ${compared} compared, ${unknown} unknown (malformed calldata below a trailing Pass, which the reference does not judge), ${outOfGas} out of gas`,
     );
     for (const [why, n] of [...rejected].sort((a, b) => b[1] - a[1]))
       console.log(`      rejected ${n}× ${why}`);
@@ -1457,11 +1462,8 @@ describe("Integrity gaps (fuzz)", function () {
             2,
           ),
         );
-      // A pruned branch no longer decodes the trailing parameters it does not
-      // check, so it can pass calldata of another interpretation that lacks
-      // them (see formal/README.md, Normalization findings). Reported, not
-      // failed: such calldata does not have the branch's type.
-      expect(normMismatches.filter((m) => m.kind !== STRAY).length).to.equal(0);
+      // normalization keeps every child, so the verdict never changes
+      expect(normMismatches.length).to.equal(0);
       return;
     }
     if (CHECK) {
@@ -1521,7 +1523,8 @@ describe("Integrity gaps (fuzz)", function () {
       else if (r === 1 && d.length) {
         // a length or offset word: make it large or off by one word
         const at = 4 + 32 * int(Math.max(1, (d.length - 4) >> 5));
-        if (at + 32 <= d.length) d[at + 31 - int(2)] ^= pick([0x20, 0x01, 0x80]);
+        if (at + 32 <= d.length)
+          d[at + 31 - int(2)] ^= pick([0x20, 0x01, 0x80]);
         return d;
       } else if (r === 2) return d.slice(0, int(d.length + 1));
       else return cat(d, bytes(32 * int(3)));
@@ -1529,7 +1532,13 @@ describe("Integrity gaps (fuzz)", function () {
     };
     const hexNo0x = (h: string) => h.slice(2).toLowerCase();
 
-    type Q = { line: string; data: string; flat: any[]; value: number; bal: bigint[] };
+    type Q = {
+      line: string;
+      data: string;
+      flat: any[];
+      value: number;
+      bal: bigint[];
+    };
     const queries: Q[] = [];
     for (let c = 0; c < EVAL; c++) {
       const { t, v, root } = genCase();
@@ -1544,7 +1553,9 @@ describe("Integrity gaps (fuzz)", function () {
             `${f.parent}:${f.paramType}:${f.operator}:${hexNo0x(f.compValue ?? "0x")}`,
         )
         .join("|");
-      const allowances = KEYS.map((k, i) => `${hexNo0x(k)}:${bal[i]}`).join(",");
+      const allowances = KEYS.map((k, i) => `${hexNo0x(k)}:${bal[i]}`).join(
+        ",",
+      );
       queries.push({
         line: `ev ${value} ${allowances} ${hexlify(data)} ${nodes}`,
         data: hexlify(data),
@@ -1570,7 +1581,9 @@ describe("Integrity gaps (fuzz)", function () {
       if (PACKED) {
         let intErr: string | undefined;
         try {
-          await evaluator.enforceIntegrity.staticCall(q.flat, { gasLimit: GAS });
+          await evaluator.enforceIntegrity.staticCall(q.flat, {
+            gasLimit: GAS,
+          });
         } catch (e: any) {
           intErr = errName(e, evaluator.interface);
         }
@@ -1591,7 +1604,10 @@ describe("Integrity gaps (fuzz)", function () {
         }
         if (intErr !== undefined) {
           looserLines.push(`${intErr} ${q.line.split(" ").pop()}`);
-          const e = sdkLooser.get(intErr) ?? { n: 0, example: q.line.split(" ").pop()! };
+          const e = sdkLooser.get(intErr) ?? {
+            n: 0,
+            example: q.line.split(" ").pop()!,
+          };
           e.n++;
           sdkLooser.set(intErr, e);
         }
@@ -1624,7 +1640,11 @@ describe("Integrity gaps (fuzz)", function () {
         if (name === "out of gas") {
           oog++;
           chain.push(undefined);
-        } else if (!PACKED && /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic") {
+        } else if (
+          !PACKED &&
+          /^[A-Z][A-Za-z]+$/.test(name) &&
+          name !== "Panic"
+        ) {
           rejected++;
           chain.push(undefined);
         } else chain.push("255 -");
@@ -1658,7 +1678,9 @@ describe("Integrity gaps (fuzz)", function () {
       const st = ch.split(" ")[0];
       statuses.set(st, (statuses.get(st) ?? 0) + 1);
       if (ch !== lean[k])
-        diffs.push(`chain ${ch}\n        lean  ${lean[k]}\n        ${asked[k].line.slice(0, 600)}`);
+        diffs.push(
+          `chain ${ch}\n        lean  ${lean[k]}\n        ${asked[k].line.slice(0, 600)}`,
+        );
     });
     await connection?.close();
     console.log(
@@ -1673,7 +1695,10 @@ describe("Integrity gaps (fuzz)", function () {
         console.log(`        ${e.n}× ${name}  e.g. ${e.example.slice(0, 300)}`);
     }
     console.log(
-      `      statuses ${[...statuses].sort((a, b) => Number(a[0]) - Number(b[0])).map(([k, n]) => `${k}:${n}`).join(" ")}`,
+      `      statuses ${[...statuses]
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([k, n]) => `${k}:${n}`)
+        .join(" ")}`,
     );
     for (const d of diffs.slice(0, 8)) console.log(`      ${d}`);
     expect(diffs.length).to.equal(0);
