@@ -1,4 +1,4 @@
-import Bridge.NormalizeFits
+import Bridge.Meta
 
 /-!
 # Node-local properties survive normalization
@@ -12,13 +12,37 @@ for fresh nodes (`allN_normalize`); `CvOk` is one (`cvOk_normalize`).
 namespace Bridge
 open Normalize
 
+theorem mem_dedupeL {b : Bool} : ∀ {seen l : List Cond} {x : Cond}, x ∈ dedupeL b seen l → x ∈ l
+  | _, [], _, h => by simp [dedupeL] at h
+  | seen, y :: ys, x, h => by
+    unfold dedupeL at h
+    split at h
+    · split at h
+      · rcases List.mem_cons.1 h with rfl | h
+        · simp
+        · exact List.mem_cons_of_mem _ (mem_dedupeL h)
+      · exact List.mem_cons_of_mem _ (mem_dedupeL h)
+    · rcases List.mem_cons.1 h with rfl | h
+      · simp
+      · exact List.mem_cons_of_mem _ (mem_dedupeL h)
+
+theorem replaceAt_set (l : List Cond) (h : Nat) (y : Cond) : replaceAt l h y = l.set h y := by
+  unfold replaceAt; rw [List.set_eq_take_append_cons_drop]
+
+theorem mem_replaceAt {l : List Cond} {h : Nat} {y x : Cond} (hx : x ∈ replaceAt l h y) :
+    x ∈ l ∨ x = y := by
+  rw [replaceAt_set] at hx
+  exact List.mem_or_eq_of_mem_set hx
+
+theorem getElem!_eq {l : List Cond} {i : Nat} (h : i < l.length) : l[i]! = l[i] := by
+  rw [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem h]; rfl
+
+theorem getElem!_mem {l : List Cond} {i : Nat} (h : i < l.length) : l[i]! ∈ l := by
+  rw [getElem!_eq h]; exact List.getElem_mem h
+
 section
 variable (P : Cond → Prop) (hloc : ∀ c l, P { c with ch := l } ↔ P c)
-  (hOr : P ⟨0, 2, [], []⟩) (hPass : ∀ e, P ⟨e, 0, [], []⟩)
-
-/-- `P` holds of every node. -/
-inductive AllN : Cond → Prop
-  | mk {c : Cond} : P c → (∀ x ∈ c.ch, AllN x) → AllN c
+  (hOr : P ⟨0, 2, [], []⟩)
 
 theorem AllN.self {c : Cond} (h : AllN P c) : P c := by cases h; assumption
 theorem AllN.ch {c : Cond} (h : AllN P c) : ∀ x ∈ c.ch, AllN P x := by cases h; assumption
@@ -38,7 +62,7 @@ theorem mem_pruneCh {c x : Cond} (h : x ∈ pruneCh c) : x ∈ c.ch := by
   · exact hre x (List.mem_of_mem_take h)
   · exact hre x (List.mem_of_mem_drop h.1)
 
-include hloc hPass in
+include hloc in
 theorem allN_get! (hP0 : AllN P (default : Cond)) {o : Cond} (h : AllN P o) (i : Nat) : AllN P o.ch[i]! := by
   by_cases hi : i < o.ch.length
   · exact AllN.ch P h _ (getElem!_mem hi)
@@ -48,7 +72,7 @@ include hloc hOr in
 theorem allN_orNode {hs : List Cond} (h : ∀ x ∈ hs, AllN P x) : AllN P (orNode hs) :=
   AllN.withCh P hloc (c := ⟨0, 2, [], []⟩) hOr h
 
-include hloc hOr hPass in
+include hloc hOr in
 theorem allN_pushStep (hP0 : AllN P (default : Cond)) {c n : Cond} (h : AllN P c)
     (hp : pushStep c = some n) : AllN P n := by
   unfold pushStep at hp
@@ -65,7 +89,7 @@ theorem allN_pushStep (hP0 : AllN P (default : Cond)) {c n : Cond} (h : AllN P c
     have hall : ∀ (f : Cond → Nat), ∀ y ∈ c.ch.map (fun o => o.ch[f o]!), AllN P y := by
       intro f y hy
       obtain ⟨o, ho, rfl⟩ := List.mem_map.1 hy
-      exact allN_get! P hloc hPass hP0 (AllN.ch P h o ho) _
+      exact allN_get! P hloc hP0 (AllN.ch P h o ho) _
     split at hp
     · obtain ⟨nch, hm, rfl⟩ := Option.map_eq_some_iff.1 hp
       unfold mergeMatches at hm
@@ -76,7 +100,7 @@ theorem allN_pushStep (hP0 : AllN P (default : Cond)) {c n : Cond} (h : AllN P c
       · exact AllN.ch P hH y hy
       · exact allN_orNode P hloc hOr fun y hy => by
           obtain ⟨o, ho, rfl⟩ := List.mem_map.1 hy
-          exact allN_get! P hloc hPass hP0 (AllN.ch P h o ho) _
+          exact allN_get! P hloc hP0 (AllN.ch P h o ho) _
     · split at hp
       · obtain ⟨nch, hm, rfl⟩ := Option.map_eq_some_iff.1 hp
         unfold mergeAnd at hm
@@ -89,7 +113,7 @@ theorem allN_pushStep (hP0 : AllN P (default : Cond)) {c n : Cond} (h : AllN P c
       · simp at hp
   · simp at hp
 
-include hloc hOr hPass in
+include hloc hOr in
 theorem allN_normalize (hP0 : AllN P (default : Cond)) :
     ∀ (k : Nat) (c : Cond), AllN P c → AllN P (normalize k c)
   | 0, _, h => h
@@ -127,7 +151,7 @@ theorem allN_normalize (hP0 : AllN P (default : Cond)) :
       · exact hx
     have hpu : ∀ x, AllN P x → AllN P (pushDownOr (normalize k) x) := fun x hx => by
       unfold pushDownOr; split
-      · rename_i n hn; exact IH n (allN_pushStep P hloc hOr hPass hP0 hx hn)
+      · rename_i n hn; exact IH n (allN_pushStep P hloc hOr hP0 hx hn)
       · exact hx
     have hso : ∀ x, AllN P x → AllN P (sortB x) := fun x hx => by
       unfold sortB; split

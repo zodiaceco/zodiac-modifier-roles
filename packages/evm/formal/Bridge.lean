@@ -9,9 +9,10 @@ import Bridge.Main
 import Bridge.Normalize
 import Bridge.Plain
 import Bridge.Meta
+import Bridge.CvOkPres
+import Bridge.TypeDesc
 import Bridge.Preserve
 import Bridge.NormalizeFits
-import Bridge.CvOkPres
 import Bridge.Final
 import Bridge.Pipeline
 import Bridge.Assigned

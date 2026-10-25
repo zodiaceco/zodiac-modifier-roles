@@ -129,7 +129,7 @@ theorem Fits.layEq {x : Cond} {d m : Condition} (h : Fits avatar P x d m) (hs : 
   | tup _ _ _ _ hl _ _ _ _ _ => exact hl
   | arr _ _ _ _ hl _ _ _ _ => exact hl
   | slice _ _ _ hl _ _ _ _ _ => exact hl
-  | leaf _ _ _ ht _ _ _ _ _ _ _ _ _ => exact ht.layEq
+  | leaf _ _ _ ht _ _ _ _ _ _ _ _ => exact ht.layEq
   | varAbi _ _ _ _ hl _ _ _ _ _ => exact hl
   | varDyn _ _ hl _ => exact hl
   | zip h _ _ _ _ _ _ _ _ _ _ _ =>
@@ -1361,7 +1361,7 @@ theorem adequacy {c : Cond} {d m : Condition} (hfit : Fits avatar P c d m) :
     rw [hsem]
     exact ih fuel l cons sl A B hh hcv
       (.leaf (by simp [dynLay]) (by simp [dynLay]) (by simp [dynLay]) (by simp [dynLay, isVarLay])) hza hA
-  | @leaf c d m hop hs hnode hty henc hinl _ _ _ _ _ _ hpk =>
+  | @leaf c d m hop hs hnode hty henc hinl _ _ _ _ _ hpk =>
     intro fuel l cons sl A B hh hcv hdec hza hA
     obtain ⟨f, rfl, -⟩ := fuel_succ hh
     have hne := leafOp_ne hop

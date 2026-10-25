@@ -1,4 +1,4 @@
-import Bridge.CvOkPres
+import Bridge.NormalizeFits
 
 /-!
 # Normalization keeps the contract's verdict, on calldata
@@ -36,7 +36,7 @@ theorem cvOk1_triv (n e o : Nat) (h5 : o ≠ 5) (h13 : o ≠ 13) (h14 : o ≠ 14
 theorem cvOk_normalize (n k : Nat) (c : Cond) (h : CvOk n c) : CvOk n (normalize k c) := by
   rw [cvOk_iff] at h ⊢
   apply allN_normalize (cvOk1 n) (fun _ _ => Iff.rfl) (cvOk1_triv n 0 2 (by decide) (by decide) (by decide))
-    (fun e => cvOk1_triv n e 0 (by decide) (by decide) (by decide)) ?_ k c h
+    ?_ k c h
   exact .mk (cvOk1_triv n 0 0 (by decide) (by decide) (by decide)) (fun x hx => nomatch hx)
 
 section

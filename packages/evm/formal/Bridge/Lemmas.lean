@@ -80,8 +80,11 @@ mutual
       · rfl
       split
       · rfl
+      rename_i hS
       split
       · rfl
+      rename_i hD
+      have hcs := hcs hS (fun h => hD (.inl h)) (fun h => hD (.inr h))
       split
       · exact sizeNone_tyEq data hcs l
       split

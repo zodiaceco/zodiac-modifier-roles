@@ -507,6 +507,13 @@ structural node has `m`'s `inlined` and `size`; containers list `m`'s
 children (a `Matches` on calldata or a dynamic tuple may leave out trailing
 ones); checks on a whole value see exactly `m`'s type.
 
+**Type descriptions.** Below a check on a whole value (`EqualTo` on a tuple,
+`Pluck`, ...) or a `Pass`, the children only describe the type (`TD`, the SDK
+check's `exactTy`): nodes that do not navigate, nested calldata (whatever sits
+below it) and a `Slice` with a word window. "Same type" (`TyEq`) is what
+`AbiLocation.size` and `__input` read, so it stops at a word, `bytes` or
+nested calldata.
+
 **Zips.** A Zip's field $`f`$ fits the element layout of `P k`, the layout of
 the array plucked into the slot of compValue byte $`f`$, and every Pluck into
 a slot with a layout plucks a value of that layout (`Fits.zip`). The Zip's
@@ -561,7 +568,9 @@ Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/NormalizeFits.lean`
 ```
 
 Pruning drops trailing `Pass` children of containers that are not inlined,
-and every rewrite of `And`/`Or` keeps each branch at the layout. At a
+and every rewrite of `And`/`Or` keeps each branch at the layout. Inside a type
+description, normalization may rewrite (it prunes a nested call's `Matches`,
+say) but keeps the description's type (`td_normalize`). At a
 variant, pushing an `Or` down merges only call branches with the same
 compValue, which fit the same candidate: the merge is done at the candidate.
 Also `cvOk_normalize`.

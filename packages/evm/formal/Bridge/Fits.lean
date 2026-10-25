@@ -71,10 +71,12 @@ def D (avatar : Bytes) (c : Cond) : Condition := annotate (toRoles avatar c)
 def LayEq (d m : Condition) : Prop := d.inlined = m.inlined ∧ d.size = m.size
 
 mutual
-  /-- Same type: everything `AbiLocation.size` and `__input` read. -/
+  /-- Same type: everything `AbiLocation.size` and `__input` read. They read
+      no children of a word, `bytes` or nested calldata. -/
   inductive TyEq : Condition → Condition → Prop
     | mk {d m : Condition} : d.encoding = m.encoding → LayEq d m →
-        TyEqL d.children m.children → TyEq d m
+        (d.encoding ≠ .Static → d.encoding ≠ .Dynamic → d.encoding ≠ .AbiEncoded →
+          TyEqL d.children m.children) → TyEq d m
   inductive TyEqL : List Condition → List Condition → Prop
     | nil : TyEqL [] []
     | cons {a b as bs} : TyEq a b → TyEqL as bs → TyEqL (a :: as) (b :: bs)
@@ -103,6 +105,29 @@ inductive Plain : Cond → Prop
   | mk {c : Cond} : c.op ≠ 1 → c.op ≠ 2 → c.op ≠ 5 → (c.enc = 4 → c.ch.length ≤ 1) →
       (∀ x ∈ c.ch, Plain x) → Plain c
 
+/-- `P` holds of every node. -/
+inductive AllN (P : Cond → Prop) : Cond → Prop
+  | mk {c : Cond} : P c → (∀ x ∈ c.ch, AllN P x) → AllN P c
+
+/-- Encodings of a `Slice` window's nodes: a word, or no calldata. -/
+def winEnc (c : Cond) : Prop := c.enc = 0 ∨ c.enc = 1 ∨ c.enc = 6
+
+/-- The navigating operators (`isNavOp`), by SDK code. -/
+def navOp (o : Nat) : Bool :=
+  o == 1 || o == 2 || o == 5 || o == 6 || o == 7 || o == 8 || o == 10 || o == 11 || o == 13
+
+/-- A type description, as the children of a check that reads its whole
+    value are (the SDK check's `exactTy`): `AbiLocation.size` reads them
+    through their encodings and sizes. Nodes that do not navigate, nested
+    calldata (read as `bytes`, whatever sits below) and a `Slice` (a word or
+    `bytes`; its window is a word). -/
+inductive TD : Cond → Prop
+  | abi {c : Cond} : c.enc = 5 → c.op ≠ 1 → c.op ≠ 2 → TD c
+  | slice {c w : Cond} : c.op = 13 → (c.enc = 1 ∨ c.enc = 2) → c.ch = [w] →
+      (c.enc = 1 → AllN winEnc w) → TD c
+  | node {c : Cond} : navOp c.op = false → (c.enc = 1 ∨ c.enc = 2 ∨ c.enc = 3 ∨ c.enc = 4) →
+      (∀ x ∈ c.ch, TD x) → TD c
+
 /-- `d` is the node of `c`, up to its `size` (which `_slice` sets on its
     child). -/
 def Node (avatar : Bytes) (c : Cond) (d : Condition) : Prop := d = { D avatar c with size := d.size }
@@ -128,19 +153,6 @@ decreasing_by
 section
 variable (avatar : Bytes) (P : Nat → Option Condition)
 
-/-- A `Pass` type description of (a prefix of) layout `m`: containers list
-    the first children of `m` (all of them for an inlined container), arrays
-    one element template. -/
-inductive PDesc : Cond → Condition → Prop
-  | leaf {c m} : c.op = 0 → (c.enc = 1 ∨ c.enc = 2) → c.ch = [] → LayEq (D avatar c) m →
-      isInl c = (D avatar c).inlined → PDesc c m
-  | tup {c m} : c.op = 0 → (c.enc = 3 ∨ c.enc = 5) → (D avatar c).encoding = m.encoding →
-      c.ch.length ≤ m.children.length →
-      (∀ i (h : i < c.ch.length), PDesc c.ch[i] (m.children.getD i default)) →
-      LayEq (D avatar c) m → isInl c = (D avatar c).inlined → PDesc c m
-  | arr {c m x} : c.op = 0 → c.enc = 4 → c.ch = [x] → m.encoding = .Array → PDesc x (tmpl m) →
-      LayEq (D avatar c) m → isInl c = (D avatar c).inlined → PDesc c m
-
 /-- The layout of a plain `bytes` value. -/
 def dynLay : Condition := ⟨.Dynamic, .Pass, [], false, 0, 0, []⟩
 
@@ -150,8 +162,9 @@ def KeyUnique (m k : Condition) : Prop :=
   ∀ k' ∈ m.children, k' ≠ k → ¬ k'.compValue <+: k.compValue ∧ ¬ k.compValue <+: k'.compValue
 
 inductive Fits : Cond → Condition → Condition → Prop
-  | pass {c d m} : c.op = 0 → Node avatar c d → isStruct c = true → LayEq d m → Plain c →
-      isInl c = (D avatar c).inlined → (d = D avatar c → PDesc avatar c m) → Fits c d m
+  /-- `Pass`: its children only describe the value's type. -/
+  | pass {c d m} : c.op = 0 → Node avatar c d → isStruct c = true → LayEq d m → (∀ x ∈ c.ch, TD x) →
+      isInl c = (D avatar c).inlined → (c.enc = 1 ∨ c.enc = 2 → c.ch = []) → Fits c d m
   | ns {c d m} : isStruct c = false → NsOk c → d = D avatar c → (∀ k ∈ plucks c, P k = none) →
       Fits c d m
   | logical {c d m} : (c.op = 1 ∨ c.op = 2) → c.enc = 0 → isStruct c = true → d = D avatar c →
@@ -173,9 +186,8 @@ inductive Fits : Cond → Condition → Condition → Prop
       c.ch = [x] → (∀ sz, Fits x { D avatar x with size := sz } (winMeta sz)) → Plain c →
       isInl c = (D avatar c).inlined → (c.enc = 1 → isInl c = true) → Fits c d m
   | leaf {c d m} : leafOp c.op = true → isStruct c = true → Node avatar c d → TyEq d m →
-      c.enc ≠ 5 → (c.op = 16 → isInl c = m.inlined) → Plain c → isInl c = (D avatar c).inlined →
-      (∀ i (h : i < c.ch.length), PDesc avatar c.ch[i] (m.children.getD i default)) →
-      (c.enc = 4 → c.ch ≠ []) → (c.enc = 1 ∨ c.enc = 2 → c.ch = []) → c.enc ≤ 5 →
+      c.enc ≠ 5 → (c.op = 16 → isInl c = m.inlined) → (∀ x ∈ c.ch, TD x) →
+      isInl c = (D avatar c).inlined → (c.enc = 4 → c.ch ≠ []) → (c.enc = 1 ∨ c.enc = 2 → c.ch = []) → c.enc ≤ 5 →
       (c.op = 14 → ∀ ma, P (c.cv.headD 0 % 256) = some ma → ma = m) → Fits c d m
   /-- A call interpretation of a variant: it fits its candidate, the one
       keyed by its leading bytes. -/
@@ -210,7 +222,7 @@ theorem Fits.dyn_op {c : Cond} {d m : Condition} (h : Fits avatar P c d m) :
   | tup _ h _ _ _ _ _ _ _ _ => intro; omega
   | arr _ h _ _ _ _ _ _ _ => intro; omega
   | slice hop _ _ _ _ _ _ _ _ => intro; omega
-  | leaf hop _ _ _ _ _ _ _ _ _ _ _ _ =>
+  | leaf hop _ _ _ _ _ _ _ _ _ _ _ =>
     intro
     unfold leafOp at hop; simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true,
       decide_eq_true_eq] at hop; omega

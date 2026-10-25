@@ -168,7 +168,7 @@ theorem Fits.sane_lay {c : Cond} {m : Condition} (h : Fits avatar P c (D avatar 
   | tup _ _ _ _ hl _ _ _ _ _ => exact hl
   | arr _ _ _ _ hl _ _ _ _ => exact hl
   | slice _ _ _ hl _ _ _ _ _ => exact hl
-  | leaf _ _ _ ht _ _ _ _ _ _ _ _ _ => exact ht.layEq
+  | leaf _ _ _ ht _ _ _ _ _ _ _ _ => exact ht.layEq
   | varAbi _ _ _ _ hl _ _ _ _ _ => exact hl
   | varDyn _ _ hl _ => exact hl
   | zip h he _ _ _ _ _ _ _ _ _ _ =>
@@ -203,7 +203,7 @@ theorem Fits.nsOk {c : Cond} {d m : Condition} (h : Fits avatar P c d m) :
     intro hs; rw [isStruct_eq] at hs; rcases hop with h | h | h | h <;> simp_all
   | slice h13 he _ _ _ _ _ _ =>
     intro hs; rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
-  | leaf _ h _ _ _ _ _ _ _ _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
+  | leaf _ h _ _ _ _ _ _ _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
   | varAbi h5 he _ _ _ _ _ _ _ _ _ => intro hs; rw [isStruct_eq] at hs; simp_all
   | @varDyn c d m _ he _ hf _ =>
     intro hs

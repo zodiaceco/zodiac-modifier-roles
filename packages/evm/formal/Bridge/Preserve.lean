@@ -1,4 +1,4 @@
-import Bridge.Meta
+import Bridge.TypeDesc
 
 /-!
 # Normalization keeps a tree fitting its layout
@@ -19,34 +19,6 @@ variable (avatar : Bytes) (P : Nat → Option Condition)
 local notation "F" => fun (c : Cond) (m : Condition) => Fits avatar P c (D avatar c) m
 
 /-! ## Containers -/
-
-theorem container_raw {c c' : Cond} (he : c.enc = c'.enc) (hl : c.ch.length = c'.ch.length)
-    (hp : ∀ i (h1 : i < c.ch.length) (h2 : i < c'.ch.length),
-      isInl c.ch[i] = isInl c'.ch[i] ∧ (isInl c.ch[i] = true → rawSz avatar c.ch[i] = rawSz avatar c'.ch[i])) :
-    isInl c = isInl c' ∧ (isInl c = true → rawSz avatar c = rawSz avatar c') := by
-  have hall : c.ch.all isInl = c'.ch.all isInl := by
-    rw [Bool.eq_iff_iff, List.all_eq_true, List.all_eq_true]
-    constructor
-    · intro h x hx
-      obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hx
-      rw [← (hp i (by omega) hi).1]; exact h _ (List.getElem_mem _)
-    · intro h x hx
-      obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hx
-      rw [(hp i hi (by omega)).1]; exact h _ (List.getElem_mem _)
-  have hinl : isInl c = isInl c' := by rw [isInl_eq, isInl_eq, he, hall]
-  refine ⟨hinl, fun hi => ?_⟩
-  rw [rawSz_eq, rawSz_eq, he]
-  split
-  · rfl
-  · apply inlinedSizeLoop_congr _ _ _ (by simp [hl])
-    intro i h1 h2
-    have h1' : i < c.ch.length := by simpa using h1
-    have h2' : i < c'.ch.length := by simpa using h2
-    simp only [List.getElem_map]
-    have hci : isInl c.ch[i] = true := by
-      rw [isInl_eq] at hi; simp only [Bool.and_eq_true, List.all_eq_true] at hi
-      exact hi.2 _ (List.getElem_mem _)
-    exact (hp i h1' h2').2 hci
 
 theorem lay_transfer {c c' : Cond} {m : Condition} (h : isInl c = isInl c' ∧ (isInl c = true → rawSz avatar c = rawSz avatar c'))
     (hs : Sane avatar c) (hl : LayEq (D avatar c) m) : Sane avatar c' ∧ LayEq (D avatar c') m := by
@@ -119,10 +91,15 @@ theorem layEq_abi {x x' : Cond} {m : Condition} (he : x.enc = 5) (he' : x'.enc =
 /-- A check of the plain `bytes` value of a variant is plain. -/
 theorem Fits.plain_dyn {c : Cond} {d : Condition} (h : Fits avatar P c d dynLay) (he : c.enc = 2) :
     Plain c := by
+  have nil : c.op ≠ 1 → c.op ≠ 2 → c.op ≠ 5 → c.ch = [] → Plain c := fun h1 h2 h5 hch =>
+    .mk h1 h2 h5 (fun _ => by rw [hch]; simp) (fun x hx => by rw [hch] at hx; cases hx)
   cases h with
-  | pass _ _ _ _ hp _ _ => exact hp
+  | pass h0 _ _ _ _ _ hch => exact nil (by omega) (by omega) (by omega) (hch (.inr he))
   | slice _ _ _ _ _ _ hp _ _ => exact hp
-  | leaf _ _ _ _ _ _ hp _ _ _ _ _ => exact hp
+  | leaf hop _ _ _ _ _ _ _ _ hch _ _ =>
+    unfold leafOp at hop
+    simp only [Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true, decide_eq_true_eq] at hop
+    exact nil (by omega) (by omega) (by omega) (hch (.inr he))
   | ns hs hns _ => rcases hns with ⟨h, _, _⟩ | ⟨_, h, _⟩ <;> omega
   | logical _ h _ _ _ _ _ => omega
   | tup _ h _ _ _ _ _ _ _ _ => omega
@@ -240,9 +217,19 @@ theorem fits_children (k : Nat) (IH : ∀ x m', F x m' → F (normalize k x) m')
   cases h with
   | zip hop =>
     unfold keepsAsWritten at hkw; rcases hop with h | h <;> simp [h] at hkw
-  | pass _ _ _ _ hp _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
+  | pass h0' hnode hs hl htd hsn hch =>
+    obtain ⟨htd', hr⟩ := td_map avatar k htd
+    have hl' := (hr.D avatar).layEq
+    refine .pass h0' (Node.refl avatar _) (by rw [isStruct_withCh _ _ (any_map_normalize k c.ch)]; exact hs)
+      ⟨hl'.1.trans hl.1, hl'.2.trans hl.2⟩ htd' ?_ (fun he => by rw [hch he]; rfl)
+    rw [hr.inl avatar, hsn]; exact ((hr.D avatar).layEq.1).symm
   | slice _ _ _ _ _ _ hp _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
-  | leaf _ _ _ _ _ _ hp _ _ _ _ _ => rw [map_normalize_plain k hp]; cases c; exact h0
+  | leaf hop hs hnode hty henc h16 htd hsn h4 h12 h5 h14 =>
+    obtain ⟨htd', hr⟩ := td_map avatar k htd
+    refine .leaf hop (by rw [isStruct_withCh _ _ (any_map_normalize k c.ch)]; exact hs) (Node.refl avatar _) ((hr.D avatar).trans hty) henc
+      (fun h => by rw [hr.inl avatar]; exact h16 h) htd' ?_ (fun h => by simpa using h4 h)
+      (fun h => by rw [h12 h]; rfl) h5 h14
+    rw [hr.inl avatar, hsn]; exact ((hr.D avatar).layEq.1).symm
   | ns hs hns _ hpl =>
     cases hns with
     | leaf _ hch _ => rw [hch]; simp only [List.map_nil]; rw [← hch]; cases c; exact h0
@@ -460,20 +447,6 @@ theorem flatten_fits {c : Cond} {m : Condition} (h : F c m) : F (flatten c) m :=
     · simp at hxy; subst hxy; exact hch x hy
   · exact h
 
-theorem mem_dedupeL {b : Bool} : ∀ {seen l : List Cond} {x : Cond}, x ∈ dedupeL b seen l → x ∈ l
-  | _, [], _, h => by simp [dedupeL] at h
-  | seen, y :: ys, x, h => by
-    unfold dedupeL at h
-    split at h
-    · split at h
-      · rcases List.mem_cons.1 h with rfl | h
-        · simp
-        · exact List.mem_cons_of_mem _ (mem_dedupeL h)
-      · exact List.mem_cons_of_mem _ (mem_dedupeL h)
-    · rcases List.mem_cons.1 h with rfl | h
-      · simp
-      · exact List.mem_cons_of_mem _ (mem_dedupeL h)
-
 theorem dedupe_fits {c : Cond} {m : Condition} (h : F c m) : F (dedupe c) m := by
   unfold dedupe
   split
@@ -504,14 +477,6 @@ theorem sortB_fits {c : Cond} {m : Condition} (h : F c m) : F (sortB c) m := by
 
 /-! ## Step: pushing an `Or` down -/
 
-theorem replaceAt_set (l : List Cond) (h : Nat) (y : Cond) : replaceAt l h y = l.set h y := by
-  unfold replaceAt; rw [List.set_eq_take_append_cons_drop]
-
-theorem mem_replaceAt {l : List Cond} {h : Nat} {y x : Cond} (hx : x ∈ replaceAt l h y) :
-    x ∈ l ∨ x = y := by
-  rw [replaceAt_set] at hx
-  exact List.mem_or_eq_of_mem_set hx
-
 theorem length_replaceAt (l : List Cond) (h : Nat) (y : Cond) : (replaceAt l h y).length = l.length := by
   rw [replaceAt_set, List.length_set]
 
@@ -521,9 +486,6 @@ theorem getElem_replaceAt (l : List Cond) (h : Nat) (y : Cond) (i : Nat) (hi : i
   by_cases hih : i = h
   · subst hih; simp
   · simp [hih, Ne.symm hih]
-
-theorem getElem!_eq {l : List Cond} {i : Nat} (h : i < l.length) : l[i]! = l[i] := by
-  rw [List.getElem!_eq_getElem?_getD, List.getElem?_eq_getElem h]; rfl
 
 /-- The fields of a `Matches` on a tuple or calldata that fits `m`. -/
 theorem Fits.tup_inv {x : Cond} {m : Condition} (h : F x m) (h5 : x.op = 5) (he : x.enc = 3 ∨ x.enc = 5)
