@@ -1,6 +1,6 @@
 import { TypedData } from "abitype"
 
-import { parseType } from "./parseType"
+import { baseType } from "./parseType"
 
 export function findPrimaryType({ types }: { types: TypedData }): string {
   const rootTypes = findRootTypes({ types })
@@ -25,7 +25,7 @@ export function findRootTypes({ types }: { types: TypedData }): string[] {
 
   for (const name of Object.keys(types)) {
     for (const field of types[name]!) {
-      const { type } = parseType(field.type)
+      const type = baseType(field.type)
       if (count[type] !== undefined) {
         count[type]++
       }

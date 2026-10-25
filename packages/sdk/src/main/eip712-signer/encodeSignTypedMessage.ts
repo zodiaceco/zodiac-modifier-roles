@@ -33,7 +33,7 @@ export function encodeSignTypedMessage<const T extends TypedData>({
   const selector = keccak256(encodeAbiTypes({ domain, types })).slice(0, 10)
 
   const data = iface.encodeFunctionData("signTypedMessage", [
-    encodeTypedDomain({ domain }),
+    encodeTypedDomain({ domain, types }),
     encodeTypedMessage({ types, message }),
     toAbiTypes({ domain, types }).map((n) => [
       n.parent,
