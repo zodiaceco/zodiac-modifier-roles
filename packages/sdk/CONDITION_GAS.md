@@ -45,15 +45,27 @@ A condition must fit two mainnet limits: one transaction may use at most
 as contract code of at most 24,576 bytes (EIP-170; v3 stores the packed bytes
 plus one prefix byte).
 
-| Setter                   | Binding limit       | Check nodes (32-byte compValues) | `Pass` nodes      |
-| ------------------------ | ------------------- | -------------------------------- | ----------------- |
-| v3 `allowFunctionPacked` | code size           | about 647                        | about 6,000       |
-| v3 `allowFunction`       | gas (Integrity)     | about 89 (flat; 8 at depth 8)    | about 95          |
-| v2 `scopeFunction`       | code size, then gas | about 720                        | about 1,300 (gas) |
+| Setter                   | Binding limit       | Check nodes (32-byte compValues) | `Pass` nodes                    |
+| ------------------------ | ------------------- | -------------------------------- | ------------------------------- |
+| v3 `allowFunctionPacked` | code size           | about 647                        | about 6,000                     |
+| v3 `allowFunction`       | gas (Integrity)     | about 89 (flat; 8 at depth 8)    | about 95                        |
+| v2 `scopeFunction`       | code size, then gas | about 720 (flat trees only)      | about 1,300 (gas, extrapolated) |
 
-- These are for flat trees of one kind. A real tree mixes nodes with and
-  without compValues: for v3 packed, count 4 bytes per node, plus 2 plus the
-  compValue's length for each node that has one, and stay below 24,575 bytes.
+- These are for flat trees of one kind (every node a child of the root).
+  The local chain doesn't enforce the code size, so where it binds the limit
+  is computed from the record sizes below; gas limits are measured. A
+  real tree mixes nodes with and without compValues: for v3 packed, count 4
+  bytes per node, plus 2 plus the compValue's length for each node that has
+  one, and stay below 24,575 bytes.
+- v2 fits more flat checks than v3 because its records are smaller: 2 bytes
+  per node and 32 per compValue (an `EqualTo` on a long value stores its
+  hash), against v3's 4 bytes per node and a 2-byte length before each
+  compValue, stored at its own length. A check with a 32-byte compValue takes
+  34 bytes in v2 and 38 in v3.
+- v2 records a node's parent in one byte, so only the first 256 nodes in
+  breadth-first order can have children. A nested tree whose containers come
+  later can't be stored in v2 at any size; v3 has no such limit (a node's
+  children are counted, not its parent recorded).
 - Evaluating never binds first: the largest storable v3 tree of checks
   evaluates in about 3.6M gas, 1,000 `Pass` nodes in about 4.2M.
 - The packed format also caps each node at 1,023 children (10 bits) and
