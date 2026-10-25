@@ -12,6 +12,11 @@
  * compValues makes equal subtrees frequent. The TypeScript must not throw
  * on any of them.
  *
+ * Trees reach Lean nested (`ser`, the driver's `nzt`/`ivt` queries), so the
+ * comparison does not depend on the SDK's `flattenCondition`; the third
+ * test checks that one: every flattened tree reads back as its input
+ * (`fl`), which `sdk_pipeline` trusts.
+ *
  * The second test checks the hypothesis of the normalization proof on
  * calldata: when `checkStored` accepts the normalized tree, the tree as
  * written is well-typed (`Bridge.invB`, the `iv` query).
@@ -256,6 +261,9 @@ function genRoot(): C {
 }
 
 const hex = (s?: string) => (s ?? "0x").slice(2).toLowerCase();
+/** Nested form for the driver, independent of `flattenCondition`. */
+const ser = (c: C): string =>
+  `(${[c.paramType, c.operator, hex(c.compValue) || "-", ...(c.children ?? []).map(ser)].join(" ")})`;
 const flat = (c: C) =>
   flattenCondition(c as any)
     .map((n) => `${n.parent}:${n.paramType}:${n.operator}:${hex(n.compValue)}`)
@@ -268,7 +276,7 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
 
   it(`agrees on ${CASES} random condition trees`, function () {
     this.timeout(600_000);
-    const cases: { input: string; ts: string }[] = [];
+    const cases: { input: string; ts: string; inT: string; tsT: string }[] = [];
     let threw = 0;
     let changed = 0;
     const stats = { grew: 0, fewerOr: 0, fewerAnd: 0, reordered: 0 };
@@ -276,8 +284,11 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       const tree = genRoot();
       const input = flat(tree);
       let ts: string;
+      let tsT: string;
       try {
-        ts = flat(normalizeCondition(structuredClone(tree) as any) as any);
+        const out = normalizeCondition(structuredClone(tree) as any) as any;
+        ts = flat(out);
+        tsT = ser(out);
       } catch (e) {
         if (process.env.SDK_NORMALIZE_SHOW_THROWS && threw < 2)
           console.log(`      threw: ${(e as Error).message}\n      on ${input}`);
@@ -292,10 +303,10 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       if (count(ts, /^\d+:0:2:/) < count(input, /^\d+:0:2:/) && count(input, /^\d+:0:2:/) > 0) stats.fewerOr++;
       if (count(ts, /^\d+:0:1:/) < count(input, /^\d+:0:1:/)) stats.fewerAnd++;
       if (nOut === nIn && ts !== input) stats.reordered++;
-      cases.push({ input, ts });
+      cases.push({ input, ts, inT: ser(tree), tsT });
     }
     const res = spawnSync(LEAN_BIN, {
-      input: cases.map((c) => `nz ${c.input}`).join("\n") + "\n",
+      input: cases.map((c) => `nzt ${c.inT}`).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
     expect(res.status, String(res.stderr)).to.equal(0);
@@ -303,13 +314,13 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     expect(out.length).to.equal(cases.length);
     const diffs = cases
       .map((c, i) => ({ ...c, lean: out[i] }))
-      .filter((c) => c.lean !== c.ts);
+      .filter((c) => c.lean !== c.tsT);
     console.log(
       `      ${cases.length} compared (${changed} changed by normalization), ${threw} skipped (TypeScript threw), ${diffs.length} differences`
     );
     console.log(`      ${JSON.stringify(stats)}`);
     for (const d of diffs.slice(0, 5)) {
-      console.log(`      input ${d.input}\n      ts    ${d.ts}\n      lean  ${d.lean}`);
+      console.log(`      input ${d.inT}\n      ts    ${d.tsT}\n      lean  ${d.lean}`);
     }
     expect(diffs.length).to.equal(0);
     // normalizeCondition does not throw on these trees; a change that makes
@@ -320,6 +331,7 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
   it(`trees whose normalized form the SDK check accepts are well-typed`, function () {
     this.timeout(600_000);
     const qs: { input: string; norm: string }[] = [];
+    // nested, so the trees reach Lean without flattenCondition
     let total = 0;
     let origRejected = 0;
     for (let i = 0; i < CASES; i++) {
@@ -328,10 +340,10 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       total++;
       if (checkStoredConditions(flattenCondition(normalized) as any, true) === undefined) continue;
       if (checkStoredConditions(flattenCondition(tree as any) as any, true) === undefined) origRejected++;
-      qs.push({ input: flat(tree), norm: flat(normalized) });
+      qs.push({ input: ser(tree), norm: ser(normalized) });
     }
     const res = spawnSync(LEAN_BIN, {
-      input: qs.flatMap((q) => [`iv ${q.input}`, `iv ${q.norm}`]).join("\n") + "\n",
+      input: qs.flatMap((q) => [`ivt ${q.input}`, `ivt ${q.norm}`]).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
     expect(res.status, String(res.stderr)).to.equal(0);
@@ -349,5 +361,25 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     for (const b of badNorm.slice(0, 2)) console.log(`      normalized ${b.r} on ${b.norm}`);
     expect(badNorm.length).to.equal(0);
     expect(badIn.length).to.equal(0);
+  });
+
+  it(`flattenCondition reads back as its input (${CASES} random trees and their normal forms)`, function () {
+    this.timeout(600_000);
+    const trees: C[] = [];
+    for (let i = 0; i < CASES; i++) {
+      const tree = genRoot();
+      trees.push(tree, normalizeCondition(structuredClone(tree) as any) as any);
+    }
+    const res = spawnSync(LEAN_BIN, {
+      input: trees.map((t) => `fl ${ser(t)} ${flat(t)}`).join("\n") + "\n",
+      maxBuffer: 1 << 28,
+    });
+    expect(res.status, String(res.stderr)).to.equal(0);
+    const out = String(res.stdout).trim().split("\n");
+    expect(out.length).to.equal(trees.length);
+    const bad = trees.filter((_, i) => out[i] !== "eq");
+    console.log(`      ${trees.length} trees, ${bad.length} that do not read back`);
+    for (const t of bad.slice(0, 3)) console.log(`      ${ser(t)}\n      ${flat(t)}`);
+    expect(bad.length).to.equal(0);
   });
 });

@@ -43,6 +43,13 @@ allowance balances `<allowances>` (`key:balance` joined by `,`, or `-`). It
 prints `<status> <consumptions>`: the `Status` number (255 for a revert) and
 the consumption list as `key:balance:consumed` joined by `,` (or `-`).
 
+Trees can also be given nested, independently of any flattening:
+`(<enc> <op> <cv hex or -> <child> ...)`, e.g. `(5 5 - (1 16 00..01))`.
+`nzt <tree>` normalizes and prints the result in the same form, `ivt <tree>`
+is `iv` on it, and `fl <tree> <nodes>` prints `eq` if the flat BFS array
+`<nodes>` reads back as the tree (`buildCond`, the driver's `nest`), else
+`ne`.
+
 A line `iv <nodes>` builds the SDK tree and runs `Bridge.invB` (the
 well-typedness `Bridge` assumes) and prints `ok`, or `bad <node> <clauses>`:
 the first node (BFS index) that fails and which clauses of `invP` fail
@@ -220,8 +227,51 @@ def runInv (c : Normalize.Cond) : String :=
   | some ((_, x), i) => s!"bad {i} {",".intercalate (invWhy x)}"
   | none => "bad ? ?"
 
+/-- Parses a nested tree `(enc op cv child ...)`. -/
+partial def parseTree (cs : List Char) : Option (Normalize.Cond × List Char) :=
+  let skip (l : List Char) := l.dropWhile (· == ' ')
+  let token (l : List Char) : String × List Char :=
+    let l := skip l
+    (String.ofList (l.takeWhile fun c => c != ' ' && c != '(' && c != ')'),
+      l.dropWhile fun c => c != ' ' && c != '(' && c != ')')
+  match skip cs with
+  | '(' :: rest =>
+    let (e, rest) := token rest
+    let (o, rest) := token rest
+    let (cv, rest) := token rest
+    let rec kids (l : List Char) (acc : List Normalize.Cond) : Option (List Normalize.Cond × List Char) :=
+      match skip l with
+      | ')' :: r => some (acc.reverse, r)
+      | l' => match parseTree l' with
+        | some (k, r) => kids r (k :: acc)
+        | none => none
+    match kids rest [] with
+    | some (ch, r) =>
+      some (⟨e.toNat!, o.toNat!, if cv == "-" then [] else (parseHex cv).map (·.toNat), ch⟩, r)
+    | none => none
+  | _ => none
+
+partial def showTree (c : Normalize.Cond) : String :=
+  let cv := if c.cv.isEmpty then "-" else ((Normalize.hexOf c.cv).drop 2).toString
+  "(" ++ " ".intercalate ([toString c.enc, toString c.op, cv] ++ c.ch.map showTree) ++ ")"
+
+def withTree (t : String) (k : Normalize.Cond → String) : String :=
+  match parseTree t.toList with
+  | some (c, rest) => if rest.all (· == ' ') then k c else "bad-input"
+  | none => "bad-input"
+
 def runLine (line : String) : String :=
-  match ((line.splitOn "\n").headD "").splitOn " " with
+  let line := (line.splitOn "\n").headD ""
+  -- nested trees contain spaces: split off the command and the last field
+  let cmd := (line.splitOn " ").headD ""
+  if cmd == "nzt" then withTree (line.drop 4).toString fun c => showTree (Normalize.normalize 1000 c) else
+  if cmd == "ivt" then withTree (line.drop 4).toString runInv else
+  if cmd == "fl" then
+    let rest := (line.drop 3).toString
+    let nodesStr := (rest.splitOn " ").getLast!
+    withTree (rest.dropEnd (nodesStr.length + 1)).toString fun c =>
+      if decide (buildCond (parseNodes nodesStr) 0 = c) then "eq" else "ne" else
+  match line.splitOn " " with
   | ["ev", value, allowances, hex, nodesStr] => runEval value allowances hex nodesStr
   | ["pk", nodesStr] =>
     let fs := (parseNodes nodesStr).toList.map fun n =>
