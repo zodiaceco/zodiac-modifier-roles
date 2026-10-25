@@ -10,3 +10,8 @@ export {
   type FlatNode,
 } from "./checkStored"
 export { packConditions, checkAndPack } from "./packConditions"
+export {
+  migrateConditionV2,
+  MigrateV2Error,
+  type ConditionV2,
+} from "./migrateV2"
