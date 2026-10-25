@@ -378,9 +378,9 @@ of a prefix of one tuple as siblings, so padding was removed (with it, bug 13
 below and about 1,500 lines of proof). It also used to prune trailing `Pass`
 nodes. The contract locates every child of a `Matches` before evaluating
 any, so pruning could change the verdict on calldata (see the end of Findings
-on calldata); on the live mainnet permissions it saved 3.6% of storing gas
-and cost about 2.8k gas per call for each `Pass` it kept out. Pruning was
-removed. `Normalize/Defs.lean`
+on calldata). Pruning was removed; on the live mainnet permissions it saved
+3.6% of storing gas and about 2.8k gas per call for each `Pass` it removed
+([decision and gas](../../sdk/CONDITION_GAS.md)). `Normalize/Defs.lean`
 transcribes it; `test/formal/sdk-normalize.spec.ts` checks the transcription
 against the TypeScript on random trees (40,000 over 8 seeds, no difference).
 

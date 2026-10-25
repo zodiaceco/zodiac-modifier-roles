@@ -146,6 +146,8 @@ Fusaka (EIP-7825). Takeaways:
 - Packing is also superlinear (5.1M for 101 nodes), but an order of magnitude
   below Integrity.
 
+Gas and size limits by node count for both setters: `CONDITION_GAS.md`.
+
 SDK: run Integrity locally (item 0) and apply with `...Packed` setters, so its
 cost never lands on-chain; warn when a tree would not fit a validated setter.
 Contract fix: memoize type hashes per node within `enforce` and avoid the
