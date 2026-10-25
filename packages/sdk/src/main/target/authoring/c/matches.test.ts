@@ -3,6 +3,9 @@ import { Operator, Encoding } from "../../../types"
 
 import { calldataMatches } from "./matches"
 import { encodeKey } from "../../../keys"
+import { AbiCoder } from "ethers"
+import { checkStoredConditions } from "../../../condition/checkStored"
+import { flattenCondition } from "../../../condition/flattenCondition"
 
 describe("calldataMatches", () => {
   it("correctly encodes CallWithinAllowance conditions", () => {
@@ -10,10 +13,34 @@ describe("calldataMatches", () => {
       callWithinAllowance: encodeKey("test-allowance"),
     })()
 
+    // no parameters: the allowance alone
     expect(result).toEqual({
-      paramType: Encoding.AbiEncoded,
-      operator: Operator.Matches,
+      paramType: Encoding.None,
+      operator: Operator.CallWithinAllowance,
+      compValue: encodeKey("test-allowance"),
+    })
+  })
+
+  it("puts CallWithinAllowance next to the Matches, as v3 requires", () => {
+    const result = calldataMatches([1], ["uint256"], {
+      callWithinAllowance: "test-allowance",
+    })()
+
+    expect(result).toEqual({
+      paramType: Encoding.None,
+      operator: Operator.And,
       children: [
+        {
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.Static,
+              operator: Operator.EqualTo,
+              compValue: AbiCoder.defaultAbiCoder().encode(["uint256"], [1]),
+            },
+          ],
+        },
         {
           paramType: Encoding.None,
           operator: Operator.CallWithinAllowance,
@@ -21,6 +48,20 @@ describe("calldataMatches", () => {
         },
       ],
     })
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
+  })
+
+  it("adds the selector check next to the allowance", () => {
+    const result = calldataMatches([1], ["uint256"], {
+      selector: "0x12345678",
+      callWithinAllowance: "test-allowance",
+    })()
+    expect(result.operator).toBe(Operator.And)
+    expect(result.children!.map((c) => c.operator)).toEqual([
+      Operator.Matches,
+      Operator.CallWithinAllowance,
+      Operator.Bitmask,
+    ])
   })
 
   it("accepts allowance keys as labels", () => {
