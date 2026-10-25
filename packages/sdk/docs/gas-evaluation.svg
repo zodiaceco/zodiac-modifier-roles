@@ -3,33 +3,35 @@
 <text x="78" y="22" font-size="15" font-weight="600" fill="#111">Evaluating a permitted call, gas by node count</text>
 <line x1="78" x2="610" y1="372.0" y2="372.0" stroke="#e5e7eb"/>
 <text x="70" y="376.0" text-anchor="end" fill="#555">0k</text>
-<line x1="78" x2="610" y1="289.0" y2="289.0" stroke="#e5e7eb"/>
-<text x="70" y="293.0" text-anchor="end" fill="#555">1M</text>
-<line x1="78" x2="610" y1="206.0" y2="206.0" stroke="#e5e7eb"/>
-<text x="70" y="210.0" text-anchor="end" fill="#555">2M</text>
-<line x1="78" x2="610" y1="123.0" y2="123.0" stroke="#e5e7eb"/>
-<text x="70" y="127.0" text-anchor="end" fill="#555">3M</text>
+<line x1="78" x2="610" y1="305.6" y2="305.6" stroke="#e5e7eb"/>
+<text x="70" y="309.6" text-anchor="end" fill="#555">1M</text>
+<line x1="78" x2="610" y1="239.2" y2="239.2" stroke="#e5e7eb"/>
+<text x="70" y="243.2" text-anchor="end" fill="#555">2M</text>
+<line x1="78" x2="610" y1="172.8" y2="172.8" stroke="#e5e7eb"/>
+<text x="70" y="176.8" text-anchor="end" fill="#555">3M</text>
+<line x1="78" x2="610" y1="106.4" y2="106.4" stroke="#e5e7eb"/>
+<text x="70" y="110.4" text-anchor="end" fill="#555">4M</text>
 <line x1="78" x2="610" y1="40.0" y2="40.0" stroke="#e5e7eb"/>
-<text x="70" y="44.0" text-anchor="end" fill="#555">4M</text>
+<text x="70" y="44.0" text-anchor="end" fill="#555">5M</text>
 <line x1="78.0" x2="78.0" y1="40" y2="372" stroke="#f1f5f9"/>
 <text x="78.0" y="390" text-anchor="middle" fill="#555">0</text>
-<line x1="166.7" x2="166.7" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="166.7" y="390" text-anchor="middle" fill="#555">100</text>
-<line x1="255.3" x2="255.3" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="255.3" y="390" text-anchor="middle" fill="#555">200</text>
-<line x1="344.0" x2="344.0" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="344.0" y="390" text-anchor="middle" fill="#555">300</text>
-<line x1="432.7" x2="432.7" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="432.7" y="390" text-anchor="middle" fill="#555">400</text>
-<line x1="521.3" x2="521.3" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="521.3" y="390" text-anchor="middle" fill="#555">500</text>
-<line x1="610.0" x2="610.0" y1="40" y2="372" stroke="#f1f5f9"/>
-<text x="610.0" y="390" text-anchor="middle" fill="#555">600</text>
+<line x1="161.0" x2="161.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="161.0" y="390" text-anchor="middle" fill="#555">100</text>
+<line x1="244.0" x2="244.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="244.0" y="390" text-anchor="middle" fill="#555">200</text>
+<line x1="327.0" x2="327.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="327.0" y="390" text-anchor="middle" fill="#555">300</text>
+<line x1="410.0" x2="410.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="410.0" y="390" text-anchor="middle" fill="#555">400</text>
+<line x1="493.0" x2="493.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="493.0" y="390" text-anchor="middle" fill="#555">500</text>
+<line x1="576.0" x2="576.0" y1="40" y2="372" stroke="#f1f5f9"/>
+<text x="576.0" y="390" text-anchor="middle" fill="#555">600</text>
 <text x="344" y="410" text-anchor="middle" fill="#555">condition nodes</text>
-<path d="M79.8,366.9 L80.7,366.4 L82.4,365.4 L86.0,363.4 L93.1,359.2 L107.3,350.9 L135.6,334.0 L141.0,330.8 L146.3,327.6 L151.6,324.4 L156.9,321.1 L162.2,317.8 L164.0,316.7 L192.4,299.0 L249.1,262.3 L305.9,224.1 L419.4,142.4 L532.9,54.3" fill="none" stroke="#8a5a00" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M79.7,367.9 L80.5,367.5 L82.1,366.7 L85.5,365.1 L92.1,361.8 L105.4,355.2 L131.9,341.6 L136.9,339.1 L141.9,336.5 L146.9,333.9 L151.9,331.3 L156.8,328.7 L158.5,327.8 L185.1,313.6 L238.2,284.3 L291.3,253.6 L397.5,188.3 L503.8,117.8 L610.0,42.1" fill="none" stroke="#8a5a00" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="86" y2="86" stroke="#8a5a00" stroke-width="3"/>
 <text x="640" y="90" fill="#111">v2</text>
-<path d="M79.8,366.8 L80.7,366.5 L82.4,365.8 L86.0,364.4 L93.1,361.6 L107.3,355.9 L135.6,344.3 L141.0,342.1 L146.3,339.9 L151.6,337.7 L156.9,335.4 L162.2,333.2 L164.0,332.4 L192.4,320.2 L249.1,294.8 L305.9,268.0 L419.4,210.6 L532.9,148.0" fill="none" stroke="#1f6feb" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M79.7,367.9 L80.5,367.6 L82.1,367.0 L85.5,365.9 L92.1,363.7 L105.4,359.1 L131.9,349.9 L136.9,348.1 L141.9,346.3 L146.9,344.5 L151.9,342.7 L156.8,340.9 L158.5,340.3 L185.1,330.5 L238.2,310.2 L291.3,288.8 L397.5,242.9 L503.8,192.8 L610.0,138.5" fill="none" stroke="#1f6feb" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="104" y2="104" stroke="#1f6feb" stroke-width="3"/>
 <text x="640" y="108" fill="#111">v3</text>
 <text x="616" y="152" fill="#555" font-size="11">Every node a check with</text>
