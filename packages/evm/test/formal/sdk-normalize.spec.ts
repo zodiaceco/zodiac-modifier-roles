@@ -382,4 +382,26 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     for (const t of bad.slice(0, 3)) console.log(`      ${ser(t)}\n      ${flat(t)}`);
     expect(bad.length).to.equal(0);
   });
+
+  it("documents: a reordered Or can avoid a panic of the tree as written", function () {
+    // Or[call(ArrayEvery[EqualTo(1)]), call(Pass)] on f(uint256[]): sorting
+    // puts the Pass branch first. On calldata claiming 2^64 elements the
+    // tree as written panics in AbiLocation.children (it allocates before
+    // reading), the normalized one passes. Accepted: the reference is the
+    // contract's reading, where the panicking branch fails and the Pass
+    // branch allows the call (normalize_meaning); the calldata is malformed.
+    const tree: C = node(E.None, O.Or, undefined, [
+      node(E.Abi, O.Matches, undefined, [
+        node(E.Array, O.ArrayEvery, undefined, [node(E.Static, O.EqualTo, word(1))]),
+      ]),
+      node(E.Abi, O.Pass, undefined, [node(E.Array, O.Pass, undefined, [node(E.Static, O.Pass)])]),
+    ]);
+    const normalized = normalizeCondition(structuredClone(tree) as any) as any;
+    expect(normalized.children[0].operator).to.equal(O.Pass);
+    const cd = "aabbccdd" + (32).toString(16).padStart(64, "0") + (2n ** 64n).toString(16).padStart(64, "0");
+    const res = spawnSync(LEAN_BIN, {
+      input: [tree, normalized].map((t) => `ev 0 - ${cd} ${flat(t)}`).join("\n") + "\n",
+    });
+    expect(String(res.stdout).trim().split("\n")).to.deep.equal(["255 -", "0 -"]);
+  });
 });

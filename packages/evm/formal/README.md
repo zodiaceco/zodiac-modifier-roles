@@ -23,7 +23,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 | [Normalization](#normalization): the SDK's `normalizeCondition` never changes what a condition means (on decoded values)                                       | [`Normalize`](Normalize/README.md)                     | Proven |
 | [Evaluation on calldata](#evaluation-on-calldata): on every calldata, the evaluator computes the contract's own reading, which meets normalization's assumptions   | [`Bridge`](Bridge/)                                    | Proven |
-| [Normalization on calldata](#normalization-on-calldata): on every calldata, the normalized tree computes the reading of the tree as written                       | [`Bridge`](Bridge/)                                    | Proven |
+| [Normalization on calldata](#normalization-on-calldata): on every calldata, the normalized tree computes the contract's reading of the tree as written            | [`Bridge`](Bridge/)                                    | Proven |
 | [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree                              | [`Bridge`](Bridge/)                                    | Proven |
 | [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
 
@@ -48,8 +48,40 @@ Not covered yet:
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
   that Integrity enforces them is from reading the code, not proven.
 - What `WithinRatio`, `Custom` checkers and allowances do with their
-  operands. (`Bitmask` and the comparison operators are proven, the latter
-  assuming keccak256 has no collisions.)
+  operands: accrual, refills, timestamps and storing the consumptions.
+  (`Bitmask` and the comparison operators are proven, `EqualTo` assuming
+  keccak256 has no second preimage of a compValue; see
+  [comparison operators](#comparison-operators).)
+- **The reading, not execution, is the reference.** `Bridge` proves that
+  the stored tree computes the contract's *reading* of the tree as written.
+  The reading treats a branch that panics as a failed branch. The contract
+  stops instead: the tree as written can revert where the normalized tree
+  passes. Example (a regression test in `test/formal/sdk-normalize.spec.ts`):
+  `Or[Matches(ArrayEvery[EqualTo(1)]), Pass]` on `f(uint256[])`, with
+  calldata claiming $`2^{64}`$ elements. `AbiLocation.children` allocates
+  before it reads, so the tree as written panics; normalization sorts the
+  `Pass` branch first, which passes. The model has no gas: the contract also
+  runs out of gas allocating from about 90,000 claimed elements (under the
+  $`2^{24}`$ transaction gas cap), where the model fails the branch. Both
+  need malformed calldata (the count is the caller's word, not the calldata's
+  size). Accepted: in the reading, as in the tree's intent, the `Pass` branch
+  allows the call. Requiring the stored tree to revert wherever the tree as
+  written does would forbid reordering any branch that can panic, which is
+  almost any branch that reads an array.
+- **The tree as written versus what the user meant.** The proofs start
+  from a condition tree. That the SDK's authoring helpers, ABI selection or
+  a UI build the tree the user meant is not covered.
+- **The Integrity path.** Trees stored with the setters that run
+  `Integrity` (not `...Packed`) get none of these guarantees: Integrity
+  accepts trees `evaluate` misreads (the backlog above). It is a separate,
+  known-unsafe entry path, not an unfinished proof.
+- **Buffers the SDK did not pack.** `pack_roundtrip` is about the packer's
+  output. A buffer passed to a `...Packed` setter by other means is not
+  covered.
+- **CI.** The repository's CI does not build the Lean proofs or the
+  driver; the differential tests skip without it, and the evaluator fuzzer
+  runs only when asked (`GAP_EVAL`). A green CI run says nothing about
+  them yet.
 - A Zip inside a type node, e.g. `f(uint256[] a, uint256[] b, uint256 c)` with
   `Matches[Pluck a, Pluck b, ZipEvery(…), EqualTo(c)]`. Only a Zip whose
   ancestors are all `And`/`Or` is modeled. The SDK check rejects the others
@@ -71,7 +103,9 @@ Not covered yet:
   (`test/formal/sdk-check.spec.ts`; 11,600 over 4 seeds, all well-typed,
   while half the rejected ones are not) and of every user tree whose
   normalized form it accepts (`test/formal/sdk-normalize.spec.ts`; 14,300
-  over 8 seeds, all well-typed as written). The test found one rule
+  over 8 seeds, all well-typed as written). `checkAndPackCondition` (the SDK
+  entry point for the whole path) checks the tree as written too, so the
+  proof's hypothesis is enforced, not inferred. The test found one rule
   missing: the check accepted a `Slice` over a `Slice`, which adequacy does
   not model; it now requires a leaf below a `Slice` (one `Slice` with the
   combined shift does the same).
@@ -515,8 +549,10 @@ Lean: `Evaluate/Model.lean`, `Bridge/`
 operator, with `AllowanceConsumer`, `WithinAllowanceChecker` and the custom
 checker's charges). What it reads from outside (`msg.value`, accrued
 allowance balances, custom checkers, price adapters, `WithinRatio`) is a
-parameter, assumed only to never report `Ok` as a failure or a revert
-(`EnvOk`).
+parameter, assumed only to never report `Ok` as a failure (`EnvOk`); it may
+revert (a price adapter, an overflow while scaling), and the theorems are
+about runs that do not. It is a fixed function of its arguments: dependence
+on gas or on anything else is not modeled.
 
 The **reading** (`Bridge/Read.lean`, `readWorld`) is the contract's own
 reading of calldata as a normalization world. A value is where the
@@ -544,15 +580,16 @@ parameter, a `Slice` over a leaf, a Zip over a tuple of fields), on every
 calldata, slots and consumptions:
 
 ```math
-\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) 
-eq \mathsf{revert}
+\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \neq \mathsf{revert}
 \;\Longrightarrow\;
 \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{read}}(\ell, \sigma, \kappa)
 ```
 
 where $`\sim`$: same slots; both pass with the same consumptions (as a map),
 or both fail. A revert (an array length above $`2^{64}-1`$, a compValue the
-evaluator cannot read) denies the call.
+evaluator cannot read, an external call) denies the call. Gas is not
+modeled: the contract also reverts out of gas where the model fails or
+passes.
 
 ## Normalization on calldata
 
@@ -589,8 +626,7 @@ every other operator reads the normalized node as the original.
 For a well-typed tree, on every calldata:
 
 ```math
-\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) 
-eq \mathsf{revert}
+\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \neq \mathsf{revert}
 \;\Longrightarrow\;
 \mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{read}}(\ell, \sigma, \kappa)
 ```
@@ -599,9 +635,10 @@ from `adequacy_gen` for the normalized tree, `norm_inv` and `normalize_sound`
 with `readWorld_ok` and `readWorld_normOk`. `normalize_calldata`: the
 evaluations of `c` and of `normalize_k(c)` agree (same verdict, same
 consumptions as a map, same slots) whenever neither reverts. The stored tree
-never passes where the reading of the tree as written fails. It may revert
-where the tree as written passes (an `Or` reordered so that a branch that
-panics comes first), which only denies the call.
+never passes where the reading of the tree as written fails. Where one of
+them reverts they can differ either way (an `Or` reordered past a branch
+that panics, see Not covered): the reference is the reading, not the
+execution of the tree as written.
 
 Covered: call variants of any types under one `Or` (each branch is read
 with its own types, as the contract does), Zips, `Slice` and nested calldata
@@ -625,15 +662,35 @@ are the later nodes whose parent is $`i`$), then on every calldata:
 \mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \sim [\![c_0]\!]_{\mathsf{read}}(0, \emptyset, \emptyset)
 ```
 
-The contract enforces exactly what the tree as written means. Chains
+The contract enforces what the contract's reading of the tree as written
+says, whenever the stored tree does not revert. Chains
 `pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree read
 back) and `normalize_meaning`. `sdk_pipeline_agree`: the contract's
 evaluations of the stored tree and of $`D(c_0)`$ agree whenever neither
 reverts.
 
-Trusted: that `checkStored` implies `inv` (tested, see Not covered); that `flattenCondition` produces an array that reads back as its
-input (tested through the driver's `buildCond` in the normalization and check
-differential tests); `EnvOk`; the evaluator transcription (next section).
+Trusted (tested, not proven):
+
+- that `checkStored` on the tree as written implies `inv` (see Not covered;
+  `checkAndPackCondition` runs it);
+- that `flattenCondition` produces an array that reads back as its input
+  (`fl` in `test/formal/sdk-normalize.spec.ts`: trees reach the driver
+  nested, independently of `flattenCondition`);
+- the TypeScript transcriptions: `normalizeCondition`, `checkStored`, the
+  packer;
+- the Solidity transcriptions: the evaluator (next section), the decoder,
+  the packer and unpacker (memory pointers are not modeled), the
+  comparisons;
+- `EnvOk` and an environment that is a fixed function of its arguments;
+- keccak256: no second preimage of a compValue (`CollisionFree`); the
+  evaluator model also represents a hash as distinct from every word
+  (`B32`), which a caller can only break with a preimage;
+- natural numbers for EVM words where the model needs no wraparound, and no
+  gas;
+- the Lean kernel and toolchain; for the tests, the Lean compiler and the
+  driver;
+- that callers use the checked path (`checkAndPackCondition`, or
+  `checkAndPack` on a normalized tree) and store exactly its output.
 
 ## The evaluator model
 
@@ -652,6 +709,14 @@ evaluated from that buffer without Integrity
 3,000 cases (seed 31): 1,147 compared, 0 differences. 237 of them are trees
 the SDK check accepts and Integrity rejects (`UnsuitableChildTypeTree`; see
 `ConditionCheck/README.md` for the classes).
+
+Limits: the driver's custom checkers, price adapters and `WithinRatio`
+always fail, so successful custom charges and conversions are not
+compared; allowances start at period zero with given balances (no accrual
+or refill); the final Pluck slots are not compared, only what later nodes
+read of them; out-of-gas cases are skipped; trees and arrays are small.
+Case counts and mutation scores are evidence, not a measure of how likely
+the transcription is right.
 
 Found: `AbiLocation.children` allocates the location array before decoding,
 so an array length above $`2^{64}-1`$ panics there; the decoder transcription
