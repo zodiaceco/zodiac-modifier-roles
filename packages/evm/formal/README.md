@@ -541,9 +541,15 @@ key, `KeyUnique`), a check on the plain bytes fits a `Dynamic` value
 (`Fits.varDyn`). The contract world decodes a call at a variant with the
 candidate whose key the calldata starts with (`pick`); a branch whose key it
 doesn't start with fails at its leading bytes on both sides. `Decodable` asks
-only that the calldata decode as the candidate it starts with. Variants
-without distinct keys (no selector) are not covered: that is where pruning
-may accept malformed encodings (see Findings).
+only that the calldata decode as the candidate it starts with. Branches with
+the same key share a candidate: each lists a prefix of its fields, and fields
+the branches read differently only below a `bytes` value (nested calls, or
+plain bytes) are variants themselves. Not covered: keys that overlap (equal,
+or one a prefix of the other, e.g. no selector) on candidates whose fields
+have different layouts, such as `abi.encode(uint256)` and
+`abi.encode(bytes)`. The world reads a value with one layout per key, and
+the evaluator reads each branch with its own. On calldata valid for only one
+of them, pruning may change the verdict (see Findings).
 
 `Decodable data m l`: decoding the calldata with `m` at `l` does not
 overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
@@ -589,9 +595,10 @@ from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
 `contractWorld_ok`.
 
 Covered since: call interpretations of different types under one `Or`, when
-their leading bytes tell them apart (variant layouts, above), and Zips.
-Not covered: interpretations without distinct leading bytes; the on-chain
-fuzzer covers them.
+their leading bytes tell them apart or their fields have the same layouts
+(variant layouts, above), Zips, and `Slice` and nested calldata in type
+descriptions. Not covered: interpretations with overlapping leading bytes and
+different field layouts; the on-chain fuzzer covers them.
 
 ## The SDK pipeline, end to end
 
