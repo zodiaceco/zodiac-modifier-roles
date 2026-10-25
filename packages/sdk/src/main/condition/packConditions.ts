@@ -36,7 +36,7 @@ import {
   Op,
 } from "./checkStored"
 import { flattenCondition } from "./flattenCondition"
-import { normalizeCondition } from "./normalize"
+import { normalizeCondition } from "./normalize/index"
 import type { Condition } from "../types"
 
 const be = (n: number, k: number): number[] =>

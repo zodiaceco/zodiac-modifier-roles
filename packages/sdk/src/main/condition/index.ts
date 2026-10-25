@@ -9,7 +9,11 @@ export {
   type Ty,
   type FlatNode,
 } from "./checkStored"
-export { packConditions, checkAndPack, checkAndPackCondition } from "./packConditions"
+export {
+  packConditions,
+  checkAndPack,
+  checkAndPackCondition,
+} from "./packConditions"
 export {
   migrateConditionV2,
   MigrateV2Error,
