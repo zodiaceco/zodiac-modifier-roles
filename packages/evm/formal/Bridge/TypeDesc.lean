@@ -1,4 +1,4 @@
-import Bridge.CvOkPres
+import Bridge.AllN
 
 /-!
 # Normalization keeps type descriptions

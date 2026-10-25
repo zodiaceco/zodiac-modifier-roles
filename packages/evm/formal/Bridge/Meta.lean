@@ -1,20 +1,100 @@
-import Bridge.Plain
+import Bridge.Base
 
 /-!
-# Layout metadata of SDK trees
+# Metadata of SDK trees, and what the evaluator reads of it
 
-The evaluator's `inlined` and `size` of `D c` come from `Topology.isInlined`
-(`isInl c`) and `inlinedSize` of the tree. They are determined by the
-encoding and the children's: a logical node has the layout of its
-structural children (its non-structural children are inline with size 0), a
-container with children of the same layouts has the same layout.
+`isInl c` and `rawSz c`: `Topology.isInlined` and `inlinedSize` of the tree,
+which give `D c`'s `inlined` and `size`. `size_tyEq`, `input_tyEq`:
+`AbiLocation.size` and `__input` read a node only through `TyEq`.
 -/
 
 namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
 section
-variable (avatar : Bytes) (P : Nat → Option Condition)
+variable (avatar : Bytes)
+
+/-! ## The node the evaluator runs -/
+
+theorem toRoles_eq (c : Cond) :
+    toRoles avatar c =
+      ⟨encN c.enc, opN c.op, c.ch.map (toRoles avatar), false, 0, lbOf c, cvOf avatar c⟩ := by
+  rcases c with ⟨e, o, cv, ch⟩
+  rw [toRoles, toRolesL_eq]
+
+theorem opOf_avatar {o : Nat} (h : ConditionPacking.opOf? o = some .EqualToAvatar) : o = 15 := by
+  unfold ConditionPacking.opOf? at h
+  split at h <;> simp_all
+
+theorem opN_ne_avatar (o : Nat) : opN o ≠ .EqualToAvatar := by
+  unfold opN
+  split
+  · simp
+  · rename_i h15
+    rcases hh : ConditionPacking.opOf? o with _ | op
+    · simp
+    · simp only [Option.getD_some]
+      intro he
+      subst he
+      exact h15 (opOf_avatar hh)
+
+theorem D_operator (c : Cond) : (D avatar c).operator = opN c.op := by
+  unfold D
+  rw [annotate_operator, toRoles_eq]
+  simp [opN_ne_avatar]
+
+theorem D_encoding (c : Cond) :
+    (D avatar c).encoding = if encN c.enc = .EtherValue then .None else encN c.enc := by
+  unfold D; rw [annotate_encoding, toRoles_eq]
+
+theorem D_children (c : Cond) : (D avatar c).children = c.ch.map (D avatar) := by
+  unfold D; rw [annotate_children, toRoles_eq]; simp
+
+theorem D_compValue (c : Cond) : (D avatar c).compValue = cvOf avatar c := by
+  unfold D; rw [annotate_compValue, toRoles_eq]
+
+theorem D_leadingBytes (c : Cond) :
+    (D avatar c).leadingBytes = if encN c.enc = .AbiEncoded then lbOf c else 0 := by
+  unfold D; rw [annotate_leadingBytes, toRoles_eq]
+
+theorem Node.operator {c : Cond} {d : Condition} (h : Node avatar c d) : d.operator = opN c.op := by
+  rw [h]; exact D_operator avatar c
+theorem Node.encoding {c : Cond} {d : Condition} (h : Node avatar c d) :
+    d.encoding = (D avatar c).encoding := by rw [h]
+theorem Node.compValue {c : Cond} {d : Condition} (h : Node avatar c d) :
+    d.compValue = cvOf avatar c := by rw [h]; exact D_compValue avatar c
+theorem Node.children {c : Cond} {d : Condition} (h : Node avatar c d) :
+    d.children = c.ch.map (D avatar) := by rw [h]; exact D_children avatar c
+theorem Node.inlined {c : Cond} {d : Condition} (h : Node avatar c d) :
+    d.inlined = (D avatar c).inlined := by rw [h]
+theorem Node.refl (c : Cond) : Node avatar c (D avatar c) := by
+  unfold Node; cases D avatar c; rfl
+
+end
+
+/-! ## Height (the recursion depth `evaluate` needs) -/
+
+mutual
+  def height : Cond → Nat
+    | ⟨_, _, _, ch⟩ => heightL ch + 1
+  def heightL : List Cond → Nat
+    | [] => 0
+    | x :: xs => max (height x) (heightL xs)
+end
+
+theorem heightL_mem : ∀ {l : List Cond} {x : Cond}, x ∈ l → height x ≤ heightL l
+  | _ :: _, _, .head _ => by simp only [heightL]; omega
+  | _ :: _, _, .tail _ h => by simp only [heightL]; have := heightL_mem h; omega
+
+theorem height_mem {c x : Cond} (h : x ∈ c.ch) : height x < height c := by
+  rcases c with ⟨e, o, cv, ch⟩
+  have := heightL_mem (l := ch) h
+  simp only [height]; omega
+
+
+
+section
+variable (avatar : Bytes)
 
 theorem isInlL_eq (l : List Cond) : isInlL l = l.all isInl := by
   induction l with
@@ -138,91 +218,6 @@ theorem NsOk.meta : ∀ {c : Cond}, NsOk c → isInl c = true ∧ rawSz avatar c
       obtain ⟨x, hx, rfl⟩ := hch
       exact (ih x hx).2
 
-/-! ## What `Fits` says about metadata -/
-
-theorem Fits.sane {c : Cond} {d m : Condition} (h : Fits avatar P c d m) :
-    isStruct c = true → Sane avatar c := by
-  induction h with
-  | pass _ _ _ _ _ hsn _ => exact fun _ => hsn
-  | ns hns => intro hs; rw [hns] at hs; exact absurd hs (by simp)
-  | logical _ _ _ _ _ _ hsn => exact fun _ => hsn
-  | tup _ _ _ _ _ _ _ _ _ hsn => exact fun _ => hsn
-  | arr _ _ _ _ _ _ _ _ hsn => exact fun _ => hsn
-  | slice _ _ _ _ _ _ _ hsn _ => exact fun _ => hsn
-  | leaf _ _ _ _ _ _ _ hsn _ _ _ _ => exact fun _ => hsn
-  | varAbi _ _ _ _ _ _ _ _ _ _ ih => exact ih
-  | varDyn _ _ _ _ ih => exact ih
-  | @zip c d m t h he _ _ _ _ _ _ _ _ _ _ _ =>
-    intro hs; rw [isStruct_eq] at hs
-    have : (c.op == 1 || c.op == 2) = false := by rcases h with h | h <;> simp [h]
-    rw [this] at hs; simp_all
-  | zipLogical _ _ hns => intro hs; rw [hns] at hs; cases hs
-
-theorem Fits.sane_lay {c : Cond} {m : Condition} (h : Fits avatar P c (D avatar c) m)
-    (hs : isStruct c = true) : Sane avatar c ∧ LayEq (D avatar c) m := by
-  refine ⟨h.sane avatar P hs, ?_⟩
-  cases h with
-  | pass _ _ _ hl _ _ _ => exact hl
-  | ns hns => rw [hns] at hs; exact absurd hs (by simp)
-  | logical _ _ _ _ hl _ _ => exact hl
-  | tup _ _ _ _ hl _ _ _ _ _ => exact hl
-  | arr _ _ _ _ hl _ _ _ _ => exact hl
-  | slice _ _ _ hl _ _ _ _ _ => exact hl
-  | leaf _ _ _ ht _ _ _ _ _ _ _ _ => exact ht.layEq
-  | varAbi _ _ _ _ hl _ _ _ _ _ => exact hl
-  | varDyn _ _ hl _ => exact hl
-  | zip h he _ _ _ _ _ _ _ _ _ _ =>
-    rw [isStruct_eq] at hs
-    have : (c.op == 1 || c.op == 2) = false := by rcases h with h | h <;> simp [h]
-    rw [this] at hs; simp_all
-  | zipLogical _ _ hns => rw [hns] at hs; cases hs
-
-theorem hasZip_eq (c : Cond) : hasZip c = (c.op == 10 || c.op == 11 || c.ch.any hasZip) := by
-  rcases c with ⟨e, o, cv, ch⟩
-  rw [hasZip]
-  simp only
-  congr 1
-  conv => rhs; rw [← List.attach_map_subtype_val ch]
-  rw [List.any_map]; rfl
-
-/-- A non-structural node that fits: a subtree reading no calldata (and
-    plucking into no slot with a layout), or one with a Zip at a value that
-    is not inlined. -/
-theorem Fits.nsOk {c : Cond} {d m : Condition} (h : Fits avatar P c d m) :
-    isStruct c = false → (NsOk c ∧ ∀ k ∈ plucks c, P k = none) ∨ (hasZip c = true ∧ m.inlined = false) := by
-  induction h with
-  | ns _ hns _ hpl => exact fun _ => .inl ⟨hns, hpl⟩
-  | @zip c d m t h _ _ _ hm _ _ _ _ _ _ _ _ =>
-    exact fun _ => .inr ⟨by rw [hasZip_eq]; rcases h with h | h <;> simp [h], hm⟩
-  | zipLogical _ _ _ hz _ hm _ _ => exact fun _ => .inr ⟨hz, hm⟩
-  | pass _ _ h _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
-  | logical _ _ h _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
-  | tup h5 he _ _ _ _ _ _ _ _ =>
-    intro hs; rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
-  | arr hop he _ _ _ _ _ _ _ =>
-    intro hs; rw [isStruct_eq] at hs; rcases hop with h | h | h | h <;> simp_all
-  | slice h13 he _ _ _ _ _ _ =>
-    intro hs; rw [isStruct_eq] at hs; rcases he with h | h <;> simp_all
-  | leaf _ h _ _ _ _ _ _ _ _ _ _ => intro hs; rw [h] at hs; exact absurd hs (by simp)
-  | varAbi h5 he _ _ _ _ _ _ _ _ _ => intro hs; rw [isStruct_eq] at hs; simp_all
-  | @varDyn c d m _ he _ hf _ =>
-    intro hs
-    have hops := Fits.dyn_op avatar P hf he
-    rw [isStruct_eq] at hs
-    have : (c.op == 1 || c.op == 2) = false := by simp [hops.1, hops.2]
-    rw [this] at hs; simp [he] at hs
-
-/-- Layout of a node fitting `m`, in terms of the tree. -/
-theorem Fits.raw {c : Cond} {m : Condition} (h : Fits avatar P c (D avatar c) m)
-    (hs : isStruct c = true) :
-    isInl c = m.inlined ∧ (isInl c = true → rawSz avatar c = m.size) ∧
-      (m.inlined = true → 0 < m.size) ∧ (m.inlined = false → m.size = 0) := by
-  obtain ⟨hsn, hl⟩ := h.sane_lay avatar P hs
-  obtain ⟨h1, h2⟩ := hl.of_sane avatar hsn
-  refine ⟨h1, h2, fun hi => ?_, fun hi => ?_⟩
-  · have := hsn.pos avatar (h1 ▸ hi); rw [← h2 (h1 ▸ hi)]; exact this
-  · rw [← hl.2, D_size, if_neg (by rw [h1, hi]; simp)]
-
 theorem inlinedSizeLoop_congr (b : Bool) :
     ∀ (as bs : List Condition), List.length as = bs.length →
       (∀ i (h1 : i < as.length) (h2 : i < bs.length), inlinedSize as[i] = inlinedSize bs[i]) →
@@ -236,56 +231,186 @@ theorem inlinedSizeLoop_congr (b : Bool) :
     rw [h0, inlinedSizeLoop_congr b as bs (by simpa using hl)
       (fun i h1 h2 => h (i + 1) (by simpa using h1) (by simpa using h2))]
 
-/-- A logical node whose children fit `m` has `m`'s layout. -/
-theorem logical_lay {c : Cond} {m : Condition} (hop : c.op = 1 ∨ c.op = 2) (he : c.enc = 0)
-    (hs : isStruct c = true) (hch : ∀ x ∈ c.ch, Fits avatar P x (D avatar x) m) :
-    LayEq (D avatar c) m ∧ Sane avatar c := by
-  have hs' : c.ch.any isStruct = true := by
-    rw [isStruct_eq] at hs; rcases hop with h | h <;> simp_all
-  obtain ⟨x0, hx0, hsx0⟩ := List.any_eq_true.1 hs'
-  have hraw0 := (hch x0 hx0).raw avatar P hsx0
-  have hchild : ∀ x ∈ c.ch, (isInl x = m.inlined ∧ (isInl x = true → rawSz avatar x = m.size)) ∨
-      (isInl x = true ∧ rawSz avatar x = 0) ∨ m.inlined = false := by
-    intro x hx
-    by_cases hsx : isStruct x = true
-    · have := (hch x hx).raw avatar P hsx; exact Or.inl ⟨this.1, this.2.1⟩
-    · rcases (hch x hx).nsOk avatar P (by simpa using hsx) with ⟨hn, -⟩ | ⟨-, hm⟩
-      · exact Or.inr (Or.inl (hn.meta avatar))
-      · exact Or.inr (Or.inr hm)
-  apply LayEq.of_raw avatar _ _ hraw0.2.2.1 hraw0.2.2.2
-  · rw [isInl_eq, he]
-    by_cases hm : m.inlined = true
-    · rw [hm, Bool.and_eq_true, List.all_eq_true]
-      refine ⟨by decide, fun x hx => ?_⟩
-      rcases hchild x hx with h | h | h
-      · rw [h.1, hm]
-      · exact h.1
-      · rw [hm] at h; cases h
-    · have hmf : m.inlined = false := by simpa using hm
-      rw [hmf]
-      simp only [Bool.and_eq_false_iff]
-      right
-      rw [List.all_eq_false]
-      exact ⟨x0, hx0, by rw [hraw0.1, hmf]; simp⟩
-  · intro hi
-    have hm : m.inlined = true := by
-      have : isInl x0 = true := by
-        rw [isInl_eq] at hi; simp only [Bool.and_eq_true, List.all_eq_true] at hi
-        exact hi.2 x0 hx0
-      rw [← hraw0.1]; exact this
-    rw [rawSz_eq, he]
-    simp only [Nat.zero_ne_one, ite_false]
-    have hnone : decide (encN 0 = .None) = true := by decide
-    rw [hnone]
-    apply inlinedSizeLoop_first _ m.size (hraw0.2.2.1 hm)
-    · intro ch hch'
-      simp only [List.mem_map] at hch'
-      obtain ⟨x, hx, rfl⟩ := hch'
-      rcases hchild x hx with h | h | h
-      · right; exact h.2 (h.1.trans hm)
-      · left; exact h.2
-      · rw [hm] at h; cases h
-    · exact ⟨toRoles avatar x0, List.mem_map_of_mem hx0, hraw0.2.1 (hraw0.1.trans hm)⟩
-
 end
+
+
+/-! ## Decoding -/
+
+theorem childrenLoop_congr (data : Calldata) (loc : Nat) (f g : Nat → Condition) :
+    ∀ (n i h : Nat), (∀ j, i ≤ j → j < i + n → LayEq (f j) (g j)) →
+      childrenLoop data loc f n i h = childrenLoop data loc g n i h
+  | 0, _, _, _ => rfl
+  | n + 1, i, h, hfg => by
+    have ⟨hin, hsz⟩ := hfg i (Nat.le_refl _) (by omega)
+    simp only [childrenLoop, hin, hsz]
+    rw [childrenLoop_congr data loc f g n (i + 1) _ (fun j h1 h2 => hfg j (by omega) (by omega))]
+
+theorem childrenLoop_prefix (data : Calldata) (loc : Nat) (f : Nat → Condition) :
+    ∀ (k K i h : Nat) (locs : List Nat), k ≤ K → childrenLoop data loc f K i h = some locs →
+      childrenLoop data loc f k i h = some (locs.take k)
+  | 0, _, _, _, _, _, _ => by simp [childrenLoop]
+  | k + 1, 0, _, _, _, hk, _ => absurd hk (by omega)
+  | k + 1, K + 1, i, h, locs, hk, hK => by
+    simp only [childrenLoop] at hK ⊢
+    cases hfi : (f i).inlined <;> simp only [hfi, Bool.false_eq_true, ite_false, ite_true] at hK ⊢ <;>
+    · split at hK
+      · exact absurd hK (by simp)
+      · rename_i hr
+        rw [if_neg hr]
+        obtain ⟨rest, hrest, rfl⟩ := Option.map_eq_some_iff.1 hK
+        rw [childrenLoop_prefix data loc f k K _ _ rest (by omega) hrest]
+        simp
+
+/-! ## `size` and `__input` read the type -/
+
+theorem LayEq.refl (d : Condition) : LayEq d d := ⟨rfl, rfl⟩
+
+theorem TyEq.layEq {d m : Condition} (h : TyEq d m) : LayEq d m := by cases h; assumption
+theorem TyEq.encoding {d m : Condition} (h : TyEq d m) : d.encoding = m.encoding := by
+  cases h; assumption
+
+theorem TyEqL.length : ∀ {as bs : List Condition}, TyEqL as bs → as.length = bs.length
+  | _, _, .nil => rfl
+  | _, _, .cons _ h => by simp [TyEqL.length h]
+
+theorem TyEqL.headD {as bs : List Condition} (h : TyEqL as bs) :
+    TyEq (as.headD default) (bs.headD default) ∨ (as = [] ∧ bs = []) := by
+  cases h with
+  | nil => exact Or.inr ⟨rfl, rfl⟩
+  | cons h1 _ => exact Or.inl h1
+
+theorem sizeArrayLoop_congr (data : Calldata) (loc : Nat) (a b : Condition) (fa fb : Nat → Nat)
+    (hab : LayEq a b) (hf : ∀ l, fa l = fb l) :
+    ∀ n h, sizeArrayLoop data loc a fa n h = sizeArrayLoop data loc b fb n h
+  | 0, _ => rfl
+  | n + 1, h => by
+    simp only [sizeArrayLoop, hab.1, hab.2, hf]
+    rw [sizeArrayLoop_congr data loc a b fa fb hab hf n]
+    rw [sizeArrayLoop_congr data loc a b fa fb hab hf n]
+
+mutual
+  theorem size_tyEq (data : Calldata) : ∀ {d m : Condition}, TyEq d m → ∀ l, size data l d = size data l m
+    | ⟨de, dop, dcs, di, ds, dlb, dcv⟩, ⟨me, mop, mcs, mi, ms, mlb, mcv⟩, .mk he hl hcs, l => by
+      simp only at he hl hcs
+      subst he
+      rw [size_eq, size_eq]
+      simp only
+      split
+      · rfl
+      split
+      · rfl
+      rename_i hS
+      split
+      · rfl
+      rename_i hD
+      have hcs := hcs hS (fun h => hD (.inl h)) (fun h => hD (.inr h))
+      split
+      · exact sizeNone_tyEq data hcs l
+      split
+      · cases hcs with
+        | nil => rfl
+        | cons h0 hrest =>
+          simp only
+          rw [sizeArrayLoop_congr data (l + 32) _ _ _ _ h0.layEq (fun l' => size_tyEq data h0 l')]
+      · exact sizeTuple_tyEq data hcs l 0
+
+  theorem sizeNone_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
+      ∀ l, sizeNone data l as = sizeNone data l bs
+    | _, _, .nil, _ => rfl
+    | _, _, .cons h1 h2, l => by
+      simp only [sizeNone]
+      rw [size_tyEq data h1 l, sizeNone_tyEq data h2 l]
+
+  theorem sizeTuple_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
+      ∀ l h, sizeTuple data l as h = sizeTuple data l bs h
+    | _, _, .nil, _, _ => rfl
+    | _, _, .cons h1 h2, l, h => by
+      simp only [sizeTuple, h1.layEq.1, h1.layEq.2]
+      rw [size_tyEq data h1, sizeTuple_tyEq data h2, sizeTuple_tyEq data h2]
+end
+
+theorem input_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Nat) :
+    input data l d = input data l m := by
+  unfold input
+  rw [h.encoding, h.layEq.2, size_tyEq data h l]
+
+/-! ## Consumptions -/
+
+theorem toMap_nil : toMap [] = fun _ => none := rfl
+
+theorem toMap_cons (e : Consumption) (es : List Consumption) (k : Bytes) :
+    toMap (e :: es) k = if e.key = k then some (e.balance, e.consumed) else toMap es k := by
+  unfold toMap
+  by_cases h : e.key = k <;> simp [List.find?, h]
+
+theorem consume_keeps (env : Env) : ∀ (cons : List Consumption) (k : Bytes) (a : Nat),
+    (Evaluate.consume env cons k a).1 ≠ sOk → (Evaluate.consume env cons k a).2 = cons ∧
+      (Evaluate.consume env cons k a).1 = sAllowanceExceeded
+  | [], k, a, h => by
+    unfold Evaluate.consume at h ⊢
+    by_cases ha : a > env.balance k <;> simp_all [sOk, sAllowanceExceeded]
+  | e :: es, k, a, h => by
+    unfold Evaluate.consume at h ⊢
+    by_cases hk : e.key = k
+    · by_cases ha : a > e.balance - e.consumed <;> simp_all [sOk, sAllowanceExceeded]
+    · simp only [hk, if_false] at h ⊢
+      have := consume_keeps env es k a h
+      exact ⟨by rw [this.1], this.2⟩
+
+/-- The contract's `consume` and the map's agree. -/
+theorem consume_toMap (env : Env) : ∀ (cons : List Consumption) (k : Bytes) (a : Nat),
+    consumeM env.balance (toMap cons) (k, a) =
+      if (Evaluate.consume env cons k a).1 = sOk then some (toMap (Evaluate.consume env cons k a).2) else none
+  | [], k, a => by
+    unfold Evaluate.consume consumeM ent
+    simp only [toMap_nil, Option.getD_none]
+    by_cases ha : a > env.balance k
+    · simp [ha, sOk, sAllowanceExceeded]
+    · simp only [ha, if_false, ite_true, Nat.sub_zero, Nat.zero_add]
+      congr 1
+      funext k'
+      rw [toMap_cons, toMap_nil]
+      by_cases hk : k = k' <;> simp [CM.set, hk, eq_comm]
+  | e :: es, k, a => by
+    by_cases hk : e.key = k
+    · unfold Evaluate.consume consumeM ent
+      simp only [toMap_cons, hk, if_true, Option.getD_some]
+      by_cases ha : a > e.balance - e.consumed
+      · simp [ha, sOk, sAllowanceExceeded]
+      · simp only [ha, if_false, ite_true]
+        congr 1
+        funext k'
+        rw [toMap_cons]
+        by_cases hk' : k' = k
+        · subst hk'; simp [CM.set]
+        · simp [CM.set, hk', hk, toMap_cons, Ne.symm hk']
+    · have ih := consume_toMap env es k a
+      have hent : ent env.balance (toMap (e :: es)) k = ent env.balance (toMap es) k := by
+        simp [ent, toMap_cons, hk]
+      unfold consumeM at ih ⊢
+      rw [hent]
+      unfold Evaluate.consume
+      simp only [hk, if_false]
+      split at ih
+      · rename_i hgt
+        rw [if_pos hgt]
+        have : (Evaluate.consume env es k a).1 ≠ sOk := by
+          intro h; rw [if_pos h] at ih; exact absurd ih (by simp)
+        rw [if_neg this]
+      · rename_i hgt
+        rw [if_neg hgt]
+        have hok : (Evaluate.consume env es k a).1 = sOk := by
+          by_cases h : (Evaluate.consume env es k a).1 = sOk
+          · exact h
+          · rw [if_neg h] at ih; exact absurd ih (by simp)
+        rw [if_pos hok] at ih ⊢
+        simp only [Option.some.injEq] at ih ⊢
+        funext k'
+        rw [toMap_cons, ← ih]
+        simp only [CM.set, toMap_cons]
+        by_cases h1 : k' = k
+        · subst h1; simp [hk]
+        · simp [h1]
+
+
 end Bridge

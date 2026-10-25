@@ -22,9 +22,9 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
 | [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 | [Normalization](#normalization): the SDK's `normalizeCondition` never changes what a condition means (on decoded values)                                       | [`Normalize`](Normalize/README.md)                     | Proven |
-| [Evaluation on calldata](#evaluation-on-calldata): the evaluator computes the contract world's meaning, which satisfies normalization's assumptions             | [`Bridge`](Bridge/)                                    | Proven |
-| [Normalization on calldata](#normalization-on-calldata): the contract gives the normalized tree the verdict it gives the tree as written                          | [`Bridge`](Bridge/)                                    | Proven |
-| [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate agrees with evaluating the user's tree                               | [`Bridge`](Bridge/)                                    | Proven |
+| [Evaluation on calldata](#evaluation-on-calldata): on every calldata, the evaluator computes the contract's own reading, which meets normalization's assumptions   | [`Bridge`](Bridge/)                                    | Proven |
+| [Normalization on calldata](#normalization-on-calldata): on every calldata, the normalized tree computes the reading of the tree as written                       | [`Bridge`](Bridge/)                                    | Proven |
+| [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree                              | [`Bridge`](Bridge/)                                    | Proven |
 | [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
 
 Not covered yet:
@@ -40,10 +40,9 @@ Not covered yet:
 - **Pluck slots, in the decoder model.** That the slot a Zip reads holds the
   location where a Pluck with that index was evaluated. The decoder model
   assumes it. The condition check proves no unwritten slot is read, against a
-  model of `evaluate`'s control flow (`Run`). On the evaluator transcription
-  it is proven (`Bridge`): with Integrity's Pluck rule, every slot a Zip
-  reads holds a location that decodes as the plucked array (see
-  [adequacy](#adequacy-the-evaluator-computes-the-worlds-meaning)).
+  model of `evaluate`'s control flow (`Run`). `Bridge` needs no such assumption: its
+  reading is the contract's own, so a Zip reads whatever its slots hold, in
+  the tree as written and in the normalized tree alike.
 - **Integrity ⇒ `Packable`.** The condition packing theorem assumes the width,
   order and compValue checks listed in its
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
@@ -51,14 +50,25 @@ Not covered yet:
 - What `WithinRatio`, `Custom` checkers and allowances do with their
   operands. (`Bitmask` and the comparison operators are proven, the latter
   assuming keccak256 has no collisions.)
-- A Zip inside a type node (only a Zip whose ancestors are all `And`/`Or` is
-  modeled). Integrity accepts such trees, but the decoder gives the Zip a
+- A Zip inside a type node, e.g. `f(uint256[] a, uint256[] b, uint256 c)` with
+  `Matches[Pluck a, Pluck b, ZipEvery(…), EqualTo(c)]`. Only a Zip whose
+  ancestors are all `And`/`Or` is modeled. The SDK check rejects the others
+  (a `Matches` child must read a parameter), and so does `Bridge`'s
+  well-typedness `inv`, so trees stored through the SDK never have one.
+  Integrity accepts such trees, but the decoder gives the Zip a
   parameter slot or inline size: later parameters are read at the wrong place (a
   policy bypass, reproduced on-chain), and a Zip over dynamic fields falsely
   overflows. See the [details](DecoderFaithfulness/README.md#not-covered) and
   the backlog.
-- **Malformed calldata.** Whether Roles and the target contract decode
-  non-canonical encodings the same way. Not planned for now; it depends on each
+- **`checkStored` ⇒ `inv`.** `Bridge` assumes the tree is well-typed
+  (`inv`, node by node `invP` in `Bridge/ReadNorm.lean`): adequacy's
+  `adOk`, the children of an `And`/`Or` that read a parameter share one
+  layout, checks on a whole value have type descriptions as children, and
+  so on. Each clause is a rule of the SDK check, but that `checkStored`
+  implies `inv` is neither proven nor tested yet.
+- **Malformed calldata, on the target.** `Bridge` holds on every calldata.
+  Whether Roles and the target contract decode non-canonical encodings the
+  same way is not covered. Not planned for now; it depends on each
   target's decoder.
 - The rest of the contract: authorization flow, memberships, allowances,
   unwrappers.
@@ -404,6 +414,13 @@ through their meanings; write slots only if `Pluck`; charge only if
 charges depending on earlier ones only if `ArraySome` or `ZipSome`. Charges
 commute, which `consume_comm` proves of `AllowanceConsumer.consume`.
 
+A world that reads a value through the tree's own types (where a field of a
+`Matches` is depends on its children's sizes) also needs `World.NormOk`: an
+invariant `inv` of the trees, kept by every rewrite, under which a
+normalized child is read where the child was, and the `Or` a merge puts at
+the hinge is read where each branch's hinge child was. For worlds that ignore
+the tree's types it holds with `inv = True`.
+
 ### Findings
 
 Normalization changed what conditions check in eight ways, all fixed in the SDK
@@ -475,8 +492,9 @@ could fail where the pruned one passed. Example: `f(bytes b)` with
 well-formedness (a `Pass:Static` field is not read, trailing data and
 non-canonical offsets are accepted), so this side effect is not a check to
 rely on. On top-level calldata a Solidity target rejects such calldata
-anyway. The theorems below hold on calldata that decodes as the parameter's
-full type (`Decodable`), which excludes exactly these cases.
+anyway. Without pruning, the tree as written and the normalized tree locate
+the same fields, so the theorems below hold on every calldata, malformed or
+not.
 
 ## Evaluation on calldata
 
@@ -489,122 +507,94 @@ allowance balances, custom checkers, price adapters, `WithinRatio`) is a
 parameter, assumed only to never report `Ok` as a failure or a revert
 (`EnvOk`).
 
-The **contract world** (`Bridge/World.lean`) is the evaluator as a
-normalization world: a value is a layout (a `Condition` whose `inlined`,
-`size`, `leadingBytes` and children give the encoding) and a location;
-children are decoded with `AbiLocation` using the layout's metadata, so the
-world does not depend on the tree. A Zip decodes the arrays at its slots'
-locations with `P k`, the layout of the array plucked into slot `k`, and
-runs its tuple child on element `i` as a value whose fields are element `i`
-of each array.
+The **reading** (`Bridge/Read.lean`, `readWorld`) is the contract's own
+reading of calldata as a normalization world. A value is where the
+evaluator stands: a location, a `Slice` window (the window's size, which
+`_slice` gives its child), or an element of a Zip (its fields' locations).
+Every operator reads the node the evaluator runs for it, `D(c)`: a
+`Matches` locates its children with `AbiLocation.children`, from its
+children's `inlined` and `size`; a Zip decodes the arrays at its slots'
+locations with its own field types. Nothing is assumed of the calldata, or of
+how the tree relates to an ABI type.
 
-### `contractWorld_ok`: the normalization proof's assumptions hold
+### `readWorld_ok`: the normalization proof's assumptions hold
 
 The four assumptions `World.Ok` of `normalize_sound` are theorems for the
-contract world: charges commute (consumptions as a map from allowance key to
+reading: charges commute (consumptions as a map from allowance key to
 balance and consumed), only `Pluck` writes slots, only `Custom`,
 `WithinAllowance` and `CallWithinAllowance` charge, only
-`ArraySome`/`ZipSome` choose. A Zip is like an array iterator: it reads slots
-and runs its child, so it inherits each property from it.
+`ArraySome`/`ZipSome` choose.
 
-### `adequacy`: the evaluator computes the world's meaning
+### `adequacy_gen`: the evaluator computes the reading
 
-`Fits c d m`: the tree `c` (evaluated as node `d`) fits layout `m`: every
-structural node has `m`'s `inlined` and `size`; containers list `m`'s
-children (a `Matches` on calldata or a dynamic tuple may leave out trailing
-ones); checks on a whole value see exactly `m`'s type.
-
-**Type descriptions.** Below a check on a whole value (`EqualTo` on a tuple,
-`Pluck`, ...) or a `Pass`, the children only describe the type (`TD`, the SDK
-check's `exactTy`): nodes that do not navigate, nested calldata (whatever sits
-below it) and a `Slice` with a word window. "Same type" (`TyEq`) is what
-`AbiLocation.size` and `__input` read, so it stops at a word, `bytes` or
-nested calldata.
-
-**Zips.** A Zip's field $`f`$ fits the element layout of `P k`, the layout of
-the array plucked into the slot of compValue byte $`f`$, and every Pluck into
-a slot with a layout plucks a value of that layout (`Fits.zip`). The Zip's
-own value must not be inlined: a logical parent takes its metadata from its
-children, and a Zip's has nothing to do with the value. (This is the SDK
-check's rule against a Zip in a static `And`/`Or`.) An `And`/`Or` of Zips
-and checks that read no calldata fits too (`Fits.zipLogical`): normalization
-makes one when it merges `Or` branches that differ only in a Zip.
-
-**Slots.** A Zip decodes whatever location its slots hold, so adequacy runs
-from slots that are sound for the slots $`A`$ written so far: each holds a
-location that decodes as its layout (`Inv`). `za` is Integrity's Pluck rule
-(`_validatePluckAssignments`) for Zips: the slots written once a subtree
-passes, or `none` if a Zip may read a slot no Pluck wrote. Adequacy also
-proves every run keeps the slots sound (`Good`): each location a Pluck writes
-decodes as its layout, and a passing run leaves the slots $`\mathsf{za}`$ promises
-sound.
-
-**Call variants.** At a `bytes` parameter that a tree reads as different
-calls (`Or[Matches:AbiEncoded(f..), Matches:AbiEncoded(g..), Dynamic..]`), the
-layout is a *variant* layout: its children are the candidate call types, each
-keyed by the leading bytes (selector) a call of that type starts with. A call
-branch fits its candidate (`Fits.varAbi`; no other key may be a prefix of its
-key, `KeyUnique`), a check on the plain bytes fits a `Dynamic` value
-(`Fits.varDyn`). The contract world decodes a call at a variant with the
-candidate whose key the calldata starts with (`pick`); a branch whose key it
-doesn't start with fails at its leading bytes on both sides. `Decodable` asks
-only that the calldata decode as the candidate it starts with. Branches with
-the same key share a candidate: each lists a prefix of its fields, and fields
-the branches read differently only below a `bytes` value (nested calls, or
-plain bytes) are variants themselves. Not covered: keys that overlap (equal,
-or one a prefix of the other, e.g. no selector) on candidates whose fields
-have different layouts, such as `abi.encode(uint256)` and
-`abi.encode(bytes)`. The world reads a value with one layout per key, and
-the evaluator reads each branch with its own. On calldata valid for only one
-of them, the two can disagree (see Findings).
-
-`Decodable data m l`: decoding the calldata with `m` at `l` does not
-overflow, all the way down. `CvOk n c`: no compValue the evaluator reverts on.
+For every tree whose nodes are well-formed for the evaluator (`adOk`: known
+operators, a `Matches` on a tuple or calldata whose children all read a
+parameter, a `Slice` over a leaf, a Zip over a tuple of fields), on every
+calldata, slots and consumptions:
 
 ```math
-\mathsf{Fits}(c, D(c), m) \wedge \mathsf{Decodable}(\mathit{cd}, m, \ell) \wedge \mathsf{CvOk}_n(c) \wedge \mathsf{za}(c, A) \neq \bot \wedge \mathsf{Inv}(A, \sigma)
+\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) 
+eq \mathsf{revert}
 \;\Longrightarrow\;
-\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{contract}}((m, \ell), \sigma, \kappa)
+\mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{read}}(\ell, \sigma, \kappa)
 ```
 
 where $`\sim`$: same slots; both pass with the same consumptions (as a map),
-or both fail; no revert.
+or both fail. A revert (an array length above $`2^{64}-1`$, a compValue the
+evaluator cannot read) denies the call.
 
 ## Normalization on calldata
 
-Lean: `Bridge/Final.lean`, `Bridge/Preserve.lean`, `Bridge/NormalizeFits.lean`
+Lean: `Bridge/ReadNorm.lean`, `Bridge/TyLay.lean`, `Bridge/Final.lean`
 
-### `normalize_fits`: normalization keeps the layout
+### `norm_inv`: normalization keeps every node's layout
 
-```math
-\mathsf{Fits}(c, D(c), m) \;\Longrightarrow\; \mathsf{Fits}(\mathsf{normalize}_k(c), D(\mathsf{normalize}_k(c)), m)
-```
-
-Every rewrite of `And`/`Or` keeps each branch at the layout. Inside a type
-description, normalization may rewrite (it sorts a nested call's `Or`, say)
-but keeps the description's type (`td_normalize`). At a
-variant, pushing an `Or` down merges only call branches with the same
-compValue, which fit the same candidate: the merge is done at the candidate.
-Also `cvOk_normalize`.
-
-### `normalize_calldata'`: the contract's verdict does not change
-
-For a tree that fits layout $`m`$, on every calldata that decodes as $`m`$,
-from slots sound for $`A`$, when $`\mathsf{za}`$ accepts both trees from $`A`$:
+`inv c` (well-typed): every node satisfies `invP`, the local rules of the SDK
+check: `adOk`; an `And`/`Or` has no encoding, its children that read a
+parameter share one layout (`inlined`, and `size` if inlined), and its other
+children are empty (inlined, size 0) unless one that reads a parameter is not
+inlined; the children of a check on a whole value describe its type (`TD`,
+the SDK check's `exactTy`); the children of the other nodes normalization
+rewrites read a parameter, and a tuple has one; an inlined node that reads a
+parameter has a size.
 
 ```math
-\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \;\approx\; \mathsf{evaluate}(\mathit{cd}, \ell, D(c), \kappa, \sigma)
+\mathsf{inv}(c) \;\Longrightarrow\; \mathsf{inv}(\mathsf{normalize}_k(c)) \;\wedge\; \mathsf{lay}(\mathsf{normalize}_k(c)) = \mathsf{lay}(c)
 ```
 
-($`\approx`$: same verdict, same consumptions as a map, same slots, no revert),
-from `adequacy` for both trees, `normalize_fits` and `normalize_sound` with
-`contractWorld_ok`.
+An `And`/`Or` takes the layout of its children that read a parameter, so
+flattening, deduplication, sorting and unwrapping keep it. A merge puts an
+`Or` of the branches' hinge children at the hinge; `sameType` (all of them
+have the same SDK-check type) gives them one layout (`sameType_lay`: the
+SDK check's type determines `inlined` and `size`), so the `Or` has it too.
+Inside a type description normalization keeps the type (`td_normalize`).
 
-Covered since: call interpretations of different types under one `Or`, when
-their leading bytes tell them apart or their fields have the same layouts
-(variant layouts, above), Zips, and `Slice` and nested calldata in type
-descriptions. Not covered: interpretations with overlapping leading bytes and
-different field layouts; the on-chain fuzzer covers them.
+`readWorld_normOk` turns this into `World.NormOk` for the reading: a
+`Matches` locates normalized children where it located the originals, and
+every other operator reads the normalized node as the original.
+
+### `normalize_meaning`: the normalized tree computes the reading of the tree as written
+
+For a well-typed tree, on every calldata:
+
+```math
+\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) 
+eq \mathsf{revert}
+\;\Longrightarrow\;
+\mathsf{evaluate}(\mathit{cd}, \ell, D(\mathsf{normalize}_k(c)), \kappa, \sigma) \sim [\![c]\!]_{\mathsf{read}}(\ell, \sigma, \kappa)
+```
+
+from `adequacy_gen` for the normalized tree, `norm_inv` and `normalize_sound`
+with `readWorld_ok` and `readWorld_normOk`. `normalize_calldata`: the
+evaluations of `c` and of `normalize_k(c)` agree (same verdict, same
+consumptions as a map, same slots) whenever neither reverts. The stored tree
+never passes where the reading of the tree as written fails. It may revert
+where the tree as written passes (an `Or` reordered so that a branch that
+panics comes first), which only denies the call.
+
+Covered: call variants of any types under one `Or` (each branch is read
+with its own types, as the contract does), Zips, `Slice` and nested calldata
+in type descriptions, and malformed calldata.
 
 ## The SDK pipeline, end to end
 
@@ -613,32 +603,24 @@ Lean: `Bridge/Pipeline.lean`
 ### `sdk_pipeline`
 
 The SDK normalizes the user's tree $`c_0`$, flattens it to $`\mathit{fs}`$ and
-stores `pack(fs)`; the contract unpacks and evaluates. If $`\mathit{fs}`$ is
-`Packable` (which `checkStored` proves) and reads back as
-$`\mathsf{normalize}_k(c_0)`$ (`nest`: node $`i`$'s children are the later nodes
-whose parent is $`i`$), then for every calldata that decodes as the layout
-$`c_0`$ fits:
+stores `pack(fs)`; the contract unpacks and evaluates. If $`c_0`$ is
+well-typed, $`\mathit{fs}`$ is `Packable` (which `checkStored` proves) and
+reads back as $`\mathsf{normalize}_k(c_0)`$ (`nest`: node $`i`$'s children
+are the later nodes whose parent is $`i`$), then on every calldata:
 
 ```math
-\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \;\approx\; \mathsf{run}(\mathit{cd}, D(c_0))
+\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \neq \mathsf{revert}
+\;\Longrightarrow\;
+\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \sim [\![c_0]\!]_{\mathsf{read}}(0, \emptyset, \emptyset)
 ```
 
-The contract enforces exactly what it would enforce for the tree as written.
-Chains `pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree
-read back), `normalize_calldata'`, from empty slots when $`\mathsf{za}`$
-accepts both trees.
+The contract enforces exactly what the tree as written means. Chains
+`pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree read
+back) and `normalize_meaning`. `sdk_pipeline_agree`: the contract's
+evaluations of the stored tree and of $`D(c_0)`$ agree whenever neither
+reverts.
 
-### `sdk_pipeline_checked`
-
-Lean: `Bridge/Assigned.lean`
-
-The same for every user tree that Integrity's Pluck rule accepts, stored
-after the SDK check (`checkStored`) accepted $`\mathit{fs}`$: Integrity's rule
-(`assigned`) on the node the evaluator runs implies $`\mathsf{za}`$ on the
-tree (`za_of_assigned`), and `checkStored` includes `assigned` on the stored
-tree.
-
-Trusted: that `flattenCondition` produces an array that reads back as its
+Trusted: that `checkStored` implies `inv` (see Not covered); that `flattenCondition` produces an array that reads back as its
 input (tested through the driver's `buildCond` in the normalization and check
 differential tests); `EnvOk`; the evaluator transcription (next section).
 
@@ -685,7 +667,7 @@ wrapper).
 | `ConditionCheck/`      | Condition check: the decidable check, its soundness, end-to-end theorem, README      |
 | `Normalize/`           | Normalization: transcription of the SDK's normalizeCondition, semantics, proof       |
 | `Evaluate/`            | Transcription of `ConditionEvaluator.evaluate` (differentially tested)               |
-| `Bridge/`              | The contract world, adequacy, normalization on calldata, the SDK pipeline            |
+| `Bridge/`              | The contract's reading, adequacy, normalization on calldata, the SDK pipeline        |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 

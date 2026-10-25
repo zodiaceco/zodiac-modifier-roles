@@ -167,13 +167,15 @@ theorem orNode_struct {hs : List Cond} {s : Bool} (hne : hs ≠ []) (h : ∀ x �
 theorem matches_factor (hW : W.Ok step) (e : Nat) (cv : List Nat) (pre post hs : List Cond)
     (s : Bool) (hne : hs ≠ []) (hst : ∀ x ∈ hs, isStruct x = s)
     (hpre : ∀ x ∈ pre, writes x = false) (hpost : ∀ x ∈ post, writes x = false)
-    (hpure : ∀ x ∈ hs, writes x = false ∧ charges x = false) (v : V) :
+    (hpure : ∀ x ∈ hs, writes x = false ∧ charges x = false) (v : V)
+    (hfs : ∀ x ∈ hs, W.fields e cv (pre ++ x :: post) v = W.fields e cv (pre ++ orNode hs :: post) v ∧
+      W.gate e cv (pre ++ x :: post) v = W.gate e cv (pre ++ orNode hs :: post) v) :
     orT (hs.map fun x => matchesT W e cv (pre ++ x :: post) v) =
       matchesT W e cv (pre ++ orNode hs :: post) v := by
   funext sl cs
-  by_cases hg : W.gate e cv v = true
+  by_cases hg : W.gate e cv (pre ++ orNode hs :: post) v = true
   · have hor := orNode_struct hne hst
-    let fs := W.fields e v
+    let fs := W.fields e cv (pre ++ orNode hs :: post) v
     let w := if s then (fs.drop (pre.countP isStruct)).headD W.dflt else v
     let A := (assign W.dflt pre fs v).map (fun p => sem W p.1 p.2)
     let B := (assign W.dflt post (if s then (fs.drop (pre.countP isStruct)).tail
@@ -184,7 +186,7 @@ theorem matches_factor (hW : W.Ok step) (e : Nat) (cv : List Nat) (pre post hs :
       apply List.map_congr_left
       intro x hx
       funext sl cs
-      simp only [Function.comp, matchesT, hg, ite_true]
+      simp only [Function.comp, matchesT, (hfs x hx).1, (hfs x hx).2, hg, ite_true]
       rw [assign_mid W.dflt pre post x s (hst x hx), List.map_append, List.map_cons]
     have hA : ∀ t ∈ A, KeepsT t := by
       intro t ht
@@ -208,8 +210,8 @@ theorem matches_factor (hW : W.Ok step) (e : Nat) (cv : List Nat) (pre post hs :
   · simp only [matchesT, hg]
     exact orT_all_none fun t ht => by
       rw [List.mem_map] at ht
-      obtain ⟨x, -, rfl⟩ := ht
-      simp [matchesT, hg]
+      obtain ⟨x, hx, rfl⟩ := ht
+      simp [matchesT, (hfs x hx).2, hg]
 
 /-- `Or` over `And`s that differ in one position, with a pure hinge. -/
 theorem and_factor (hW : W.Ok step) (pre post hs : List Cond) (v : V)
@@ -228,7 +230,8 @@ theorem and_factor (hW : W.Ok step) (pre post hs : List Cond) (v : V)
   rw [this, sem_or (c := orNode hs) rfl]
   rfl
 
-theorem mergeMatches_same (hW : W.Ok step) {c first : Cond} {rest nch : List Cond}
+theorem mergeMatches_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv)
+    {c first : Cond} {rest nch : List Cond}
     (hc : c.op = 2) (hch : c.ch = first :: rest)
     (henc : ∀ o ∈ c.ch, o.enc = first.enc) (hop : ∀ o ∈ c.ch, o.op = 5)
     (hm : mergeMatches first c.ch = some nch) : Same W { first with ch := nch } c := by
@@ -248,6 +251,7 @@ theorem mergeMatches_same (hW : W.Ok step) {c first : Cond} {rest nch : List Con
   split at hm; · simp at hm
   rename_i hst
   split at hm; · simp at hm
+  rename_i hsame
   split at hm; · simp at hm
   rename_i hchg
   simp only [Option.some.injEq] at hm
@@ -292,7 +296,7 @@ theorem mergeMatches_same (hW : W.Ok step) {c first : Cond} {rest nch : List Con
     rw [hbranch]
     exact (matches_factor hW first.enc first.cv _ _ hs _ hs_ne hall
       (fun x hx => hfw x (List.mem_of_mem_take hx)) (fun x hx => hfw x (List.mem_of_mem_drop hx))
-      hpure v).symm
+      hpure v (fun x hx => hN.hinge _ _ _ _ hs (by simpa [hs] using hsame) hs_ne x hx v)).symm
   · rw [struct_log (Or.inr hc), struct_matches (o := { first with ch := _ }) (hop first hfirst) he]
     rw [eq_comm, List.any_eq_true]
     exact ⟨first, hfirst, struct_matches (hop first hfirst) he⟩
@@ -406,7 +410,8 @@ theorem mergeAnd_same (hW : W.Ok step) {c first : Cond} {rest nch : List Cond}
     cases (pre.any isStruct) <;> cases (post.any isStruct) <;>
       cases (c.ch.any fun o => isStruct o.ch[hingeOf c.ch o]!) <;> rfl
 
-theorem pushStep_same (hW : W.Ok step) (c n : Cond) (h : pushStep c = some n) : Same W n c := by
+theorem pushStep_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv) (c n : Cond)
+    (h : pushStep c = some n) : Same W n c := by
   unfold pushStep at h
   split at h
   · rename_i hcond
@@ -428,7 +433,7 @@ theorem pushStep_same (hW : W.Ok step) (c n : Cond) (h : pushStep c = some n) : 
         rw [hm] at h
         simp only [Option.map_some, Option.some.injEq] at h
         subst h
-        exact mergeMatches_same hW hc hch henc hop hm
+        exact mergeMatches_same hW hN hc hch henc hop hm
     · split at h
       · rename_i _ hop
         simp only [List.all_eq_true, beq_iff_eq] at hop
@@ -442,12 +447,13 @@ theorem pushStep_same (hW : W.Ok step) (c n : Cond) (h : pushStep c = some n) : 
       · simp at h
   · simp at h
 
-theorem pushDownOr_same (hW : W.Ok step) {f : Cond → Cond} (hf : ∀ x, Same W (f x) x) (c : Cond) :
+theorem pushDownOr_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv) {f : Cond → Cond}
+    (hf : ∀ x, inv x → Same W (f x) x) (c : Cond) (hc : inv c) :
     Same W (pushDownOr f c) c := by
   unfold pushDownOr
   split
   · rename_i n hn
-    exact (hf n).trans (pushStep_same hW c n hn)
+    exact (hf n (hN.push c n hc hn)).trans (pushStep_same hW hN c n hn)
   · exact Same.refl _
 
 end

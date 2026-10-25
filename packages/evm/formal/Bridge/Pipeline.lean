@@ -5,9 +5,12 @@ import ConditionPacking.Main
 # The SDK pipeline, end to end
 
 The SDK normalizes a tree, flattens it (BFS) and packs it; the contract
-unpacks the buffer and evaluates. `sdk_pipeline`: the contract's evaluation
-of the stored tree agrees with its evaluation of the tree as the user wrote
-it, on every calldata that decodes as the layout the tree fits.
+unpacks the buffer and evaluates. `sdk_pipeline`: for a well-typed tree
+(`inv`, which the SDK check enforces), on every calldata, whenever the
+contract's evaluation of the tree it unpacks from the stored buffer does
+not revert, it computes the contract's reading of the tree as the user wrote
+it: it passes exactly when that reading does, with the same allowance
+consumptions and Pluck slots. A revert denies the call.
 
 The flat array is related to the normalized tree by `nest` (read the tree
 back from the array: node `i`'s children are the later nodes whose parent is
@@ -179,30 +182,38 @@ decreasing_by
 
 section
 variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata)
-  (P : Nat → Option Condition)
 
 include henv in
-/-- **The SDK pipeline keeps the contract's verdict.** A user tree `c0` that
-    fits the calldata layout `m` is normalized (`normalize k`), flattened to
+/-- **The SDK pipeline keeps the meaning of the tree as written.** A
+    well-typed user tree `c0` is normalized (`normalize k`), flattened to
     `fs` (which reads back as the normalized tree), packed and stored. On
-    every calldata that decodes as `m`, the contract's evaluation of the tree
-    it unpacks from the stored buffer agrees with its evaluation of `c0` as
-    written: both pass with the same allowance consumptions, or both fail; the
-    same Pluck slots; neither reverts. -/
-theorem sdk_pipeline (c0 : Cond) (k : Nat) (fs : List Flat) (hP : Packable fs)
-    (hfs : nest fs 0 = normalize k c0) {m : Condition} (hfit : Fits avatar P c0 (D avatar c0) m)
-    (hdec : Decodable data m 0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
-    (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp)) (hcv : CvOk mp c0)
-    (hza : (za c0 fun _ => false).isSome) (hza' : (za (normalize k c0) fun _ => false).isSome) :
-    Agree (run env data (D avatar c0) mp []) (run env data tree mp []) := by
+    every calldata, whenever the contract's evaluation of the tree it unpacks
+    from the stored buffer does not revert, it passes exactly when the
+    contract's reading of `c0` does, with the same allowance consumptions and
+    Pluck slots. -/
+theorem sdk_pipeline (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List Flat) (hP : Packable fs)
+    (hfs : nest fs 0 = normalize k c0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
+    (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp))
+    (hne : (run env data tree mp []).status ≠ revert) :
+    Rel (run env data tree mp []) (sem (readWorld avatar env data mp) c0 (.pos 0) Slots.empty (toMap [])) := by
   rw [pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, rfl⟩ := hu
-  rw [unpacked_eq avatar fs hP 0, hfs]
-  unfold run
-  exact normalize_calldata' avatar env henv data (maxPluck fs) P k hfit hcv 0 hdec _ _
-    (by rw [depth_D]; omega) (by rw [depth_D]; omega) [] Slots.empty (fun _ => false)
-    (fun _ _ h => by cases h) hza hza'
+  rw [unpacked_eq avatar fs hP 0, hfs] at hne ⊢
+  unfold run at hne ⊢
+  exact normalize_meaning avatar env henv data (maxPluck fs) k hc 0 _ (by rw [depth_D]; omega) [] Slots.empty hne
+
+include henv in
+/-- The stored tree and the tree as written, evaluated by the contract,
+    agree whenever neither reverts. -/
+theorem sdk_pipeline_agree (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List Flat) (hP : Packable fs)
+    (hfs : nest fs 0 = normalize k c0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
+    (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp))
+    (hne : (run env data (D avatar c0) mp []).status ≠ revert)
+    (hne' : (run env data tree mp []).status ≠ revert) :
+    Agree (run env data (D avatar c0) mp []) (run env data tree mp []) := by
+  have h1 := eval_reading avatar env henv data mp hc 0 _ (by rw [depth_D]; omega) [] Slots.empty hne
+  exact h1.agree (sdk_pipeline avatar env henv data c0 hc k fs hP hfs junk junk' hu hne')
 
 end
 end Bridge

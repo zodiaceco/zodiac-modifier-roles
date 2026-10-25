@@ -50,14 +50,17 @@ def orT : List (Thunk S C) → Thunk S C
     | (none, s) => orT ts s cs
 
 structure World (V S C : Type) where
-  /-- The fields of a tuple or calldata value. -/
-  fields : Nat → V → List V
+  /-- The fields of a tuple or calldata value, as a `Matches` with encoding,
+      compValue and children reads them (the children say where each
+      field is). -/
+  fields : Nat → List Nat → List Cond → V → List V
   /-- The value of a field a `Matches` child reads past the end. -/
   dflt : V
   /-- `Matches` checks before its children (leading bytes, overflow). -/
-  gate : Nat → List Nat → V → Bool
-  /-- Every other operator: encoding, operator, compValue, child meanings. -/
-  ext : Nat → Nat → List Nat → List (V → Thunk S C) → V → Thunk S C
+  gate : Nat → List Nat → List Cond → V → Bool
+  /-- Every other operator: the node (for what it reads of its own
+      encoding and children), and its children's meanings. -/
+  ext : Cond → List (V → Thunk S C) → V → Thunk S C
 
 /-- Which value each `Matches` child reads. -/
 def assign (d : V) : List Cond → List V → V → List (Cond × V)
@@ -73,8 +76,8 @@ mutual
       else if o = 1 then seqT (semAt W ch v)
       else if o = 2 then orT (semAt W ch v)
       else if o = 5 ∧ (e = 3 ∨ e = 5) then fun sl cs =>
-        if W.gate e cv v then seqT (semM W ch (W.fields e v) v) sl cs else (none, sl)
-      else W.ext e o cv (semL W ch) v
+        if W.gate e cv ch v then seqT (semM W ch (W.fields e cv ch v) v) sl cs else (none, sl)
+      else W.ext ⟨e, o, cv, ch⟩ (semL W ch) v
 
   def semAt (W : World V S C) : List Cond → V → List (Thunk S C)
     | [], _ => []
@@ -127,8 +130,8 @@ theorem assign_fst (d : V) (cs : List Cond) (fs : List V) (v : V) :
 
 /-- The meaning of a `Matches` node on tuples and calldata. -/
 def matchesT (W : World V S C) (e : Nat) (cv : List Nat) (ch : List Cond) (v : V) : Thunk S C :=
-  fun sl cs => if W.gate e cv v then
-    seqT ((assign W.dflt ch (W.fields e v) v).map fun p => sem W p.1 p.2) sl cs else (none, sl)
+  fun sl cs => if W.gate e cv ch v then
+    seqT ((assign W.dflt ch (W.fields e cv ch v) v).map fun p => sem W p.1 p.2) sl cs else (none, sl)
 
 theorem sem_mk (W : World V S C) (e o cv ch v) :
     sem W ⟨e, o, cv, ch⟩ v =
@@ -136,7 +139,7 @@ theorem sem_mk (W : World V S C) (e o cv ch v) :
       else if o = 1 then seqT (ch.map fun c => sem W c v)
       else if o = 2 then orT (ch.map fun c => sem W c v)
       else if o = 5 ∧ (e = 3 ∨ e = 5) then matchesT W e cv ch v
-      else W.ext e o cv (ch.map (sem W)) v := by
+      else W.ext ⟨e, o, cv, ch⟩ (ch.map (sem W)) v := by
   rw [sem, semAt_eq, semL_eq, semM_eq]
   rfl
 
@@ -146,7 +149,7 @@ theorem sem_eq (W : World V S C) (c : Cond) (v : V) :
       else if c.op = 1 then seqT (c.ch.map fun x => sem W x v)
       else if c.op = 2 then orT (c.ch.map fun x => sem W x v)
       else if c.op = 5 ∧ (c.enc = 3 ∨ c.enc = 5) then matchesT W c.enc c.cv c.ch v
-      else W.ext c.enc c.op c.cv (c.ch.map (sem W)) v := by
+      else W.ext c (c.ch.map (sem W)) v := by
   rcases c; exact sem_mk ..
 
 /-! ## Effects -/
@@ -171,13 +174,32 @@ structure World.Ok (W : World V S C) (step : C → Ch → Option C) : Prop where
   /-- Two charges commute (true of `AllowanceConsumer.consume`, see `consume_comm`). -/
   comm : ∀ c x y, (step c x).bind (step · y) = (step c y).bind (step · x)
   /-- Only `Pluck` writes slots. -/
-  keeps : ∀ e o cv ss, o ≠ 14 → (∀ s ∈ ss, ∀ v, KeepsT (s v)) → ∀ v, KeepsT (W.ext e o cv ss v)
+  keeps : ∀ c ss, c.op ≠ 14 → (∀ s ∈ ss, ∀ v, KeepsT (s v)) → ∀ v, KeepsT (W.ext c ss v)
   /-- Only `Custom`, `WithinAllowance`, `CallWithinAllowance` charge. -/
-  pure : ∀ e o cv ss, o ≠ 14 → o ≠ 22 → o ≠ 28 → o ≠ 30 → (∀ s ∈ ss, ∀ v, PureT (s v)) →
-    ∀ v, PureT (W.ext e o cv ss v)
+  pure : ∀ c ss, c.op ≠ 14 → c.op ≠ 22 → c.op ≠ 28 → c.op ≠ 30 → (∀ s ∈ ss, ∀ v, PureT (s v)) →
+    ∀ v, PureT (W.ext c ss v)
   /-- Only choices (`ArraySome`, `ZipSome`) pick charges depending on earlier ones. -/
-  charger : ∀ e o cv ss, o ≠ 14 → o ≠ 2 → o ≠ 6 → o ≠ 10 →
-    (∀ s ∈ ss, ∀ v, ChargerT step (s v)) → ∀ v, ChargerT step (W.ext e o cv ss v)
+  charger : ∀ c ss, c.op ≠ 14 → c.op ≠ 2 → c.op ≠ 6 → c.op ≠ 10 →
+    (∀ s ∈ ss, ∀ v, ChargerT step (s v)) → ∀ v, ChargerT step (W.ext c ss v)
+
+/-- What normalization needs of a world that reads a value through the tree's
+    own types (where each field of a `Matches` is depends on its children):
+    an invariant `inv` of the trees under which the world reads a normalized
+    child as the child, and the `Or` a merge puts at a hinge as each
+    branch's hinge child. -/
+structure World.NormOk (W : World V S C) (inv : Cond → Prop) : Prop where
+  sub : ∀ c, inv c → ∀ x ∈ c.ch, inv x
+  pre : ∀ n c, inv c → keepsAsWritten c = false →
+    inv (unwrap (dedupe (flatten { c with ch := c.ch.map (normalize n) })))
+  push : ∀ c x, inv c → pushStep c = some x → inv x
+  fields : ∀ n e cv (ch : List Cond), (∀ x ∈ ch, inv x) → ∀ v,
+    W.fields e cv (ch.map (normalize n)) v = W.fields e cv ch v ∧
+    W.gate e cv (ch.map (normalize n)) v = W.gate e cv ch v
+  ext : ∀ n c, inv c → keepsAsWritten c = false →
+    W.ext { c with ch := c.ch.map (normalize n) } = W.ext c
+  hinge : ∀ e cv (pre post hs : List Cond), sameType hs = true → hs ≠ [] → ∀ x ∈ hs, ∀ v,
+    W.fields e cv (pre ++ x :: post) v = W.fields e cv (pre ++ orNode hs :: post) v ∧
+    W.gate e cv (pre ++ x :: post) v = W.gate e cv (pre ++ orNode hs :: post) v
 
 /-! ## Thunk algebra -/
 

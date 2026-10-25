@@ -4,8 +4,10 @@ import Normalize.PushDown
 /-!
 # Normalization keeps the meaning
 
-`normalize_sound`: for every world satisfying `World.Ok`, every fuel and
-every condition, `normalize n c` means the same as `c`: on every decoded
+`normalize_sound`: for every world satisfying `World.Ok`, and every
+condition satisfying an invariant under which the world reads normalized
+children and merged `Or`s as the originals (`World.NormOk`), every fuel:
+`normalize n c` means the same as `c`: on every decoded
 value, slots and consumptions it passes or fails alike, ends with the same
 slots, and charges the same allowances.
 -/
@@ -15,23 +17,28 @@ namespace Normalize
 section
 variable {V S C Ch : Type} {W : World V S C} {step : C → Ch → Option C}
 
-theorem normalize_same (hW : W.Ok step) : ∀ (n : Nat) (c : Cond), Same W (normalize n c) c
-  | 0, c => Same.refl c
-  | n + 1, c => by
-    have ih := normalize_same hW n
-    have h1 : Same W { c with ch := c.ch.map (normalize n) } c :=
-      same_congr c (Pw.of_map fun x _ => ih x)
+theorem normalize_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv) :
+    ∀ (n : Nat) (c : Cond), inv c → Same W (normalize n c) c
+  | 0, c, _ => Same.refl c
+  | n + 1, c, hc => by
+    have ih := normalize_same hW hN n
     rw [normalize]
     by_cases hk : keepsAsWritten c = true
     · rw [if_pos hk]; exact Same.refl c
     rw [if_neg hk]
-    exact (sortB_same hW _).trans <| (pushDownOr_same hW ih _).trans <| (unwrap_same _).trans <|
+    have hk' : keepsAsWritten c = false := by simpa using hk
+    have hsub := hN.sub c hc
+    have h1 : Same W { c with ch := c.ch.map (normalize n) } c :=
+      same_congr c (Pw.of_map fun x hx => ih x (hsub x hx))
+        (fun v => hN.fields n c.enc c.cv c.ch hsub v) (hN.ext n c hc hk')
+    exact (sortB_same hW _).trans <| (pushDownOr_same hW hN (fun x hx => ih x hx) _
+      (hN.pre n c hc hk')).trans <| (unwrap_same _).trans <|
       (dedupe_same hW _).trans <| (flatten_same _).trans h1
 
 /-- **Normalization never changes what a condition means.** -/
-theorem normalize_sound (hW : W.Ok step) (n : Nat) (c : Cond) :
-    sem W (normalize n c) = sem W c :=
-  (normalize_same hW n c).1
+theorem normalize_sound (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv) (n : Nat)
+    (c : Cond) (hc : inv c) : sem W (normalize n c) = sem W c :=
+  (normalize_same hW hN n c hc).1
 
 end
 

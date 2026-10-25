@@ -45,7 +45,7 @@ theorem keeps_sem (hW : W.Ok step) (c : Cond) (hc : writes c = false) (v : V) :
         exact hch p.1 (mem_assign hp) p.2) sl cs
     · rfl
   rw [ite_neg' h5]
-  exact hW.keeps _ _ _ _ hc.1 (by simpa using fun x hx => hch x hx) v
+  exact hW.keeps _ _ hc.1 (by simpa using fun x hx => hch x hx) v
 termination_by c
 decreasing_by exact sizeOf_lt_of_mem ‹_›
 
@@ -69,16 +69,16 @@ theorem pure_sem (hW : W.Ok step) (c : Cond) (hw : writes c = false) (hc : charg
   by_cases h5 : c.op = 5 ∧ (c.enc = 3 ∨ c.enc = 5)
   · rw [ite_pos' h5]
     have := seqT_pure (S := S) (C := C)
-      (l := (assign W.dflt c.ch (W.fields c.enc v) v).map fun p => sem W p.1 p.2) (by
+      (l := (assign W.dflt c.ch (W.fields c.enc c.cv c.ch v) v).map fun p => sem W p.1 p.2) (by
         simp only [List.mem_map]
         rintro t ⟨p, hp, rfl⟩
         exact hch p.1 (mem_assign hp) p.2)
     obtain ⟨b, hb⟩ := this
-    refine ⟨fun sl => W.gate c.enc c.cv v && b sl, fun sl cs => ?_⟩
+    refine ⟨fun sl => W.gate c.enc c.cv c.ch v && b sl, fun sl cs => ?_⟩
     simp only [matchesT]
     split <;> simp_all
   rw [ite_neg' h5]
-  exact hW.pure _ _ _ _ hw.1 hc.1.1.1 hc.1.1.2 hc.1.2 (by simpa using fun x hx => hch x hx) v
+  exact hW.pure _ _ hw.1 hc.1.1.1 hc.1.1.2 hc.1.2 (by simpa using fun x hx => hch x hx) v
 termination_by c
 decreasing_by exact sizeOf_lt_of_mem ‹_›
 
@@ -106,16 +106,16 @@ theorem charger_sem (hW : W.Ok step) (c : Cond) (hw : writes c = false)
   by_cases h5 : c.op = 5 ∧ (c.enc = 3 ∨ c.enc = 5)
   · rw [ite_pos' h5]
     have := seqT_charger (step := step) (S := S)
-      (l := (assign W.dflt c.ch (W.fields c.enc v) v).map fun p => sem W p.1 p.2) (by
+      (l := (assign W.dflt c.ch (W.fields c.enc c.cv c.ch v) v).map fun p => sem W p.1 p.2) (by
         simp only [List.mem_map]
         rintro t ⟨p, hp, rfl⟩
         exact hch p.1 (mem_assign hp) p.2)
     obtain ⟨g, hg⟩ := this
-    refine ⟨fun sl => if W.gate c.enc c.cv v then g sl else none, fun sl cs => ?_⟩
+    refine ⟨fun sl => if W.gate c.enc c.cv c.ch v then g sl else none, fun sl cs => ?_⟩
     simp only [matchesT]
     split <;> simp_all
   rw [ite_neg' h5]
-  exact hW.charger _ _ _ _ hw.1 h2 (fun h => ho (Or.inr (Or.inl h)))
+  exact hW.charger _ _ hw.1 h2 (fun h => ho (Or.inr (Or.inl h)))
       (fun h => ho (Or.inr (Or.inr h))) (by simpa using fun x hx => hch x hx) v
 termination_by c
 decreasing_by exact sizeOf_lt_of_mem ‹_›

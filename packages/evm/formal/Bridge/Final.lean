@@ -1,63 +1,88 @@
-import Bridge.NormalizeFits
+import Bridge.ReadNorm
 
 /-!
 # Normalization keeps the contract's verdict, on calldata
 
-`normalize_calldata'`: for every tree that fits the layout of the calldata
-(`Fits`), with compValues the evaluator does not revert on (`CvOk`), the
-contract's evaluation of the normalized tree agrees with its evaluation of
-the tree as written, on every calldata that decodes as that layout: same
-verdict, same allowance consumptions, same Pluck slots.
+For every well-typed tree `c` (`inv`, which the SDK check enforces) and
+every calldata, the contract's evaluation of `normalize k c` computes the
+contract's own reading of `c` (`normalize_meaning`): whenever it does not
+revert, it passes exactly when that reading passes, with the same allowance
+consumptions and Pluck slots. Evaluating `c` as written gives the same
+(`normalize_calldata`), whenever neither reverts. A revert denies the call,
+so the stored tree never allows more than the tree as written means.
+
+Nothing is assumed of the calldata or of how the tree relates to an ABI
+type: the reading is the contract's (`readWorld`), and normalization keeps
+the layout of every node (`norm_inv`).
 -/
 
 namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
-/-- `CvOk` of one node. -/
-def cvOk1 (n : Nat) (c : Cond) : Prop :=
-  (c.op = 5 → (prefixOf c.enc c.cv).length ≤ 32) ∧ (c.op = 13 → 3 ≤ c.cv.length) ∧
-    (c.op = 14 → ∃ k ∈ c.cv.head?, k % 256 < n) ∧ (c.op = 10 ∨ c.op = 11 → ∀ k ∈ c.cv, k % 256 < n)
+/-- Two contract results agree: same slots, both pass with the same
+    consumptions (as maps) or both fail, neither reverts. -/
+def Agree (r r' : Res) : Prop :=
+  r.slots = r'.slots ∧ (r.status = sOk ↔ r'.status = sOk) ∧
+    (r.status = sOk → toMap r.cons = toMap r'.cons) ∧ r.status ≠ revert ∧ r'.status ≠ revert
 
-theorem cvOk_iff (n : Nat) (c : Cond) : CvOk n c ↔ AllN (cvOk1 n) c := by
-  rw [cvOk_eq]
-  constructor
-  · rintro ⟨h1, h2, h3, h4, h5⟩
-    exact .mk ⟨h1, h2, h3, h4⟩ fun x hx => (cvOk_iff n x).1 (h5 x hx)
-  · intro h
-    obtain ⟨h1, h2, h3, h4⟩ := AllN.self _ h
-    exact ⟨h1, h2, h3, h4, fun x hx => (cvOk_iff n x).2 (AllN.ch _ h x hx)⟩
-termination_by sizeOf c
-decreasing_by all_goals exact sizeOf_lt_of_mem hx
+theorem Rel.agree {r r' : Res} {x : Option CM × Slots} (h : Rel r x) (h' : Rel r' x) : Agree r r' := by
+  have e := h.eq
+  have e' := h'.eq
+  rw [e] at e'
+  simp only [Prod.mk.injEq] at e'
+  obtain ⟨e1, e2⟩ := e'
+  refine ⟨e2, ?_, ?_, h.status_ne, h'.status_ne⟩
+  · by_cases hs : r.status = sOk <;> by_cases hs' : r'.status = sOk <;> simp_all
+  · intro hs
+    have hs' : r'.status = sOk := by
+      by_cases hs' : r'.status = sOk
+      · exact hs'
+      · simp [hs, hs'] at e1
+    simp only [hs, hs', ite_true, Option.some.injEq] at e1
+    exact e1
 
-theorem cvOk1_triv (n e o : Nat) (h5 : o ≠ 5) (h13 : o ≠ 13) (h14 : o ≠ 14) :
-    cvOk1 n ⟨e, o, [], []⟩ :=
-  ⟨fun h => absurd h h5, fun h => absurd h h13, fun h => absurd h h14, fun _ k hk => by simp at hk⟩
-
-theorem cvOk_normalize (n k : Nat) (c : Cond) (h : CvOk n c) : CvOk n (normalize k c) := by
-  rw [cvOk_iff] at h ⊢
-  apply allN_normalize (cvOk1 n) (fun _ _ => Iff.rfl) (cvOk1_triv n 0 2 (by decide) (by decide) (by decide))
-    ?_ k c h
-  exact .mk (cvOk1_triv n 0 0 (by decide) (by decide) (by decide)) (fun x hx => nomatch hx)
+theorem AllN.imp {P Q : Cond → Prop} (h : ∀ c, P c → Q c) : ∀ {c : Cond}, AllN P c → AllN Q c
+  | _, .mk hp hch => .mk (h _ hp) fun x hx => AllN.imp h (hch x hx)
 
 section
 variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : Nat)
-  (P : Nat → Option Condition)
 
 include henv in
-/-- **Normalization keeps the contract's verdict.** For a tree `c` that fits
-    the calldata layout `m` and has well-formed compValues, on every calldata
-    that decodes as `m`, the contract's evaluation of `normalize k c` agrees
-    with its evaluation of `c`: both pass with the same consumptions, or both
-    fail; and they leave the same Pluck slots. -/
-theorem normalize_calldata' (k : Nat) {c : Cond} {m : Condition}
-    (hc : Fits avatar P c (D avatar c) m) (hcv : CvOk n c) (l : Nat) (hdec : Decodable data m l)
-    (fuel fuel' : Nat) (hf : height c < fuel) (hf' : height (normalize k c) < fuel')
-    (cons : List Consumption) (sl : Slots) (A : Nat → Bool) (hA : Inv data P A sl)
-    (hza : (za c A).isSome) (hza' : (za (normalize k c) A).isSome) :
+/-- The contract's evaluation of a well-typed tree computes its reading. -/
+theorem eval_reading {c : Cond} (hc : inv avatar c) (l fuel : Nat) (hf : height c < fuel)
+    (cons : List Consumption) (sl : Slots)
+    (hne : (evalC env data n fuel l (D avatar c) cons sl).status ≠ revert) :
+    Rel (evalC env data n fuel l (D avatar c) cons sl)
+      (sem (readWorld avatar env data n) c (.pos l) sl (toMap cons)) :=
+  adequacy_gen avatar env henv data n fuel c (.pos l) hf (AllN.imp (fun _ h => h.1) hc)
+    (fun _ _ h => by cases h) (fun _ h => by cases h) cons sl hne
+
+include henv in
+/-- **The normalized tree computes the meaning of the tree as written.**
+    For a well-typed tree `c`, on every calldata, whenever the contract's
+    evaluation of `normalize k c` does not revert, it passes exactly when the
+    contract's reading of `c` does, with the same consumptions and slots. -/
+theorem normalize_meaning (k : Nat) {c : Cond} (hc : inv avatar c) (l fuel : Nat)
+    (hf : height (normalize k c) < fuel) (cons : List Consumption) (sl : Slots)
+    (hne : (evalC env data n fuel l (D avatar (normalize k c)) cons sl).status ≠ revert) :
+    Rel (evalC env data n fuel l (D avatar (normalize k c)) cons sl)
+      (sem (readWorld avatar env data n) c (.pos l) sl (toMap cons)) := by
+  have h := eval_reading avatar env henv data n (norm_inv avatar k c hc).1 l fuel hf cons sl hne
+  rwa [normalize_sound (readWorld_ok avatar env data n) (readWorld_normOk avatar env data n) k c hc] at h
+
+include henv in
+/-- **Normalization keeps the contract's verdict.** For a well-typed tree
+    `c`, on every calldata, the contract's evaluations of `c` and of
+    `normalize k c` agree whenever neither reverts: both pass with the same
+    consumptions, or both fail; and they leave the same Pluck slots. -/
+theorem normalize_calldata (k : Nat) {c : Cond} (hc : inv avatar c) (l fuel fuel' : Nat)
+    (hf : height c < fuel) (hf' : height (normalize k c) < fuel') (cons : List Consumption) (sl : Slots)
+    (hne : (evalC env data n fuel l (D avatar c) cons sl).status ≠ revert)
+    (hne' : (evalC env data n fuel' l (D avatar (normalize k c)) cons sl).status ≠ revert) :
     Agree (evalC env data n fuel l (D avatar c) cons sl)
       (evalC env data n fuel' l (D avatar (normalize k c)) cons sl) :=
-  normalize_calldata avatar env henv data n P k hc (normalize_fits avatar P k c m hc) hcv
-    (cvOk_normalize n k c hcv) l hdec fuel fuel' hf hf' cons sl A hA hza hza'
+  (eval_reading avatar env henv data n hc l fuel hf cons sl hne).agree
+    (normalize_meaning avatar env henv data n k hc l fuel' hf' cons sl hne')
 
 end
 end Bridge

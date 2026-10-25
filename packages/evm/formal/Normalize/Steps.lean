@@ -68,21 +68,22 @@ theorem Pw.assign {l l' : List Cond} (h : Pw W l l') (fs : List V) (v : V) :
     simp only [Normalize.assign, h.2]
     split <;> simp [h.1, ih]
 
-theorem matchesT_congr {e cv} {l l' : List Cond}
-    (h : ∀ fs v, seqT ((assign W.dflt l fs v).map fun p => sem W p.1 p.2) =
-      seqT ((assign W.dflt l' fs v).map fun p => sem W p.1 p.2)) :
-    matchesT W e cv l = matchesT W e cv l' := by
-  funext v sl cs
-  simp only [matchesT, h]
-
-/-- Replacing the children by pointwise `Same` ones. -/
-theorem same_congr (c : Cond) {l : List Cond} (h : Pw W l c.ch) :
+/-- Replacing the children by pointwise `Same` ones, where the world reads
+    the new children as the old ones (`hf` for a `Matches`, `he` for the
+    other operators). -/
+theorem same_congr (c : Cond) {l : List Cond} (h : Pw W l c.ch)
+    (hf : ∀ v, W.fields c.enc c.cv l v = W.fields c.enc c.cv c.ch v ∧
+      W.gate c.enc c.cv l v = W.gate c.enc c.cv c.ch v)
+    (he : W.ext { c with ch := l } = W.ext c) :
     Same W { c with ch := l } c := by
   constructor
   · funext v
     rw [sem_eq, sem_eq]
-    simp only [h.map_sem, h.map_sem']
-    rw [matchesT_congr (l := l) (l' := c.ch) fun fs v => by rw [h.assign]]
+    simp only [h.map_sem, h.map_sem', he]
+    have hm : matchesT W c.enc c.cv l v = matchesT W c.enc c.cv c.ch v := by
+      funext sl cs
+      simp only [matchesT, (hf v).1, (hf v).2, h.assign]
+    rw [hm]
   · rw [isStruct_eq, isStruct_eq]
     simp only [h.any_struct]
 
