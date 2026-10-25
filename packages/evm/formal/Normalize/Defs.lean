@@ -212,15 +212,15 @@ mutual
       | _, _ => none
 end
 
-/-- `compatibleSiblings` in `effects.ts` (`siblingsCompatible` in
-    checkStored.ts): the SDK check accepts these as the children of one
-    `And`/`Or` (`logicalTy`, strict flag `s = true`). The merged `Or` of
-    `pushDownOr` must be such a node. -/
+/-- `compatibleSiblings` in `effects.ts` (`siblingsSameType` in
+    checkStored.ts): the children of the merged `Or` of `pushDownOr` all
+    describe a parameter of exactly the same type (the SDK check's `Ty`), so
+    the branches have the same type tree. -/
 def sameType (hs : List Cond) : Bool :=
   match toCheckL hs with
   | some cs => match ConditionCheck.classifyAll true cs with
-    | some ks => (ConditionCheck.logicalTy true ks).isSome
-    | none => false
+    | some (.ty t :: ks) => ks.all (· == .ty t)
+    | _ => false
   | none => false
 
 /-- `findMatchesHingeIndex` (with the equal-length rule). -/

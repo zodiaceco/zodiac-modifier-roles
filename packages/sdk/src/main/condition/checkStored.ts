@@ -765,15 +765,11 @@ const nodeOf = (c: ConditionInput): Node => {
 }
 
 /**
- * The check's rule for the children of one `And`/`Or` (`logicalTy`): every
- * structural one describes the value of the most specific of them (a prefix
- * of one tuple or call, or, with `s`, interpretations of one bytes value).
- * `normalizeCondition` merges `Or` branches only into such a node.
+ * The children of a merged `Or` (`normalizeCondition`'s push-down): every
+ * one describes a parameter of exactly the same type, so the merged node
+ * reads the value as each branch did (`sameType` in Lean).
  */
-export const siblingsCompatible = (
-  cs: readonly ConditionInput[],
-  s = true
-): boolean => {
+export const siblingsSameType = (cs: readonly ConditionInput[]): boolean => {
   // unknown codes have no raw tree (`toCheck` is `none`)
   const known = (c: ConditionInput): boolean =>
     Number.isInteger(c.paramType) &&
@@ -782,8 +778,8 @@ export const siblingsCompatible = (
     OP_CODES.has(c.operator) &&
     (c.children ?? []).every(known)
   if (!cs.every(known)) return false
-  const checker = new Checker(s)
-  const ks: K[] = []
+  const checker = new Checker(true)
+  const ts: Ty[] = []
   for (const c of cs) {
     let k: K | undefined
     try {
@@ -791,10 +787,10 @@ export const siblingsCompatible = (
     } catch {
       return false
     }
-    if (k === undefined) return false
-    ks.push(k)
+    if (k === undefined || k.k !== "ty") return false
+    ts.push(k.t)
   }
-  return logicalTy(s, ks) !== undefined
+  return ts.length > 0 && ts.every((t) => tyEq(t, ts[0]))
 }
 
 class Checker {

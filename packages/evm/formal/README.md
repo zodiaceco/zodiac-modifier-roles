@@ -451,9 +451,11 @@ in the SDK with regression tests (`effects.test.ts`,
 10. Pruning and padding inside a Zip's fields or a plucked array changed their
     types, which Integrity then rejects; those subtrees are now left as written.
 11. Pushing an `Or` down merged children of incompatible types (e.g. a `Slice`
-    next to a plain check), which Integrity rejects; merges now require the
-    SDK check's rule for the children of one `Or` (`compatibleSiblings`,
-    `siblingsCompatible` in checkStored.ts).
+    next to a plain check), which Integrity rejects. Merges now require
+    branches of exactly the same type tree: every child of the merged `Or`
+    has the same SDK-check type (`compatibleSiblings`, `siblingsSameType` in
+    checkStored.ts). A `bytes` check and a nested call, or checks of a prefix
+    of one tuple, stay separate branches.
 12. `createTypeTree` gave an `And`/`Or` the type of its first child, and none
     when that child reads no parameter, so the parent's type tree lost a field;
     it now takes the first structural child, as the contract's `TypeTree` does.

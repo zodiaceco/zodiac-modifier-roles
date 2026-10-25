@@ -281,6 +281,69 @@ suite("normalizeCondition()", () => {
     })
   })
 
+  suite(
+    "pushing an Or down needs branches of exactly the same type tree",
+    () => {
+      const call = (...children: Condition[]): Condition => ({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children,
+      })
+      const bytesEq: Condition = {
+        paramType: Encoding.Dynamic,
+        operator: Operator.EqualTo,
+        compValue: abiEncode(["bytes"], ["0x1234"]),
+      }
+      const nested = call(DUMMY_COMP(5))
+      const tuple = (...children: Condition[]): Condition => ({
+        paramType: Encoding.Tuple,
+        operator: Operator.Matches,
+        children,
+      })
+      const dyn: Condition = {
+        paramType: Encoding.Dynamic,
+        operator: Operator.Pass,
+      }
+
+      it("merges branches whose hinge children have the same type", () => {
+        const result = normalizeCondition({
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [
+            call(DUMMY_COMP(0), DUMMY_COMP(1)),
+            call(DUMMY_COMP(0), DUMMY_COMP(2)),
+          ],
+        })
+        expect(result.operator).to.equal(Operator.Matches)
+      })
+
+      it("keeps a bytes check and a nested call apart", () => {
+        const condition = {
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [call(DUMMY_COMP(0), bytesEq), call(DUMMY_COMP(0), nested)],
+        }
+        expect(
+          normalizeCondition(structuredClone(condition)).operator
+        ).to.equal(Operator.Or)
+      })
+
+      it("keeps checks of a prefix of one tuple apart", () => {
+        const condition = {
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [
+            call(DUMMY_COMP(0), tuple(dyn, DUMMY_COMP(1))),
+            call(DUMMY_COMP(0), tuple(dyn, DUMMY_COMP(1), DUMMY_COMP(2))),
+          ],
+        }
+        expect(
+          normalizeCondition(structuredClone(condition)).operator
+        ).to.equal(Operator.Or)
+      })
+    }
+  )
+
   it("does not change logical operator semantics when pushing down ORs", () => {
     const {
       permissions: [functionVariants],

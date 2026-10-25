@@ -1,5 +1,5 @@
 import { Condition, Encoding, Operator } from "../../types"
-import { siblingsCompatible } from "../checkStored"
+import { siblingsSameType } from "../checkStored"
 
 /**
  * Effects a condition subtree can have on the evaluation of its siblings.
@@ -67,10 +67,9 @@ export const isStructural = (c: Condition): boolean =>
     : c.paramType !== Encoding.None && c.paramType !== Encoding.EtherValue
 
 /**
- * The children an `Or` branch merge would put under one node: the merged
- * node must pass the SDK check (`siblingsCompatible`, the check's sibling
- * rule), so the merge keeps the tree checkable and every child reads its
- * value where the branch it came from did.
+ * The children an `Or` branch merge would put under one node: they must have
+ * exactly the same type (the branches the same type tree), so every child
+ * reads its value where the branch it came from did.
  */
 export const compatibleSiblings = (siblings: readonly Condition[]): boolean =>
-  siblingsCompatible(siblings)
+  siblingsSameType(siblings)
