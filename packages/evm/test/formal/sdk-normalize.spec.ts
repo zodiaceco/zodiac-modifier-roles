@@ -321,11 +321,13 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     this.timeout(600_000);
     const qs: { input: string; norm: string }[] = [];
     let total = 0;
+    let origRejected = 0;
     for (let i = 0; i < CASES; i++) {
       const tree = genRoot();
       const normalized = normalizeCondition(structuredClone(tree) as any) as any;
       total++;
       if (checkStoredConditions(flattenCondition(normalized) as any, true) === undefined) continue;
+      if (checkStoredConditions(flattenCondition(tree as any) as any, true) === undefined) origRejected++;
       qs.push({ input: flat(tree), norm: flat(normalized) });
     }
     const res = spawnSync(LEAN_BIN, {
@@ -340,7 +342,7 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     const why = new Map<string, number>();
     for (const b of badIn) why.set(b.r.split(" ")[2], (why.get(b.r.split(" ")[2]) ?? 0) + 1);
     console.log(
-      `      ${qs.length} of ${total} accepted after normalization; not well-typed: ${badIn.length} as written, ${badNorm.length} normalized`
+      `      ${qs.length} of ${total} accepted after normalization; not well-typed: ${badIn.length} as written, ${badNorm.length} normalized; the check rejects ${origRejected} of them as written`
     );
     for (const [k, n] of [...why].sort()) console.log(`      as written, ${k}: ${n}`);
     for (const b of badIn.slice(0, 4)) console.log(`      ${b.r} on ${b.input}`);

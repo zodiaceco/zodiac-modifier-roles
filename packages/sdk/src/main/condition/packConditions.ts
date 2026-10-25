@@ -35,6 +35,9 @@ import {
   transformCv,
   Op,
 } from "./checkStored"
+import { flattenCondition } from "./flattenCondition"
+import { normalizeCondition } from "./normalize"
+import type { Condition } from "../types"
 
 const be = (n: number, k: number): number[] =>
   Array.from({ length: k }, (_, i) => Math.floor(n / 256 ** (k - 1 - i)) % 256)
@@ -94,4 +97,23 @@ export const checkAndPack = (
     throw new Error("condition rejected by checkStored")
   }
   return { verdict, packed: toHex(packConditions(fs)) }
+}
+
+/**
+ * The whole path for a condition tree as the user wrote it: checks the tree
+ * as written, normalizes it, flattens it, checks the result and packs it.
+ * This is the pipeline `sdk_pipeline` (packages/evm/formal/Bridge) covers:
+ * the stored tree enforces what the tree as written means. The proof needs
+ * the tree as written to be well-typed, which the first check enforces
+ * (tested: every tree it accepts is, `test/formal/sdk-check.spec.ts`).
+ * Throws if either check rejects.
+ */
+export const checkAndPackCondition = (
+  condition: Condition,
+  s = true
+): { verdict: Verdict; packed: `0x${string}` } => {
+  if (checkStored(toFlatNodes(flattenCondition(condition)), s) === undefined) {
+    throw new Error("condition rejected by checkStored (as written)")
+  }
+  return checkAndPack(flattenCondition(normalizeCondition(condition)), s)
 }

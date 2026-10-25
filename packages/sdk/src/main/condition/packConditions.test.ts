@@ -1,7 +1,14 @@
 import { expect, it, suite } from "vitest"
 
 import { Enc, Op } from "./checkStored"
-import { checkAndPack, packConditions } from "./packConditions"
+import {
+  checkAndPack,
+  checkAndPackCondition,
+  packConditions,
+} from "./packConditions"
+import { flattenCondition } from "./flattenCondition"
+import { normalizeCondition } from "./normalize"
+import { Encoding, Operator, type Condition } from "../types"
 
 const word = (n: number) => "0x" + n.toString(16).padStart(64, "0")
 
@@ -108,5 +115,40 @@ suite("packConditions()", () => {
       },
     ]
     expect(() => checkAndPack(flat)).toThrow("rejected")
+  })
+
+  it("checkAndPackCondition checks the tree as written, normalizes and packs", () => {
+    const eq = (n: number) => ({
+      paramType: Encoding.Static,
+      operator: Operator.EqualTo,
+      compValue: word(n),
+    })
+    const call = (n: number) => ({
+      paramType: Encoding.AbiEncoded,
+      operator: Operator.Matches,
+      children: [eq(n)],
+    })
+    // two calls that differ in one field: normalization merges them
+    const tree = {
+      paramType: Encoding.None,
+      operator: Operator.Or,
+      children: [call(2), call(1)],
+    } as Condition
+    expect(checkAndPackCondition(tree)).toEqual(
+      checkAndPack(flattenCondition(normalizeCondition(tree)))
+    )
+    // a Slice over a Slice is rejected as written
+    const slice = (child: object) => ({
+      paramType: Encoding.Static,
+      operator: Operator.Slice,
+      compValue: "0x000420",
+      children: [child],
+    })
+    const bad = {
+      paramType: Encoding.AbiEncoded,
+      operator: Operator.Matches,
+      children: [slice(slice(eq(1)))],
+    }
+    expect(() => checkAndPackCondition(bad as any)).toThrow(/as written/)
   })
 })
