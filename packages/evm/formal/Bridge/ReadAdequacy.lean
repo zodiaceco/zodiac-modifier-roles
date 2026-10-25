@@ -448,10 +448,10 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     · exact pluck_rel avatar env data n f c _ v cons sl h hne
     · exact cmp_rel avatar env data n f c _ v cons sl h
     · exact bitmask_rel avatar env data n f c _ v cons sl h
-    · exact custom_rel avatar env henv data n f c _ v cons sl h
-    · exact ratio_rel avatar env henv data n f c _ v cons sl h
-    · exact wa_rel avatar env henv data n f c _ v cons sl h
-    · exact cwa_rel avatar env henv data n f c _ v cons sl h
+    · exact custom_rel avatar env henv data n f c _ v cons sl h hne
+    · exact ratio_rel avatar env data n f c _ v cons sl h hne
+    · exact wa_rel avatar env data n f c _ v cons sl h hne
+    · exact cwa_rel avatar env data n f c _ v cons sl h hne
 
 
 end

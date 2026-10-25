@@ -12,12 +12,17 @@ same node as the evaluator, so this is the operator's own arithmetic.
 namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
-/-- What is assumed of the outside: the external calls never report `Ok`
-    as a failure, nor a status that reads as a revert. -/
+/-- What is assumed of the outside: the custom checker never reports `Ok`
+    as a failure. The external calls may revert (a price adapter, an
+    overflow while scaling); the theorems are about runs that do not. -/
 structure EnvOk (env : Env) : Prop where
-  scale : ∀ cv n, (env.scale cv n).1 ≠ revert
-  custom : ∀ cv l sz vals s, env.customCall cv l sz vals = .inl s → s ≠ sOk ∧ s ≠ revert
-  ratio : ∀ cv vals, env.ratio cv vals ≠ revert
+  custom : ∀ cv l sz vals s, env.customCall cv l sz vals = .inl s → s ≠ sOk
+
+@[simp] theorem result_status (s : Nat) (cons : List Consumption) (sl : Slots) :
+    (Evaluate.result s cons sl).status = s := by
+  unfold Evaluate.result; split
+  · rename_i h; exact h.symm
+  · rfl
 
 theorem sOk_ne_revert : sOk ≠ revert := by decide
 
@@ -173,9 +178,8 @@ theorem consume_status (env : Env) (cons : List Consumption) (k : Bytes) (a : Na
   · rw [(consume_keeps env cons k a hs).2]; decide
 
 /-- `WithinAllowanceChecker.check` charges the map's `charge`. -/
-theorem allowance_toMap (env : Env) (henv : EnvOk env) (cons : List Consumption) (v : Nat)
-    (cv : Bytes) :
-    (allowance env cons v cv).1 ≠ revert ∧
+theorem allowance_toMap (env : Env) (cons : List Consumption) (v : Nat)
+    (cv : Bytes) (hne : (allowance env cons v cv).1 ≠ revert) :
     (if (allowance env cons v cv).1 = sOk then some (toMap (allowance env cons v cv).2) else none) =
       ((charge env cv v).map ([·])).bind (applyL (consumeM env.balance) (toMap cons)) := by
   rw [allowance_eq]
@@ -183,16 +187,13 @@ theorem allowance_toMap (env : Env) (henv : EnvOk env) (cons : List Consumption)
   by_cases h32 : cv.length = 32
   · simp only [h32, if_true, Option.map_some, Option.bind_some, applyL]
     have := consume_status env cons (key cv) v
-    refine ⟨this.1, ?_⟩
     rw [this.2]; cases consumeM env.balance (toMap cons) (key cv, v) <;> rfl
   · simp only [h32, ite_false]
     by_cases hsc : (env.scale cv v).1 = sOk
     · simp only [hsc, if_true, Option.map_some, Option.bind_some, applyL]
       have := consume_status env cons (key cv) (env.scale cv v).2
-      refine ⟨this.1, ?_⟩
       rw [this.2]; cases consumeM env.balance (toMap cons) (key cv, (env.scale cv v).2) <;> rfl
     · simp only [hsc, ite_false, Option.map_none, Option.bind_none]
-      exact ⟨henv.scale cv v, trivial⟩
 
 /-! ## Each operator -/
 
@@ -271,69 +272,64 @@ theorem empty_rel (ho : c.op = 4) :
   · have hne : sCalldataNotEmpty ≠ sOk := by decide
     simpa [h, hne] using Rel.result (s := sCalldataNotEmpty) (by decide) cons sl
 
-include henv in
-theorem ratio_rel (ho : c.op = 23) :
+theorem ratio_rel (ho : c.op = 23) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
   have hop : (nodeAt avatar c v).operator = .WithinRatio := by rw [nodeAt_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
   show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_ratio env data n f v.loc _ cons sl hop]
+  rw [evalC_ratio env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [result_status] at hne
   unfold readExt; simp only [ho]
   rw [checkT_apply]
-  simpa using Rel.result (henv.ratio _ _) cons sl
+  simpa using Rel.result hne cons sl
 
-include henv in
-theorem cwa_rel (ho : c.op = 30) :
+theorem cwa_rel (ho : c.op = 30) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
   have hop : (nodeAt avatar c v).operator = .CallWithinAllowance := by rw [nodeAt_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
   show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_cwa env data n f v.loc _ cons sl hop]
+  rw [evalC_cwa env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [result_status] at hne
   unfold readExt; simp only [ho]
   unfold chargesT
-  have := allowance_toMap env henv cons 1 (nodeAt avatar c v).compValue
-  rw [← this.2]
-  exact Rel.result this.1 _ sl
+  rw [← allowance_toMap env cons 1 (nodeAt avatar c v).compValue hne]
+  exact Rel.result hne _ sl
 
-include henv in
-theorem wa_rel (ho : c.op = 28) :
+theorem wa_rel (ho : c.op = 28) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
   have hop : (nodeAt avatar c v).operator = .WithinAllowance := by rw [nodeAt_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
   show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_wa env data n f v.loc _ cons sl hop]
+  rw [evalC_wa env data n f v.loc _ cons sl hop] at hne ⊢
   unfold readExt; simp only [ho]
   unfold chargesT allowanceCharge
-  cases input data v.loc (nodeAt avatar c v) with
+  cases hi : input data v.loc (nodeAt avatar c v) with
   | overflow => exact Rel.violation (by decide) (by decide) sl
-  | etherValue =>
-    have := allowance_toMap env henv cons env.value (nodeAt avatar c v).compValue
-    simp only [inputB, amountOf]
-    rw [← this.2]; exact Rel.result this.1 _ sl
-  | word x =>
-    have := allowance_toMap env henv cons x (nodeAt avatar c v).compValue
-    simp only [inputB, amountOf]
-    rw [← this.2]; exact Rel.result this.1 _ sl
-  | hash p =>
-    have := allowance_toMap env henv cons 0 (nodeAt avatar c v).compValue
-    simp only [inputB, amountOf]
-    rw [← this.2]; exact Rel.result this.1 _ sl
+  | etherValue | word _ | hash _ =>
+    simp only [hi, result_status] at hne ⊢
+    simp only [inputB, amountOf] at hne ⊢
+    rw [← allowance_toMap env cons _ (nodeAt avatar c v).compValue hne]
+    exact Rel.result hne _ sl
 
 include henv in
-theorem custom_rel (ho : c.op = 22) :
+theorem custom_rel (ho : c.op = 22) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
   have hop : (nodeAt avatar c v).operator = .Custom := by rw [nodeAt_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
   show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_custom env data n f v.loc _ cons sl hop]
+  rw [evalC_custom env data n f v.loc _ cons sl hop] at hne ⊢
   unfold readExt; simp only [ho]
   unfold chargesT customCharges
   rcases hc : env.customCall (nodeAt avatar c v).compValue v.loc
       (if (nodeAt avatar c v).size ≠ 0 then (nodeAt avatar c v).size
        else size data v.loc (nodeAt avatar c v)) sl.values with s | chs
-  · simp only [Option.bind_none]
-    have := henv.custom _ _ _ _ s hc
-    exact Rel.violation this.1 this.2 sl
+  · simp only [hc, Evaluate.violation] at hne
+    simp only [Option.bind_none]
+    exact Rel.violation (henv.custom _ _ _ _ s hc) hne sl
   · simp only [Option.bind_some]
     rw [applyCharges_toMap]
     exact Rel.result (applyCharges_status env cons chs) _ sl
