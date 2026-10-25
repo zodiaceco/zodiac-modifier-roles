@@ -138,7 +138,7 @@ const calldataMatchesScopings =
     assertValidConditionsKeys(conditions, paramTypes)
     assertCompatibleParamTypes(conditions, paramTypes)
 
-    const matchesCondition = {
+    const matchesCondition: Condition = {
       paramType: Encoding.AbiEncoded,
       operator: Operator.Matches,
       children: conditions.map(
@@ -146,13 +146,20 @@ const calldataMatchesScopings =
       ),
     }
 
-    if (callWithinAllowance) {
-      matchesCondition.children.push({
-        paramType: Encoding.None,
-        operator: Operator.CallWithinAllowance,
-        compValue: encodeKey(callWithinAllowance),
-      })
-    }
+    // A Matches may only have children that read a parameter, so the
+    // allowance goes next to it: And[Matches, CallWithinAllowance], or the
+    // allowance alone for a function without parameters.
+    const allowance: Condition | undefined = callWithinAllowance
+      ? {
+          paramType: Encoding.None,
+          operator: Operator.CallWithinAllowance,
+          compValue: encodeKey(callWithinAllowance),
+        }
+      : undefined
+    const parts: Condition[] = [
+      ...(paramTypes.length > 0 || !allowance ? [matchesCondition] : []),
+      ...(allowance ? [allowance] : []),
+    ]
 
     if (selector) {
       if (selector.length !== 10) {
@@ -161,13 +168,20 @@ const calldataMatchesScopings =
         )
       }
 
-      return and(
-        () => matchesCondition,
-        bitmask({ mask: "0xffffffff", value: selector })
-      )(ParamType.from("bytes"))
+      return {
+        paramType: Encoding.None,
+        operator: Operator.And,
+        children: [
+          ...parts,
+          bitmask({ mask: "0xffffffff", value: selector })(
+            ParamType.from("bytes")
+          ),
+        ],
+      }
     }
 
-    return matchesCondition
+    if (parts.length === 1) return parts[0]
+    return { paramType: Encoding.None, operator: Operator.And, children: parts }
   }
 
 const calldataMatchesFunctionPermission =
