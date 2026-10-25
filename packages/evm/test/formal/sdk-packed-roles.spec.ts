@@ -229,4 +229,24 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
       "rejected",
     );
   });
+  it("enforces a parameter after a fixed-size array (described as a tuple, as the SDK does)", async () => {
+    const { roles, invoke, store } = await setup("fn(uint256[2], uint256)");
+    const tree = {
+      paramType: Encoding.AbiEncoded,
+      operator: Operator.Matches,
+      children: [
+        pass(Encoding.Tuple, [pass(Encoding.Static), pass(Encoding.Static)]),
+        eq(5),
+      ],
+    };
+    await store(tree);
+    await expect(invoke([1, 2], 5)).to.not.be.revert(ethers);
+    await expect(invoke([1, 2], 999)).to.be.revertedWithCustomError(
+      ...violation(roles),
+    );
+    // array elements are values, not offsets
+    await expect(invoke([32, 5], 999)).to.be.revertedWithCustomError(
+      ...violation(roles),
+    );
+  });
 });

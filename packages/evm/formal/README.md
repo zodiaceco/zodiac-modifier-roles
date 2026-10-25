@@ -26,6 +26,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Normalization on calldata](#normalization-on-calldata): on every calldata, the normalized tree computes the contract's reading of the tree as written            | [`Bridge`](Bridge/)                                    | Proven |
 | [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree                              | [`Bridge`](Bridge/)                                    | Proven |
 | [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
+| [EIP-712 signing](#eip-712-signing): the contract signs the EIP-712 digest of what it reads, and Roles checks exactly the members it hashes                     | [`EIP712`](EIP712/README.md)                           | Proven |
 
 Not covered yet:
 
@@ -70,7 +71,9 @@ Not covered yet:
   almost any branch that reads an array.
 - **The tree as written versus what the user meant.** The proofs start
   from a condition tree. That the SDK's authoring helpers, ABI selection or
-  a UI build the tree the user meant is not covered.
+  a UI build the tree the user meant is not covered. (For signing, the
+  `fit` check covers the permissions `allowSignTypedMessage` builds; it
+  found that the helpers described fixed-size arrays as dynamic arrays.)
 - **The Integrity path.** Trees stored with the setters that run
   `Integrity` (not `...Packed`) get none of these guarantees: Integrity
   accepts trees `evaluate` misreads (the backlog above). It is a separate,
@@ -692,6 +695,27 @@ Trusted (tested, not proven):
 - that callers use the checked path (`checkAndPackCondition`, or
   `checkAndPack` on a normalized tree) and store exactly its output.
 
+## EIP-712 signing
+
+`EIP712` transcribes the EIP-712 standard itself (`Spec.lean`) and the
+contract's `EIP712Encoder`, and proves, for `SignTypedMessageLib`'s
+`signTypedMessage` under an `allowSignTypedMessage` permission:
+
+- `hashField_spec`: on any bytes, the encoder returns the EIP-712 spec hash of
+  the value it reads (or reverts).
+- `readV_enc`, `hashTypedMessage_spec`: on the SDK's ABI encoding of a typed
+  message it reads that message, so it returns its EIP-712 digest.
+- `visit_agree`, `message_agree`: on any calldata, every member Roles' condition
+  checks is the member the encoder hashes, at the same bytes (the fallback's
+  hand-set offsets included).
+
+The hypotheses on the SDK's output (its type trees, and that the permission's
+conditions follow them) are decided in Lean and checked on every generated
+case. Differential tests against ethers and the contract found six SDK bugs,
+one of them outside signing: the authoring helpers described fixed-size arrays
+`T[k]` as dynamic arrays. Details, findings and limits:
+[EIP712/README.md](EIP712/README.md).
+
 ## The evaluator model
 
 `GAP_EVAL=<n>` in `test/formal/integrity-gaps.spec.ts`: generated trees with
@@ -744,6 +768,7 @@ wrapper).
 | `Normalize/`           | Normalization: transcription of the SDK's normalizeCondition, semantics, proof       |
 | `Evaluate/`            | Transcription of `ConditionEvaluator.evaluate` (differentially tested)               |
 | `Bridge/`              | The contract's reading, adequacy, normalization on calldata, the SDK pipeline        |
+| `EIP712/`              | EIP-712: the standard, the encoder, the digest, Roles against the encoder, README    |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 

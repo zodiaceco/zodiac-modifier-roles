@@ -1,0 +1,137 @@
+# EIP-712 signing
+
+Machine-checked proofs about how a Roles member gets the avatar to sign an
+EIP-712 message: the `allowSignTypedMessage` permission (SDK), Roles'
+evaluation of the `signTypedMessage` call to `SignTypedMessageLib`, and the
+digest `EIP712Encoder` computes. The EIP-712 standard itself is the reference:
+`Spec.lean` transcribes it directly (`encodeType`, `typeHash`, `encodeData`,
+`hashStruct`, the `\x19\x01` digest), independent of the ABI and of Roles.
+
+```
+cd packages/evm/formal
+lake build EIP712
+```
+
+## What is proven
+
+`K` is keccak256, a parameter: no theorem assumes anything of it, except that a
+struct's `typeHash` is not zero (the encoder tells structs from fixed-size
+arrays by a non-zero `typeHash`).
+
+| Theorem                                | Statement                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hashField_spec` (`Hash.lean`)         | **On any bytes**, `_hashField` is the EIP-712 spec applied to what it reads: it reverts exactly when its walk (`readV`) fails, and otherwise returns `encV` (EIP-712 `enc`; `hashStruct` for a struct) of the value read.                                                                                                                                                  |
+| `readV_enc` (`Decode.lean`)            | On the Solidity ABI spec encoding (`DecoderFaithfulness.enc`) of a typed value, the walk reads exactly that value. With `inlineSize_lay`: `_inlineSize` on the type tree agrees with the ABI's static / dynamic and head sizes.                                                                                                                                          |
+| `hashTypedMessage_spec` (`Digest.lean`) | When `types` rebuilds (`_toTree`) into the type trees of `EIP712Domain` (node 0) and the primary type (node 1), and `domain` / `message` are the ABI encodings of typed values, the contract returns the EIP-712 digest of those values.                                                                                                                                |
+| `visit_agree` (`Agree.lean`)           | **On any calldata**, every node `evaluate` visits in a condition tree that follows the type tree (`FitT`) sits exactly where the encoder reads the corresponding member, and that member was read. `loop_agree` / `children_agree_*`: Roles' `AbiLocation.children` and the encoder's block loop find every child at the same place; Roles only adds bound checks against `msg.data`. |
+| `static_input`, `dynamic_input`        | At such a node, the operand Roles compares is the word the encoder hashes, or (for `bytes` / `string`) `__input` of exactly the length word and the bytes the encoder hashes.                                                                                                                                                                                              |
+| `fallback_offset`, `message_agree`     | `SignTypedMessageLib`'s fallback, which sets the offsets of `domain`, `message` and `types` by hand, reads each argument where Roles' root `Matches` finds it; below the `message` (or `domain`) condition, `visit_agree` holds with the library's view of the argument.                                                                                                |
+| `fitB_sound`, `msgB_sound`             | Decidable checks for the hypotheses of `message_agree` (`FitCheck.lean`), run by the driver's `fit` query.                                                                                                                                                                                                                                                                 |
+| `layOf_lay`                            | `layOf` computes the type tree of a type; the driver's `lay` query compares it with `_toTree` of the SDK's `toAbiTypes` output.                                                                                                                                                                                                                                             |
+
+Together: when Roles authorizes a `signTypedMessage` call under an
+`allowSignTypedMessage` permission, every member the permission checks is
+the member the library hashes, and the library returns the EIP-712 digest of
+what it read. For the SDK's own encoding (`encodeSignTypedMessage`) that is
+the digest of the typed message.
+
+On non-canonical calldata the library may read a word that is not the
+encoding of any value of its type (an address with high bits set, say). The
+digest is then `encV` of that word, which, unless keccak256 collides, is the
+digest of no well-typed message: no verifier that hashes typed values
+accepts the signature. `Atom.Canon` defines the canonical words.
+
+## The view of an argument
+
+The fallback hands the library `bytes calldata` slices whose offset and
+length it read from calldata without checking them against `msg.data`. The
+library reads `view data base m` (`Agree.lean`): calldata from `base`, zeros
+past its end, as `calldataload` does. Roles checks its reads against
+`msg.data`, so it only fails where the library would read zeros.
+
+## Hypotheses checked on the SDK's output
+
+The theorems take the SDK's artifacts as hypotheses; the differential tests
+check them on every generated case (`test/formal/eip712.spec.ts`):
+
+- `_toTree(toAbiTypes(...))` is the type tree (`lay`).
+- The `domain` and `message` conditions `allowSignTypedMessage` builds, as
+  `checkAndPackCondition` packs them, follow the type trees (`fit`).
+
+## Differential tests
+
+`test/formal/eip712.spec.ts` (with the Lean driver built; `EIP712_CASES`,
+`EIP712_MUTATIONS`, `EIP712_SEED`). Random typed data: up to four structs,
+nested and referenced through `T[]` and `T[k]` (including `T[k][]` and
+`T[][k]`), every atomic type, `bytes`, `string`, random domains, declared or
+inferred `EIP712Domain`, `chainId` as number or bigint.
+
+1. Three independent digests agree: ethers' `TypedDataEncoder`, the Lean
+   spec (`es`), and the contract (`MockEIP712Encoder`) fed by the SDK's
+   `encodeTypedDomain` / `encodeTypedMessage` / `toAbiTypes`. The SDK's
+   `hashType` agrees with the Lean `typeHash`. The Lean spec reproduces the
+   example in EIP-712 (`Mail`, digest `0xbe60…7bd2`).
+2. The Lean encoder (`eh`) returns what the contract returns, hash or revert,
+   on the SDK's encoding and on mutated bytes and type nodes. 5 seeds × 800
+   messages × 8 mutations: 0 differences (about 59% of the mutations are
+   still accepted by the contract).
+3. `allowSignTypedMessage` permissions (`eip712-permissions.ts`, in its own
+   process: the SDK's authoring helpers do not load under Hardhat): the
+   SDK accepts its own permission, the `fit` hypotheses hold, the evaluator
+   model accepts `encodeSignTypedMessage`'s calldata, and rejects it when a
+   scoped member or a type node changes. 300 permissions: all fit, 545
+   changed calls all rejected.
+
+## Findings (all fixed in the SDK)
+
+- `parseType` read the first array dimension instead of the last: `T[2][]`
+  was handled as `T[2]`, `T[][2]` as `T[]`.
+- Only power-of-two integer widths were atomic: `uint160`, `uint48`,
+  `uint24` and the like were taken for struct names (Permit2's
+  `PermitDetails` could not be encoded).
+- `typesForDomain` dropped a `bigint` `chainId`.
+- A declared `EIP712Domain` was ignored in favour of fields inferred from the
+  domain value, so a dapp whose domain type differs got a different digest.
+- Recursive types made `toAbiTypes` expand forever; the encoder's layout
+  cannot express them, so the SDK now rejects them.
+- The SDK's authoring helpers (`c.matches`, `c.eq`, `describeStructure`, for
+  every permission, not only signing) described a fixed-size array `T[k]`
+  as a dynamic array. The ABI encodes `T[k]` as the tuple `(T, …, T)`, so
+  Roles read the parameters after it at the wrong place, and honest calls
+  failed. `T[k]` is now a `Tuple` of `k` children; `every` / `some` reject
+  it. In the mainnet snapshot (`investigations/roles-pruning`), the three
+  functions with a fixed-size array parameter that carry a condition store
+  it correctly, as a tuple.
+
+## Not covered
+
+- `encodeType` in the SDK (`hashType`) and `toAbiTypes` are tested against
+  the Lean spec and ethers, not proven.
+- `SignTypedMessageLib`'s storage write and the Safe's `isValidSignature`
+  (the `SafeMessage` wrapping): covered by the integration tests against
+  the Safe contracts, not modeled. `SafeStorage` matches the Safe 1.3 /
+  1.4.1 layout by inspection.
+- `personalSign` and `signMessage`. `signMessage(bytes)` with a 32-byte
+  message signs a raw hash (the Safe's `isValidSignature(bytes32, ...)`
+  checks `SafeMessage(abi.encode(hash))`); the SDK has no helper that
+  allows it, and none should.
+- `Slice` and Zip in signing conditions (`FitT` has neither).
+- Empty structs and `T[0]`: the encoder reverts (fails closed). Solidity has
+  neither.
+- What the signature authorizes elsewhere (Permit, orders, `RoleTx` of
+  another Roles instance): that is the permission's intent, see
+  [the overview](../README.md).
+
+## Files
+
+| File            | Contents                                                                    |
+| --------------- | --------------------------------------------------------------------------- |
+| `Spec.lean`     | EIP-712, transcribed: types, values, `encodeType`, `encodeData`, the digest |
+| `Encoder.lean`  | Transcription of `EIP712Encoder.sol`                                        |
+| `Read.lean`     | The encoder's walk returning values (`readV`), type trees (`Lay`)           |
+| `Hash.lean`     | `hashField_spec`                                                            |
+| `Decode.lean`   | `readV_enc`, `inlineSize_lay`                                               |
+| `Digest.lean`   | `hashTypedMessage_spec`, `layOf`                                            |
+| `Agree.lean`    | Roles' reading against the encoder's, on any calldata                       |
+| `FitCheck.lean` | Decidable checks for the agreement hypotheses                               |
+| `Keccak.lean`   | Executable keccak256 for the driver (no theorem uses it)                    |

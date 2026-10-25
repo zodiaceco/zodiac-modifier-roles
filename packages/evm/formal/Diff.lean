@@ -4,6 +4,7 @@ import ConditionCheck.Stored
 import Normalize.Defs
 import Evaluate.Model
 import Bridge.InvCheck
+import EIP712
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -260,6 +261,114 @@ def withTree (t : String) (k : Normalize.Cond → String) : String :=
   | some (c, rest) => if rest.all (· == ' ') then k c else "bad-input"
   | none => "bad-input"
 
+
+/-! ## EIP-712 queries -/
+
+/-- `parent:encoding:typeHashHex|…` (`TypeNodeFlat[]`; codes 0..6). -/
+def parseTypes (s : String) : List EIP712.TNF :=
+  if s = "-" then [] else
+  (s.splitOn "|").map fun e =>
+    match e.splitOn ":" with
+    | [p, en, th] => { parent := p.toNat!, encoding := toEncoding en.toNat!, typeHash := parseHex th }
+    | _ => default
+
+def parseTy (s : String) : EIP712.Ty :=
+  let base := (s.splitOn "[").headD s
+  let suffixes := ((s.splitOn "[").drop 1).map fun x => (x.dropEnd 1).toString
+  let atomOf (b : String) : EIP712.Ty :=
+    if b = "address" then .atom .address
+    else if b = "bool" then .atom .bool
+    else if b = "bytes" then .bytes
+    else if b = "string" then .string
+    else if b.startsWith "uint" then .atom (.uint (b.drop 4).toString.toNat!)
+    else if b.startsWith "int" then .atom (.int (b.drop 3).toString.toNat!)
+    else if b.startsWith "bytes" then .atom (.fbytes (b.drop 5).toString.toNat!)
+    else .struct b
+  suffixes.foldl (fun t n => if n = "" then .array t else .fixed t n.toNat!) (atomOf base)
+
+/-- `Name=type:name,type:name;Name2=…`. -/
+def parseDefs (s : String) : EIP712.Defs :=
+  (s.splitOn ";").map fun d =>
+    match d.splitOn "=" with
+    | [n, fs] => (n, if fs = "" then [] else (fs.splitOn ",").map fun f =>
+        match f.splitOn ":" with
+        | [t, nm] => ({ name := nm, ty := parseTy t } : EIP712.Field)
+        | _ => default)
+    | _ => ("", [])
+
+/-- Values: `a<hex>` (atom word), `d<hex>` (bytes / string), `l(v,v,…)`. -/
+partial def parseV : List Char → Option (EIP712.V × List Char)
+  | 'a' :: rest =>
+    let h := rest.takeWhile Char.isHexDigit
+    some (.atom (parseHex (String.ofList h)), rest.drop h.length)
+  | 'd' :: rest =>
+    let h := rest.takeWhile Char.isHexDigit
+    some (.dyn (parseHex (String.ofList h)), rest.drop h.length)
+  | 'l' :: '(' :: ')' :: rest => some (.list [], rest)
+  | 'l' :: '(' :: rest =>
+    let rec items (cs : List Char) (acc : List EIP712.V) : Option (List EIP712.V × List Char) :=
+      match parseV cs with
+      | none => none
+      | some (v, ',' :: r) => items r (acc ++ [v])
+      | some (v, ')' :: r) => some (acc ++ [v], r)
+      | _ => none
+    (items rest []).map fun (vs, r) => (.list vs, r)
+  | _ => none
+
+def parseVal (s : String) : EIP712.V := ((parseV s.toList).map (·.1)).getD default
+
+partial def tnKey : EIP712.TN → String
+  | ⟨e, cs, th⟩ => s!"({repr e} {hexOf th} {String.intercalate " " (cs.map tnKey)})"
+
+/-- `ok` if `_toTree` of the SDK's nodes 0 and 1 are `layOf` of the domain
+    and primary type (the hypothesis of `hashTypedMessage_spec`). -/
+def runLay (defs primary types : String) : String :=
+  let K := EIP712.Keccak.keccak256
+  let ds := parseDefs defs
+  let ts := parseTypes types
+  let check (i : Nat) (s : String) : Option String :=
+    match EIP712.toTree ts (ts.length + 1) i, EIP712.layOf K ds 64 (.struct s) with
+    | some t, some l => if tnKey t = tnKey l then none else some s!"{s}: {tnKey t} vs {tnKey l}"
+    | none, _ => some s!"{s}: toTree fails"
+    | _, none => some s!"{s}: no layout"
+  match check 0 "EIP712Domain", check 1 primary with
+  | none, none => "ok"
+  | some e, _ => e
+  | _, some e => e
+
+/-- `ok` if the packed permission's `domain` / `message` arguments
+    (children 0 and 1 of the root) satisfy the hypotheses of
+    `EIP712.message_agree` for the type trees of `EIP712Domain` and the
+    primary type (`EIP712.msgB`). -/
+def runFit (defs primary buf : String) : String :=
+  let K := EIP712.Keccak.keccak256
+  let ds := parseDefs defs
+  match ConditionPacking.unpack (zeros 32) (ConditionPacking.bufMem (parseHex buf) fun _ => 0) with
+  | none => "unpack-failed"
+  | some (root, _) =>
+    let check (i : Nat) (s : String) : Option String :=
+      match EIP712.layOf K ds 64 (.struct s) with
+      | none => some s!"{s}: no layout"
+      | some t => if EIP712.msgB (root.children.getD i default) t then none else some s!"{s}: no fit"
+    match check 0 "EIP712Domain", check 1 primary with
+    | none, none => "ok"
+    | some e, _ => e
+    | _, some e => e
+
+/-- The evaluator model on a packed buffer: its status. -/
+def runEvalBuf (hex buf : String) : String :=
+  let env : Evaluate.Env :=
+    { value := 0, balance := fun _ => 0, scale := fun _ _ => (254, 0)
+      customCall := fun _ _ _ _ => .inl 254, ratio := fun _ _ => 254 }
+  match ConditionPacking.unpack (zeros 32) (ConditionPacking.bufMem (parseHex buf) fun _ => 0) with
+  | none => "unpack-failed"
+  | some (root, maxPluck) => toString (Evaluate.run env (parseHex hex) root maxPluck []).status
+
+def runEh (dom msg types : String) : String :=
+  match EIP712.hashTypedMessage EIP712.Keccak.keccak256 (parseHex dom) (parseHex msg) (parseTypes types) with
+  | some h => hexOf h
+  | none => "revert"
+
 def runLine (line : String) : String :=
   let line := (line.splitOn "\n").headD ""
   -- nested trees contain spaces: split off the command and the last field
@@ -295,6 +404,15 @@ def runLine (line : String) : String :=
       | some (.typed t) => s!"ok {tyKey t}"
       | some .noCalldata => "ns"
       | none => "none"
+  | ["eh", dom, msg, types] => runEh dom msg types
+  | ["es", defs, primary, dom, msg] =>
+    let K := EIP712.Keccak.keccak256
+    let ds := parseDefs defs
+    s!"{hexOf (EIP712.digest K ds primary (parseVal dom) (parseVal msg))} {hexOf (EIP712.typeHash K ds "EIP712Domain")} {hexOf (EIP712.typeHash K ds primary)}"
+  | ["lay", defs, primary, types] => runLay defs primary types
+  | ["fit", defs, primary, buf] => runFit defs primary buf
+  | ["evb", hex, buf] => runEvalBuf hex buf
+  | ["et", defs, name] => EIP712.encodeType (parseDefs defs) name
   | ["bm", hex, loc, cv, inl, sz] =>
     toString (statusCode
       (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))
