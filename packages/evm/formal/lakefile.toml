@@ -1,5 +1,5 @@
 name = "roles_formal"
-defaultTargets = ["DecoderFaithfulness", "ConditionPacking", "ConditionCheck", "Normalize", "Evaluate", "Bridge", "EIP712"]
+defaultTargets = ["DecoderFaithfulness", "ConditionPacking", "ConditionCheck", "Normalize", "Evaluate", "Bridge", "EIP712", "MultiSend", "SafeSigning"]
 
 [[lean_lib]]
 name = "DecoderFaithfulness"
@@ -21,6 +21,12 @@ name = "Bridge"
 
 [[lean_lib]]
 name = "EIP712"
+
+[[lean_lib]]
+name = "MultiSend"
+
+[[lean_lib]]
+name = "SafeSigning"
 
 # Differential-testing driver: runs the Lean transcription on queries from stdin.
 [[lean_exe]]

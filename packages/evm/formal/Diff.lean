@@ -5,6 +5,8 @@ import Normalize.Defs
 import Evaluate.Model
 import Bridge.InvCheck
 import EIP712
+import MultiSend
+import SafeSigning
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -382,6 +384,62 @@ def runEh (dom msg types : String) : String :=
   | some h => hexOf h
   | none => "revert"
 
+/-- `MultiSendUnwrapper.unwrap(_, 0, data, DelegateCall)`: `revert` or
+    `op:to:value:loc:size` per entry, `;`-separated (decimal). -/
+def runUnwrap (hex : String) : String :=
+  match MultiSend.unwrap (parseHex hex) 0 1 with
+  | none => "revert"
+  | some us => ";".intercalate (us.map fun u => s!"{u.op}:{u.to}:{u.value}:{u.loc}:{u.size}")
+
+/-- What `MultiSend.multiSend` executes on the calldata `data` (the Solidity
+    ABI decoder hands it `data[4 + o + 32 : + L]`): `revert`, `decode`
+    (the decoder would revert), `junk` (the loop read memory past the
+    batch: the result depends on it), or `op:to:value:data` per call. -/
+def runMultiSend (hex : String) : String :=
+  let data := parseHex hex
+  let o := Roles.load data 4
+  if (data ++ zeros 4).take 4 ≠ MultiSend.selMultiSend then "decode" else
+  if data.length < 36 ∨ data.length < 4 + o + 32 then "decode" else
+  let L := Roles.load data (4 + o)
+  if data.length < 4 + o + 32 + L then "decode" else
+  let tx := (data.drop (4 + o + 32)).take L
+  -- the loop's header reads, without the data: does any read pass the batch?
+  let mem0 := word L ++ tx
+  let rec past : Nat → Nat → Bool
+    | 0, _ => false
+    | f + 1, i =>
+      if ¬ i < L then false
+      else
+        let op := MultiSend.mload mem0 i / 2 ^ 248
+        let dl := MultiSend.mload mem0 (i + 53)
+        if i + 85 > 32 + L then true
+        else if ¬ (op = 0 ∨ op = 1) then false
+        else if i + 85 + dl > 32 + L then true
+        else past f ((i + (85 + dl)) % 2 ^ 256)
+  if past (tx.length + 2) 32 then "junk" else
+  let run (junk : Bytes) := MultiSend.execLoop (word L ++ tx ++ junk) L (tx.length + 2) 32
+  let fmt (r : Option (List MultiSend.Entry)) : String :=
+    match r with
+    | none => "revert"
+    | some [] => "-"
+    | some es => ";".intercalate (es.map fun e => s!"{e.op}:{e.to}:{e.value}:{hexOf e.data}")
+  let a := fmt (run (List.replicate 4096 0))
+  let b := fmt (run (List.replicate 4096 0xff))
+  if a == b then a else "junk"
+
+/-- `SignTypedMessageLib`'s stored key (`msg`: `signMessage`, `personal`:
+    `personalSign`, `typed`: `signTypedMessage` of a digest) for domain
+    separator `ds`. -/
+def runSafeKey (kind ds m : String) : String :=
+  let K := EIP712.Keccak.keccak256
+  let ds := parseHex ds
+  let m := parseHex m
+  match kind with
+  | "msg" => hexOf (SafeSigning.signMessageKey K ds m)
+  | "personal" => hexOf (SafeSigning.personalSignKey K ds m)
+  | "typed" => hexOf (SafeSigning.signTypedKey K ds m)
+  | _ => "bad-input"
+
 def runLine (line : String) : String :=
   let line := (line.splitOn "\n").headD ""
   -- nested trees contain spaces: split off the command and the last field
@@ -425,6 +483,14 @@ def runLine (line : String) : String :=
   | ["lay", defs, primary, types] => runLay defs primary types
   | ["fit", defs, primary, buf] => runFit defs primary buf
   | ["evb", hex, buf] => runEvalBuf hex buf
+  | ["uw", hex] => runUnwrap hex
+  | ["u2s", n] => String.ofList ((SafeSigning.uintToString n.toNat!).map fun b => Char.ofNat b.val)
+  | ["ph", m] => hexOf (SafeSigning.personalHash EIP712.Keccak.keccak256 (parseHex m))
+  | ["sk", kind, ds, m] => runSafeKey kind ds m
+  | ["th"] => hexOf (SafeSigning.safeTypeHash EIP712.Keccak.keccak256)
+  | ["smh", th, ds, m] =>
+    hexOf (SafeSigning.safeMessageHash EIP712.Keccak.keccak256 (parseHex th) (parseHex ds) (parseHex m))
+  | ["ms", hex] => runMultiSend hex
   | ["et", defs, name] => EIP712.encodeType (parseDefs defs) name
   | ["bm", hex, loc, cv, inl, sz] =>
     toString (statusCode

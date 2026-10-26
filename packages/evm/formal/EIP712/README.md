@@ -118,14 +118,10 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
 
 - `encodeType` in the SDK (`hashType`) and `toAbiTypes` are tested against
   the Lean spec and ethers, not proven.
-- `SignTypedMessageLib`'s storage write and the Safe's `isValidSignature`
-  (the `SafeMessage` wrapping): covered by the integration tests against
-  the Safe contracts, not modeled. `SafeStorage` matches the Safe 1.3 /
-  1.4.1 layout by inspection.
-- `personalSign` and `signMessage`. `signMessage(bytes)` with a 32-byte
-  message signs a raw hash (the Safe's `isValidSignature(bytes32, ...)`
-  checks `SafeMessage(abi.encode(hash))`); the SDK has no helper that
-  allows it, and none should.
+- `SignTypedMessageLib`'s storage write: `SafeStorage` matches the Safe 1.3
+  / 1.4.1 layout by inspection. The `SafeMessage` wrapping and the Safe's
+  `isValidSignature`, and `personalSign` / `signMessage`: see
+  [SafeSigning](../SafeSigning/README.md).
 - A `Slice` of a `Slice` is covered by the proof (the contract accepts
   it), but the SDK refuses it (it is one `Slice`), so the tests do not
   generate it.

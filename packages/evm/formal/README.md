@@ -27,6 +27,8 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree                              | [`Bridge`](Bridge/)                                    | Proven |
 | [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
 | [EIP-712 signing](#eip-712-signing): the contract signs the EIP-712 digest of what it reads, and Roles checks exactly the members it hashes                     | [`EIP712`](EIP712/README.md)                           | Proven |
+| [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
+| [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
 
 Not covered yet:
 
@@ -718,6 +720,25 @@ one of them outside signing: the authoring helpers described fixed-size arrays
 `T[k]` as dynamic arrays. Details, findings and limits:
 [EIP712/README.md](EIP712/README.md).
 
+## MultiSend
+
+`MultiSend` defines the batch format from Safe's documentation and proves
+against it both `MultiSendUnwrapper.unwrap` (the entries Roles checks, with
+their calldata slices) and the assembly loop of `MultiSend.multiSend` (the
+calls it makes): when the unwrapper accepts, MultiSend executes exactly the
+transactions Roles checked, in order (`unwrap_exec`). Tested against both
+contracts on chain. Details: [MultiSend/README.md](MultiSend/README.md).
+
+## Signing through the Safe
+
+`SafeSigning` takes EIP-191 as the reference and proves that the library's
+`uintToString` is the decimal, that `personalSign` and `signTypedMessage`
+make exactly their hash valid in the Safe's `isValidSignature` (unless
+keccak256 collides), and that `signMessage` with a 32-byte message signs that
+raw hash, so it subsumes every other signing permission. Tested against a
+real Safe and its fallback handler. Details:
+[SafeSigning/README.md](SafeSigning/README.md).
+
 ## The evaluator model
 
 `GAP_EVAL=<n>` in `test/formal/integrity-gaps.spec.ts`: generated trees with
@@ -771,6 +792,8 @@ wrapper).
 | `Evaluate/`            | Transcription of `ConditionEvaluator.evaluate` (differentially tested)               |
 | `Bridge/`              | The contract's reading, adequacy, normalization on calldata, the SDK pipeline        |
 | `EIP712/`              | EIP-712: the standard, the encoder, the digest, Roles against the encoder, README    |
+| `MultiSend/`           | The batch format, the unwrapper and MultiSend's loop, README                         |
+| `SafeSigning/`         | EIP-191, `uintToString`, the stored keys and the Safe's `isValidSignature`, README   |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
