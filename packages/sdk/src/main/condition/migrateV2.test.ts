@@ -89,6 +89,37 @@ describe("migrateConditionV2", () => {
     })
   })
 
+  // Or[WithinAllowance(K), Pass]: which branch passes depends on what was
+  // charged to K before, so v2's order of the checks must be kept
+  const chargeOr: ConditionV2 = {
+    paramType: 0,
+    operator: 2,
+    children: [{ paramType: 1, operator: 28, compValue: key }, pass()],
+  }
+
+  it("keeps an allowance check before a charging choice first", () => {
+    const v3 = stored(calldata(callAllowance, chargeOr))
+    expect(v3.operator).toBe(Operator.And)
+    expect(v3.children!.map((c) => c.operator)).toEqual([
+      Operator.CallWithinAllowance,
+      Operator.Matches,
+    ])
+  })
+
+  it("keeps an allowance check after a charging choice last", () => {
+    const v3 = stored(calldata(chargeOr, callAllowance))
+    expect(v3.children!.map((c) => c.operator)).toEqual([
+      Operator.Matches,
+      Operator.CallWithinAllowance,
+    ])
+  })
+
+  it("rejects an allowance check between parameters with a charging choice", () => {
+    expect(() =>
+      migrateConditionV2(calldata(chargeOr, callAllowance, eq()))
+    ).toThrow(/choose which allowance/)
+  })
+
   it("turns EtherWithinAllowance into WithinAllowance on EtherValue", () => {
     const v3 = stored(calldata(eq(), etherAllowance))
     expect(v3.children![1]).toEqual({

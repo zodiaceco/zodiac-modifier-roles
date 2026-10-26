@@ -1,4 +1,5 @@
 import { Condition, Encoding, Operator } from "../types"
+import { canReorderAnd } from "./normalize/effects"
 
 /**
  * A condition as Roles v2 stores and emits it (`ConditionFlat` events, the
@@ -53,8 +54,11 @@ export class MigrateV2Error extends Error {
  *   allowances) may sit among a `Matches`'s children in v2. v3 Integrity
  *   requires every child of a `Matches` to read a parameter, so they move
  *   next to it: `And[Matches[...], CallWithinAllowance]`. All of them must
- *   pass either way, and allowance charges commute, so the verdict is the
- *   same.
+ *   pass either way, and charges add up the same in any order, unless a
+ *   choice depends on what was charged before (an `Or` with a charging
+ *   branch, `canReorderAnd`). Then v2's order is kept, with the checks before
+ *   or after the `Matches`; when they sit between its parameters, the
+ *   migration throws.
  * - **`Pass` on `None`** is a v2 no-op child; it is dropped.
  * - **Below a `Pass`**, v2 evaluates nothing: the children only describe the
  *   type. They become plain `Pass` type descriptions (v3 requires
@@ -178,10 +182,10 @@ const convert = (
     const reads = children
       .map((x, i) => [x, i] as const)
       .filter(([x]) => isStructural(x))
-    const rest = children
+    const restAt = children
       .map((x, i) => [x, i] as const)
       .filter(([x]) => !isStructural(x) && !isNoOp(x))
-      .map(([x, i]) => sub(x, i))
+    const rest = restAt.map(([x, i]) => sub(x, i))
     if (reads.length === 0) {
       if (isRoot) {
         if (rest.length === 0) return PASS_NONE
@@ -198,14 +202,23 @@ const convert = (
         path
       )
     }
-    const matches = node(reads.map(([x, i]) => sub(x, i)))
-    return rest.length
-      ? {
-          paramType: Encoding.None,
-          operator: Operator.And,
-          children: [matches, ...rest],
-        }
-      : matches
+    const readKids = reads.map(([x, i]) => sub(x, i))
+    const matches = node(readKids)
+    if (!rest.length) return matches
+    // v2 evaluates the children in order; moving the checks is safe only if
+    // no choice depends on what was charged before
+    let kids = [matches, ...rest]
+    if (!canReorderAnd([...readKids, ...rest])) {
+      const firstRead = reads[0][1]
+      const lastRead = reads[reads.length - 1][1]
+      if (restAt.every(([, i]) => i < firstRead)) kids = [...rest, matches]
+      else if (!restAt.every(([, i]) => i > lastRead))
+        throw new MigrateV2Error(
+          "allowance checks between parameters whose checks choose which allowance to charge",
+          path
+        )
+    }
+    return { paramType: Encoding.None, operator: Operator.And, children: kids }
   }
 
   return node(children.map(sub))
