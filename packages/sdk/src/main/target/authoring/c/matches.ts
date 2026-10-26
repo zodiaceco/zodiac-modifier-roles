@@ -4,7 +4,7 @@ import { Condition, Operator, Encoding } from "../../../types"
 import { coercePermission } from "../../../permission/coercePermission"
 import { checkParameterTypeCompatibility } from "../../../condition/conditionIntegrity"
 import { describeStructure } from "./helpers/describeStructure"
-import { parameterType } from "./helpers/parameterType"
+import { isFixedArray, parameterType } from "./helpers/parameterType"
 
 import { and } from "./branching"
 import { bitmask, eq } from "./comparison"
@@ -83,6 +83,15 @@ export const matches =
     assertValidConditionsLength(conditions, abiType)
     assertValidConditionsKeys(scoping, abiType)
     assertCompatibleParamTypes(conditions, abiType)
+
+    // A fixed-size array is a tuple: every element needs a child, also the
+    // ones the scoping leaves out.
+    if (isFixedArray(abiType)) {
+      conditions = Array.from(
+        { length: abiType.arrayLength! },
+        (_, i) => conditions[i]
+      )
+    }
 
     return {
       paramType: parameterType(abiType),

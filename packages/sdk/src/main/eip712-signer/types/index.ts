@@ -1,5 +1,5 @@
 export { allTypes } from "./allTypes"
 export { findRootTypes, findPrimaryType } from "./findPrimaryTypes"
-export { typesForDomain } from "./typesForDomain"
-export { parseType } from "./parseType"
+export { domainFields, typesForDomain } from "./typesForDomain"
+export { baseType, parseType } from "./parseType"
 export { hashType } from "./hashType"

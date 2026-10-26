@@ -1,7 +1,13 @@
 import { TypedData, TypedDataDomain } from "abitype"
 import { ZeroHash } from "ethers"
 
-import { findRootTypes, hashType, parseType, typesForDomain } from "../types"
+import {
+  baseType,
+  findRootTypes,
+  hashType,
+  parseType,
+  domainFields,
+} from "../types/index"
 import { Encoding } from "../../types"
 
 interface LayoutNode {
@@ -20,11 +26,12 @@ export function toAbiTypes({
   if (domain) {
     types = {
       ...types,
-      EIP712Domain: typesForDomain(domain),
+      EIP712Domain: domainFields(domain, types),
     } as any
   }
 
   const rootTypes = findRootTypes({ types })
+  assertNotRecursive(types, rootTypes)
   const result: LayoutNode[] = []
 
   // BFS queue: { type, parentIndex }
@@ -107,4 +114,26 @@ export function toAbiTypes({
   }
 
   return result
+}
+
+/**
+ * The layout is one node per member, so a struct that contains itself
+ * (directly or through arrays) has no finite layout. EIP712Encoder cannot
+ * hash such types; reject them instead of expanding forever.
+ */
+function assertNotRecursive(types: TypedData, roots: string[]) {
+  const done = new Set<string>()
+  const visit = (type: string, path: string[]) => {
+    if (path.includes(type)) {
+      throw new Error(
+        `Recursive EIP-712 types are not supported: ${[...path, type].join(" -> ")}`
+      )
+    }
+    if (done.has(type) || !types[type]) return
+    for (const field of types[type]) {
+      visit(baseType(field.type), [...path, type])
+    }
+    done.add(type)
+  }
+  roots.forEach((root) => visit(root, []))
 }

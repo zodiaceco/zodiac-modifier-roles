@@ -1,7 +1,7 @@
 import { TypedData } from "abitype"
 import { AbiCoder } from "ethers"
 
-import { findPrimaryType, parseType } from "../types"
+import { findPrimaryType, parseType } from "../types/index"
 
 export function encodeTypedMessage({
   types,

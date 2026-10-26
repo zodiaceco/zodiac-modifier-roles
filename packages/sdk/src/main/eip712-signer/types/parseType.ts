@@ -1,17 +1,28 @@
+/**
+ * Splits off the outermost array dimension: `T[2][]` is a dynamic array of
+ * `T[2]`, so `type` is `T[2]` and `fixedLength` is 0 (ABI and EIP-712 read
+ * dimensions right to left).
+ */
 export function parseType(type: string) {
   const isAtomic = isAtomicType(type)
   const isDynamic = isDynamicType(type)
   const isStruct = isStructType(type)
   const isArray = isArrayType(type)
+  const outer = type.match(/^(.*)\[(\d*)\]$/)
 
   return {
-    type: isArray ? type.split("[")[0] : type,
+    type: isArray && outer ? outer[1] : type,
     isAtomic,
     isDynamic,
     isStruct,
     isArray,
-    fixedLength: isArray ? Number(type.split("[")[1].slice(0, -1)) : 0,
+    fixedLength: isArray && outer && outer[2] !== "" ? Number(outer[2]) : 0,
   }
+}
+
+/** The element type with every array dimension removed: `T[2][]` → `T`. */
+export function baseType(type: string): string {
+  return type.split("[")[0]
 }
 
 export function isNativeType(type: string): boolean {
@@ -38,55 +49,15 @@ export function isStructType(type: string): boolean {
   return !isAtomicType(type) && !isDynamicType(type) && !isArrayType(type)
 }
 
+// EIP-712 atomic types: `uint<M>` / `int<M>` for M = 8, 16, ..., 256,
+// `bytes<N>` for N = 1..32, `address` and `bool`.
 const ATOMIC_TYPES: Record<string, boolean> = Object.fromEntries(
   [
-    // Static length types
     "bool",
     "address",
-    "int8",
-    "int16",
-    "int32",
-    "int64",
-    "int128",
-    "int256",
-    "uint8",
-    "uint16",
-    "uint32",
-    "uint64",
-    "uint128",
-    "uint256",
-    "bytes1",
-    "bytes2",
-    "bytes3",
-    "bytes4",
-    "bytes5",
-    "bytes6",
-    "bytes7",
-    "bytes8",
-    "bytes9",
-    "bytes10",
-    "bytes11",
-    "bytes12",
-    "bytes13",
-    "bytes14",
-    "bytes15",
-    "bytes16",
-    "bytes17",
-    "bytes18",
-    "bytes19",
-    "bytes20",
-    "bytes21",
-    "bytes22",
-    "bytes23",
-    "bytes24",
-    "bytes25",
-    "bytes26",
-    "bytes27",
-    "bytes28",
-    "bytes29",
-    "bytes30",
-    "bytes31",
-    "bytes32",
+    ...Array.from({ length: 32 }, (_, i) => `int${8 * (i + 1)}`),
+    ...Array.from({ length: 32 }, (_, i) => `uint${8 * (i + 1)}`),
+    ...Array.from({ length: 32 }, (_, i) => `bytes${i + 1}`),
   ].map((type) => [type, true])
 )
 
