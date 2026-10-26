@@ -310,8 +310,11 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
     if (res.status !== 0) throw new Error(res.stderr || res.stdout);
     const r = JSON.parse(res.stdout.trim().split("\n").pop()!);
     console.log(
-      `      ${r.checks} permission checks, ${r.negatives} changed messages, ${r.rejected} permissions the SDK rejected`,
+      `      ${r.checks} permission checks (${r.slices} Slices, ${r.zips} Zips), ${r.negatives} changed messages, ${r.misfitChecks} trees outside the theorem, ${r.rejected} permissions the SDK rejected`,
     );
+    expect(r.misfitChecks).to.be.greaterThan(0);
+    expect(r.slices).to.be.greaterThan(0);
+    expect(r.zips).to.be.greaterThan(0);
     expect(r.rejectedExamples).to.deep.equal([]);
     expect(r.failures).to.deep.equal([]);
   });

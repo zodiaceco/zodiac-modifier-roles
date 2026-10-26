@@ -699,15 +699,17 @@ Trusted (tested, not proven):
 
 `EIP712` transcribes the EIP-712 standard itself (`Spec.lean`) and the
 contract's `EIP712Encoder`, and proves, for `SignTypedMessageLib`'s
-`signTypedMessage` under an `allowSignTypedMessage` permission:
+`signTypedMessage` under an `allowSignTypedMessage` permission, or a
+hand-written one with `Slice`, `Pluck` and Zip conditions:
 
 - `hashField_spec`: on any bytes, the encoder returns the EIP-712 spec hash of
   the value it reads (or reverts).
 - `readV_enc`, `hashTypedMessage_spec`: on the SDK's ABI encoding of a typed
   message it reads that message, so it returns its EIP-712 digest.
-- `visit_agree`, `message_agree`: on any calldata, every member Roles' condition
-  checks is the member the encoder hashes, at the same bytes (the fallback's
-  hand-set offsets included).
+- `visit_agree`, `message_agree`, `sign_agree`: on any calldata, every member
+  Roles' condition checks is the member the encoder hashes, at the same bytes
+  (the fallback's hand-set offsets included), or a window inside it (below a
+  `Slice`); Zip fields read elements of the arrays the encoder hashes.
 
 The hypotheses on the SDK's output (its type trees, and that the permission's
 conditions follow them) are decided in Lean and checked on every generated

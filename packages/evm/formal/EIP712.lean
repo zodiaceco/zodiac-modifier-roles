@@ -6,4 +6,5 @@ import EIP712.Hash
 import EIP712.Decode
 import EIP712.Digest
 import EIP712.Agree
+import EIP712.Sign
 import EIP712.FitCheck

@@ -336,24 +336,37 @@ def runLay (defs primary types : String) : String :=
   | some e, _ => e
   | _, some e => e
 
-/-- `ok` if the packed permission's `domain` / `message` arguments
-    (children 0 and 1 of the root) satisfy the hypotheses of
-    `EIP712.message_agree` for the type trees of `EIP712Domain` and the
-    primary type (`EIP712.msgB`). -/
+/-- The pluck table for `EIP712.rootB`: each `Pluck` on an array member
+    (found along the type tree, not inside Zip fields) maps its slot to the
+    element type. Unverified: `rootB` checks whatever table it is given. -/
+partial def collectPlucks (c : Roles.Condition) (t : EIP712.TN) : List (Nat × EIP712.TN) :=
+  if c.operator = .Pluck then
+    match t with
+    | ⟨.Array, [l], _⟩ => [(Roles.cvByte c.compValue 0, l)]
+    | _ => []
+  else if c.operator = .And ∨ c.operator = .Or then c.children.flatMap (collectPlucks · t)
+  else if c.operator = .Matches ∧ t.encoding = .Tuple ∧ c.encoding ≠ .Array then
+    (c.children.zip t.children).flatMap fun (ch, tc) => collectPlucks ch tc
+  else match t with
+    | ⟨.Array, [l], _⟩ => if c.encoding = .Array then c.children.flatMap (collectPlucks · l) else []
+    | _ => []
+
+/-- `ok` if the packed permission satisfies the hypotheses of
+    `EIP712.sign_agree` (`EIP712.rootB`) for the type trees of
+    `EIP712Domain` and the primary type. -/
 def runFit (defs primary buf : String) : String :=
   let K := EIP712.Keccak.keccak256
   let ds := parseDefs defs
   match ConditionPacking.unpack (zeros 32) (ConditionPacking.bufMem (parseHex buf) fun _ => 0) with
   | none => "unpack-failed"
   | some (root, _) =>
-    let check (i : Nat) (s : String) : Option String :=
-      match EIP712.layOf K ds 64 (.struct s) with
-      | none => some s!"{s}: no layout"
-      | some t => if EIP712.msgB (root.children.getD i default) t then none else some s!"{s}: no fit"
-    match check 0 "EIP712Domain", check 1 primary with
-    | none, none => "ok"
-    | some e, _ => e
-    | _, some e => e
+    match EIP712.layOf K ds 64 (.struct "EIP712Domain"), EIP712.layOf K ds 64 (.struct primary) with
+    | some td, some tm =>
+      let ps := collectPlucks (root.children.getD 0 default) td ++
+        collectPlucks (root.children.getD 1 default) tm
+      let Γ : EIP712.Plucks := fun k => (ps.find? (·.1 == k)).map (·.2)
+      if EIP712.rootB Γ root td tm then "ok" else "no fit"
+    | _, _ => "no layout"
 
 /-- The evaluator model on a packed buffer: its status. -/
 def runEvalBuf (hex buf : String) : String :=

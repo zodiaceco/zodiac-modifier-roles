@@ -23,16 +23,19 @@ arrays by a non-zero `typeHash`).
 | `hashField_spec` (`Hash.lean`)         | **On any bytes**, `_hashField` is the EIP-712 spec applied to what it reads: it reverts exactly when its walk (`readV`) fails, and otherwise returns `encV` (EIP-712 `enc`; `hashStruct` for a struct) of the value read.                                                                                                                                                  |
 | `readV_enc` (`Decode.lean`)            | On the Solidity ABI spec encoding (`DecoderFaithfulness.enc`) of a typed value, the walk reads exactly that value. With `inlineSize_lay`: `_inlineSize` on the type tree agrees with the ABI's static / dynamic and head sizes.                                                                                                                                          |
 | `hashTypedMessage_spec` (`Digest.lean`) | When `types` rebuilds (`_toTree`) into the type trees of `EIP712Domain` (node 0) and the primary type (node 1), and `domain` / `message` are the ABI encodings of typed values, the contract returns the EIP-712 digest of those values.                                                                                                                                |
-| `visit_agree` (`Agree.lean`)           | **On any calldata**, every node `evaluate` visits in a condition tree that follows the type tree (`FitT`) sits exactly where the encoder reads the corresponding member, and that member was read. `loop_agree` / `children_agree_*`: Roles' `AbiLocation.children` and the encoder's block loop find every child at the same place; Roles only adds bound checks against `msg.data`. |
-| `static_input`, `dynamic_input`        | At such a node, the operand Roles compares is the word the encoder hashes, or (for `bytes` / `string`) `__input` of exactly the length word and the bytes the encoder hashes.                                                                                                                                                                                              |
-| `fallback_offset`, `message_agree`     | `SignTypedMessageLib`'s fallback, which sets the offsets of `domain`, `message` and `types` by hand, reads each argument where Roles' root `Matches` finds it; below the `message` (or `domain`) condition, `visit_agree` holds with the library's view of the argument.                                                                                                |
-| `fitB_sound`, `msgB_sound`             | Decidable checks for the hypotheses of `message_agree` (`FitCheck.lean`), run by the driver's `fit` query.                                                                                                                                                                                                                                                                 |
+| `visit_agree` (`Agree.lean`)           | **On any calldata**, every node `evaluate` visits from a node that follows the type tree (`FitT`) is a `Site`: it sits exactly where the encoder reads the corresponding member, and that member was read (`Member`), or, below a `Slice`, it reads `size` bytes inside the member's word or inside the content of its `bytes` / `string` (`Window`). `loop_agree` / `children_agree_*`: Roles' `AbiLocation.children` and the encoder's block loop find every child at the same place; Roles only adds bound checks against `msg.data`. |
+| `static_input`, `dynamic_input`        | At a member, the operand Roles compares is the word the encoder hashes, or (for `bytes` / `string`) `__input` of exactly the length word and the bytes the encoder hashes.                                                                                                                                                                                              |
+| `window_input`                         | In a window, the operand Roles compares is bytes `[sh, sh + size)` of the word, or of the `bytes` / `string` content, the encoder hashes.                                                                                                                                                                                                                                |
+| `fallback_offset`, `message_agree`     | `SignTypedMessageLib`'s fallback, which sets the offsets of `domain`, `message` and `types` by hand, reads each argument where Roles' root `Matches` finds it; below the `message` (or `domain`) condition, every visited node is a `Site` in the library's view of the argument.                                                                                      |
+| `sign_agree` (`Sign.lean`)             | **The whole permission, Zip jumps included.** `Eval` adds to `Visit` the jumps of `ZipSome` / `ZipEvery` to arrays stored by `Pluck` nodes anywhere in the tree. When `domain` and `message` follow their type trees with one pluck table `Γ` (slot ↦ element type: a `Pluck` sits on an array of that element type, each Zip field follows the element type of its slot) and `types` has no `Pluck` / Zip (`RootFit`), every node `evaluate` reaches is the root, one of its children, below `types`, or a `Site` of the argument its path starts with. |
+| `fitB_sound`, `msgB_sound`, `rootB_sound` | Decidable checks for these hypotheses (`FitCheck.lean`), run by the driver's `fit` query. The driver computes `Γ` from the `Pluck` nodes; the check does not trust it.                                                                                                                                                                                                 |
 | `layOf_lay`                            | `layOf` computes the type tree of a type; the driver's `lay` query compares it with `_toTree` of the SDK's `toAbiTypes` output.                                                                                                                                                                                                                                             |
 
-Together: when Roles authorizes a `signTypedMessage` call under an
-`allowSignTypedMessage` permission, every member the permission checks is
-the member the library hashes, and the library returns the EIP-712 digest of
-what it read. For the SDK's own encoding (`encodeSignTypedMessage`) that is
+Together: when Roles authorizes a `signTypedMessage` call under a
+permission that passes `fit` (every `allowSignTypedMessage` permission, and
+hand-written ones with `Slice`, `Pluck` and Zip), every member the permission
+checks is the member the library hashes, or a window of it, and the library
+returns the EIP-712 digest of what it read. For the SDK's own encoding (`encodeSignTypedMessage`) that is
 the digest of the typed message.
 
 On non-canonical calldata the library may read a word that is not the
@@ -55,8 +58,8 @@ The theorems take the SDK's artifacts as hypotheses; the differential tests
 check them on every generated case (`test/formal/eip712.spec.ts`):
 
 - `_toTree(toAbiTypes(...))` is the type tree (`lay`).
-- The `domain` and `message` conditions `allowSignTypedMessage` builds, as
-  `checkAndPackCondition` packs them, follow the type trees (`fit`).
+- The permission `allowSignTypedMessage` builds, as `checkAndPackCondition`
+  packs it, satisfies `RootFit` (`fit`).
 
 ## Differential tests
 
@@ -79,8 +82,16 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
    process: the SDK's authoring helpers do not load under Hardhat): the
    SDK accepts its own permission, the `fit` hypotheses hold, the evaluator
    model accepts `encodeSignTypedMessage`'s calldata, and rejects it when a
-   scoped member or a type node changes. 300 permissions: all fit, 545
-   changed calls all rejected.
+   scoped member or a type node changes. About a third of the permissions
+   also get hand-written conditions the SDK has no helper for: a `Slice`
+   comparing a window of a member's word or `bytes` / `string` content, and
+   on `T[]` members two `Pluck`s with a `ZipSome` (comparing an element) or
+   `ZipEvery`. Changing a byte in the window or the zipped element must be
+   rejected, and variants that break the hypotheses (a `Slice` of the wrong
+   kind, a Zip reading an empty slot or with a mistyped field), packed
+   without the SDK's check, must fail `fit`. 5 seeds × 300 permissions:
+   about 125 Slices and 85 Zips each, all fit, about 620 changed calls and
+   250 broken variants each, all rejected.
 
 ## Findings (all fixed in the SDK)
 
@@ -115,7 +126,13 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
   message signs a raw hash (the Safe's `isValidSignature(bytes32, ...)`
   checks `SafeMessage(abi.encode(hash))`); the SDK has no helper that
   allows it, and none should.
-- `Slice` and Zip in signing conditions (`FitT` has neither).
+- A `Slice` of a `Slice` is covered by the proof (the contract accepts
+  it), but the SDK refuses it (it is one `Slice`), so the tests do not
+  generate it.
+- `Pluck` nodes inside Zip fields, and Zips in the `types` condition: `fit`
+  rejects them (the driver does not give their slots an element type).
+- `WithinRatio` compares plucked values, not locations: it is a leaf here,
+  and its operands are the values the `Pluck` nodes read at their `Site`.
 - Empty structs and `T[0]`: the encoder reverts (fails closed). Solidity has
   neither.
 - What the signature authorizes elsewhere (Permit, orders, `RoleTx` of
@@ -132,6 +149,7 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
 | `Hash.lean`     | `hashField_spec`                                                            |
 | `Decode.lean`   | `readV_enc`, `inlineSize_lay`                                               |
 | `Digest.lean`   | `hashTypedMessage_spec`, `layOf`                                            |
-| `Agree.lean`    | Roles' reading against the encoder's, on any calldata                       |
+| `Agree.lean`    | Roles' reading against the encoder's, on any calldata (members, windows)    |
+| `Sign.lean`     | The whole permission, Zip jumps included (`sign_agree`)                     |
 | `FitCheck.lean` | Decidable checks for the agreement hypotheses                               |
 | `Keccak.lean`   | Executable keccak256 for the driver (no theorem uses it)                    |
