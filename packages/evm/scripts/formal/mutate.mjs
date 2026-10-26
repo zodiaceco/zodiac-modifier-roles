@@ -9,7 +9,7 @@
  * killed). A surviving mutant is either equivalent (the change does not alter
  * behavior) or a gap in the test's inputs.
  *
- *   node test/formal/mutate.mjs <target> [--limit n] [--report file]
+ *   node scripts/formal/mutate.mjs <target> [--limit n] [--report file]
  *
  * Targets: `normalize` (sdk-normalize.spec.ts), `check` (checkStored.ts,
  * sdk-check.spec.ts), `pack` (packConditions.ts, its byte-for-byte test).

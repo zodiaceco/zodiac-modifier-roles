@@ -750,7 +750,7 @@ reports an overflow (both deny). The evaluator model has the panic.
 
 ## Mutation testing
 
-`node test/formal/mutate.mjs <normalize|check|pack>` changes one operator,
+`node scripts/formal/mutate.mjs <normalize|check|pack>` changes one operator,
 comparison or early return at a time in the SDK code the differential tests
 cover and reports the mutants the test does not notice. Last run: normalize
 186 of 239 killed (most survivors are equivalent, e.g. `invariant` conditions

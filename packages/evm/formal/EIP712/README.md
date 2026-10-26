@@ -78,7 +78,7 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
    on the SDK's encoding and on mutated bytes and type nodes. 5 seeds × 800
    messages × 8 mutations: 0 differences (about 59% of the mutations are
    still accepted by the contract).
-3. `allowSignTypedMessage` permissions (`eip712-permissions.ts`, in its own
+3. `allowSignTypedMessage` permissions (`scripts/formal/eip712-permissions.ts`, in its own
    process: the SDK's authoring helpers do not load under Hardhat): the
    SDK accepts its own permission, the `fit` hypotheses hold, the evaluator
    model accepts `encodeSignTypedMessage`'s calldata, and rejects it when a

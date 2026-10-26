@@ -1,6 +1,6 @@
 /**
  * Random EIP-712 typed data for the differential tests (eip712.spec.ts,
- * eip712-permissions.ts), and the Lean driver.
+ * scripts/formal/eip712-permissions.ts), and the Lean driver.
  */
 import { AbiCoder, hexlify, toUtf8Bytes } from "ethers";
 import { spawnSync } from "node:child_process";

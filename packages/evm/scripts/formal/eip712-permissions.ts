@@ -1,6 +1,8 @@
 /**
- * Part 3 of eip712.spec.ts, in its own process (the SDK's authoring helpers
- * do not load under Hardhat). Prints one JSON line with the results.
+ * Part 3 of test/formal/eip712.spec.ts, run in its own process: the SDK's
+ * authoring helpers do not load under Hardhat. It lives outside test/
+ * because Hardhat loads every file there. Prints one JSON line with the
+ * results.
  *
  * For random typed data and a random subset of scoped members:
  * `allowSignTypedMessage` + `checkAndPackCondition` must accept the
@@ -41,7 +43,7 @@ import {
 } from "ethers";
 import { Encoding, Operator } from "../../../sdk/src/main/types";
 import { describeStructure } from "../../../sdk/src/main/target/authoring/c/helpers/describeStructure";
-import { Field, Types, lean, leanDefs, makeGen } from "./eip712-gen";
+import { Field, Types, lean, leanDefs, makeGen } from "../../test/formal/eip712-gen";
 
 const CASES = Number(process.env.EIP712_CASES ?? 300);
 const SEED = Number(process.env.EIP712_SEED ?? 1);
