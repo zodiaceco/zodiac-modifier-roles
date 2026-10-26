@@ -570,7 +570,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
         };
         const got = Number(
           await evaluator.evaluate(data, flattenCondition(root as any), {
-            gasLimit: 30_000_000,
+            gasLimit: 100_000_000,
           }),
         );
         checked++;
@@ -752,7 +752,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
       };
       const got = Number(
         await evaluator.evaluate(data, flattenCondition(root as any), {
-          gasLimit: 30_000_000,
+          gasLimit: 100_000_000,
         }),
       );
       checked++;
@@ -943,7 +943,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
       };
       const got = Number(
         await evaluator.evaluate(data2, flattenCondition(root as any), {
-          gasLimit: 30_000_000,
+          gasLimit: 100_000_000,
         }),
       );
       checked++;
@@ -1074,7 +1074,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
       const flat = flattenCondition(root as any);
       let sol: string;
       try {
-        sol = await mock.pack(flat, { gasLimit: 30_000_000 });
+        sol = await mock.pack(flat, { gasLimit: 100_000_000 });
       } catch (e: any) {
         rejected++;
         // Integrity's gas grows ~3x per nesting level (see
@@ -1097,7 +1097,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
       queries.push({ line: `pk ${nodes}`, sol, info: `case ${c}: ${nodes}` });
       // Unpack the contract's buffer in the model, compare with the contract.
       const [unpacked, maxPluck] = await mock.roundtrip(flat, {
-        gasLimit: 30_000_000,
+        gasLimit: 100_000_000,
       });
       queries.push({
         line: `up ${sol}`,

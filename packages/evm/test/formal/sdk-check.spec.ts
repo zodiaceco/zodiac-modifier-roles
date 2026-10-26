@@ -1122,7 +1122,7 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     for (const fs of accepted) {
       const sol = await mock.packUnchecked(
         fs.map((f) => ({ ...f, compValue: "0x" + hex(f.compValue) })),
-        { gasLimit: 30_000_000 },
+        { gasLimit: 100_000_000 },
       );
       if (sol !== "0x" + hex(packConditions(fs))) {
         if (chainDiff++ < 3)
