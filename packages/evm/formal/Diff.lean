@@ -7,6 +7,7 @@ import Bridge.InvCheck
 import EIP712
 import MultiSend
 import SafeSigning
+import Allowance
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -440,10 +441,45 @@ def runSafeKey (kind ds m : String) : String :=
   | "typed" => hexOf (SafeSigning.signTypedKey K ds m)
   | _ => "bad-input"
 
+/-- `al refill maxRefill period balance timestamp tx...`, each tx
+    `now/spends` with spends `-` or comma-separated `r.amount` /
+    `p.value.price.db.di`, or `now/u.refill.maxRefill.period` for the SDK's
+    `accrueThenUpdate` at `now`: runs them in order and prints, per step,
+    `ok:balance:timestamp` (the stored state after it) or the failure. -/
+def runAllowance (args : List String) : String :=
+  match args with
+  | r :: m :: p :: b :: ts :: txs =>
+    let parseSpend (x : String) : Allowance.Spend :=
+      match x.splitOn "." with
+      | ["r", a] => .raw a.toNat!
+      | ["p", v, pr, db, di] => .priced v.toNat! pr.toNat! db.toNat! di.toNat!
+      | _ => .raw 0
+    let step := fun (acc : Allowance.Config × Allowance.State × List String) (t : String) =>
+      let (c, s, out) := acc
+      match t.splitOn "/" with
+      | [now, sps] =>
+        match sps.splitOn "." with
+        | ["u", r', m', p'] =>
+          let s' := Allowance.accrueThenUpdate c s now.toNat!
+          (⟨r'.toNat!, m'.toNat!, p'.toNat!⟩, s', out ++ [s!"ok:{s'.balance}:{s'.timestamp}"])
+        | _ =>
+          let spends := if sps == "-" then [] else (sps.splitOn ",").map parseSpend
+          match Allowance.tx c s now.toNat! spends with
+          | .ok s' => (c, s', out ++ [s!"ok:{s'.balance}:{s'.timestamp}"])
+          | .error .exceeded => (c, s, out ++ ["exceeded"])
+          | .error .deny => (c, s, out ++ ["deny"])
+          | .error .panic => (c, s, out ++ ["panic"])
+      | _ => (c, s, out ++ ["bad-input"])
+    let (_, _, out) := txs.foldl step
+      (⟨r.toNat!, m.toNat!, p.toNat!⟩, ⟨b.toNat!, ts.toNat!⟩, [])
+    " ".intercalate out
+  | _ => "bad-input"
+
 def runLine (line : String) : String :=
   let line := (line.splitOn "\n").headD ""
   -- nested trees contain spaces: split off the command and the last field
   let cmd := (line.splitOn " ").headD ""
+  if cmd == "al" then runAllowance ((line.splitOn " ").drop 1) else
   if cmd == "nzt" then withTree (line.drop 4).toString fun c => showTree (Normalize.normalize 1000 c) else
   if cmd == "ivt" then withTree (line.drop 4).toString runInv else
   if cmd == "fl" then

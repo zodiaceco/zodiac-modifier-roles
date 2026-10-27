@@ -29,6 +29,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [EIP-712 signing](#eip-712-signing): the contract signs the EIP-712 digest of what it reads, and Roles checks exactly the members it hashes                     | [`EIP712`](EIP712/README.md)                           | Proven |
 | [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
 | [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
+| [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
 
 Not covered yet:
 
@@ -739,6 +740,30 @@ raw hash, so it subsumes every other signing permission. Tested against a
 real Safe and its fallback handler. Details:
 [SafeSigning/README.md](SafeSigning/README.md).
 
+
+## Allowances
+
+`Allowance` transcribes the refill, the conversion of a spend into balance
+units (decimals and price adapter), and what each transaction stores.
+
+- **Spending limit:** over any transactions, the role is charged at most the
+  stored balance plus `refill` for each full period since the stored
+  timestamp.
+- **Rounding:** each charge is the spend's value rounded up once, so
+  splitting a spend can only cost more. Over any mix of prices and decimals,
+  the total charged covers the total value.
+- **Refill:** when transactions happen does not change the balance, and
+  nothing overflows.
+- **`updateAllowance` is retroactive:** it doesn't accrue first, so a new
+  refill also pays for periods that elapsed before it. The SDK's
+  `accrueThenUpdate` credits the old refill first (`update_limit`), and
+  `checkAllowanceUnits` rejects conditions that disagree on an allowance's
+  balance decimals.
+
+`test/formal/allowance.spec.ts` compares Roles with the model on random
+allowances, prices, decimals and block times. Details:
+[Allowance/README.md](Allowance/README.md).
+
 ## The evaluator model
 
 `GAP_EVAL=<n>` in `test/formal/integrity-gaps.spec.ts`: generated trees with
@@ -794,6 +819,7 @@ wrapper).
 | `EIP712/`              | EIP-712: the standard, the encoder, the digest, Roles against the encoder, README    |
 | `MultiSend/`           | The batch format, the unwrapper and MultiSend's loop, README                         |
 | `SafeSigning/`         | EIP-191, `uintToString`, the stored keys and the Safe's `isValidSignature`, README   |
+| `Allowance/`           | Refill, charging with decimals and prices, the spending limit, README                |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
