@@ -21,11 +21,17 @@ export interface PermissionHazard {
     | "sign-typed-message-domain"
     | "sign-typed-message-authority"
     | "roles-modifier"
+    | "avatar-self"
+    | "safe-approval"
   message: string
 }
 
 const SIGN_MESSAGE = "0x85a5affe" // signMessage(bytes)
 const PERSONAL_SIGN = "0x641e3d2b" // personalSign(bytes)
+const SAFE_APPROVALS: Record<string, string> = {
+  "0xd4d9bdcd": "approveHash",
+  "0x6a761202": "execTransaction",
+}
 
 const allowsDelegateCall = (o: ExecutionOptions) =>
   o === ExecutionOptions.DelegateCall || o === ExecutionOptions.Both
@@ -61,17 +67,31 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
  * - `roles-modifier`: calls to the Roles Modifier itself. Through the avatar
  *   (its owner) this is configuration access, and settlement of the same
  *   transaction overwrites allowance and membership changes it makes.
+ * - `avatar-self`: calls to the avatar itself: changing its owners, modules,
+ *   guard or fallback handler (which answers its EIP-1271 checks).
+ * - `safe-approval`: `approveHash` or `execTransaction` on another Safe.
+ *   As an owner of that Safe, the avatar approves its transactions and
+ *   messages (EIP-1271 included) this way.
+ *
+ * A value counts as pinned only through an `EqualTo` in the argument's own
+ * encoding and shape (for `types`, an array of `(uint256, uint8, bytes32)`
+ * elements), at the argument's head position (the arguments before it one
+ * word each), on every passing branch. `packages/evm/formal/EndToEnd` proves
+ * these pins sound, and that a signing permission can make the avatar sign
+ * a `RoleTx` only if this check flags it or pins that exact hash.
  *
  * @param targets The role's targets (`processPermissions(...).targets`)
  * @param options.signingLib Address of `SignTypedMessageLib`
  * @param options.rolesModifier Address of the Roles Modifier the role is on
+ * @param options.avatar Address of the avatar
  */
 export const permissionHazards = (
   targets: readonly Target[],
   {
     signingLib = SIGN_TYPED_MESSAGE_LIB_ADDRESS,
     rolesModifier,
-  }: { signingLib?: string; rolesModifier?: string } = {}
+    avatar,
+  }: { signingLib?: string; rolesModifier?: string; avatar?: string } = {}
 ): PermissionHazard[] => {
   const hazards: PermissionHazard[] = []
 
@@ -84,6 +104,14 @@ export const permissionHazards = (
         target: address,
         kind: "roles-modifier",
         message: `${address} is the Roles Modifier itself: through the avatar this is configuration access, and settlement of the same transaction overwrites the allowance and membership changes it makes`,
+      })
+    }
+
+    if (avatar && same(address, avatar)) {
+      hazards.push({
+        target: address,
+        kind: "avatar-self",
+        message: `${address} is the avatar itself: its owners, modules, guard and fallback handler (which answers its EIP-1271 checks) can be changed this way`,
       })
     }
 
@@ -101,9 +129,19 @@ export const permissionHazards = (
     if (target.clearance !== Clearance.Function) continue
 
     for (const fn of target.functions) {
-      if (!allowsDelegateCall(fn.executionOptions)) continue
       const { selector } = fn
       const at = { target: address, selector }
+
+      const approval = SAFE_APPROVALS[selector.toLowerCase()]
+      if (approval) {
+        hazards.push({
+          ...at,
+          kind: "safe-approval",
+          message: `${approval} on ${address}: if the avatar owns that Safe, this approves its transactions and messages (EIP-1271 included)`,
+        })
+      }
+
+      if (!allowsDelegateCall(fn.executionOptions)) continue
 
       if (!isSigningLib) {
         hazards.push({
@@ -132,7 +170,10 @@ export const permissionHazards = (
       }
 
       // any other selector is signTypedMessage (the library's fallback)
-      if (!fn.condition || !pinsParameter(fn.condition, 2, Encoding.Array)) {
+      if (
+        !fn.condition ||
+        !pinsParameter(fn.condition, 2, Encoding.Array, isTypesShape)
+      ) {
         hazards.push({
           ...at,
           kind: "sign-typed-message-types",
@@ -184,11 +225,69 @@ const onPath = (
     return (c.children ?? []).some((x) => onPath(x, path, test, depth))
   }
   if (path.length === 0) return test(c)
-  if (decodesArguments(c, depth)) {
+  if (decodesArguments(c, depth) && headWords(c, path[0])) {
     const p = c.children?.[path[0]]
     return p !== undefined && onPath(p, path.slice(1), test, depth + 1)
   }
   return false
+}
+
+/** The arguments before `i` take one head word each, so argument `i`'s
+ *  head is at `32 * i` (where the signing library reads it). */
+const headWords = (c: Condition, i: number): boolean =>
+  (c.children ?? []).slice(0, i).every(oneWord)
+
+/** Takes one head word: a word, or an offset to a value outside the head. */
+const oneWord = (c: Condition): boolean => {
+  switch (c.paramType) {
+    case Encoding.Static:
+    case Encoding.Dynamic:
+    case Encoding.AbiEncoded:
+    case Encoding.Array:
+      return true
+    case Encoding.Tuple:
+      return !inlined(c)
+    case Encoding.None:
+      // a logical node over the argument: every child must agree
+      return (
+        (c.operator === Operator.And || c.operator === Operator.Or) &&
+        (c.children ?? []).length > 0 &&
+        (c.children ?? []).every(oneWord)
+      )
+    default:
+      return false
+  }
+}
+
+/** Encoded in place (no offset): a tuple of values encoded in place. Unsure
+ *  (logical nodes) counts as inlined. */
+const inlined = (c: Condition): boolean => {
+  switch (c.paramType) {
+    case Encoding.Static:
+      return true
+    case Encoding.Tuple:
+      return (c.children ?? []).every(inlined)
+    case Encoding.Dynamic:
+    case Encoding.AbiEncoded:
+    case Encoding.Array:
+      return false
+    default:
+      return true
+  }
+}
+
+/** `types`: an array of `(uint256, uint8, bytes32)`, 96 bytes an element.
+ *  With another element shape, Roles compares fewer bytes than the library
+ *  reads. */
+const isTypesShape = (c: Condition): boolean => {
+  const [element, ...rest] = c.children ?? []
+  return (
+    !!element &&
+    rest.length === 0 &&
+    element.paramType === Encoding.Tuple &&
+    (element.children ?? []).length === 3 &&
+    (element.children ?? []).every((x) => x.paramType === Encoding.Static)
+  )
 }
 
 /** An AbiEncoded Matches that decodes the arguments at this depth: after
@@ -224,14 +323,20 @@ const pinnedValues = (
  *  `enc` (another encoding compares other bytes, e.g. a word reads only the
  *  offset of `bytes`), an Or of them, or an And with one. */
 const isPinned =
-  (enc: Encoding) =>
+  (enc: Encoding, shape: (c: Condition) => boolean = () => true) =>
   (c: Condition): boolean =>
-    (c.operator === Operator.EqualTo && c.paramType === enc) ||
-    (c.operator === Operator.Or && (c.children ?? []).every(isPinned(enc))) ||
-    (c.operator === Operator.And && (c.children ?? []).some(isPinned(enc)))
+    (c.operator === Operator.EqualTo && c.paramType === enc && shape(c)) ||
+    (c.operator === Operator.Or &&
+      (c.children ?? []).every(isPinned(enc, shape))) ||
+    (c.operator === Operator.And &&
+      (c.children ?? []).some(isPinned(enc, shape)))
 
-const pinsParameter = (c: Condition, i: number, enc: Encoding) =>
-  onPath(c, [i], isPinned(enc))
+const pinsParameter = (
+  c: Condition,
+  i: number,
+  enc: Encoding,
+  shape?: (c: Condition) => boolean
+) => onPath(c, [i], isPinned(enc, shape))
 
 /** The type hashes of the struct nodes of a pinned `types` value
  *  (`abi.encode(tuple(uint256 parent, uint8 encoding, bytes32 typeHash)[])`). */

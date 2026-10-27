@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { AbiCoder, keccak256 } from "ethers"
+import { Encoding, Operator } from "../types"
 
 import { allowPersonalSign, allowSignTypedMessage } from "../eip712-signer"
 import { c } from "./authoring"
@@ -264,5 +265,81 @@ describe("permissionHazards", () => {
       message: c.pass as any,
     })
     expect(kinds([safeTx])).toEqual(["sign-typed-message-authority"])
+  })
+
+  it("flags a types pin whose elements are not (uint256, uint8, bytes32)", () => {
+    const p = allowSignTypedMessage({
+      types,
+      domain: { chainId: 1n, verifyingContract: OTHER },
+      message: { amount: 1n },
+    })
+    const typesNode = p.condition.children![2]
+    const words = {
+      ...typesNode,
+      children: [{ paramType: Encoding.Static, operator: Operator.Pass }],
+    }
+    expect(
+      kinds([
+        {
+          ...p,
+          condition: {
+            ...p.condition,
+            children: [...p.condition.children!.slice(0, 2), words],
+          },
+        },
+      ])
+    ).toEqual(["sign-typed-message-types"])
+  })
+
+  it("flags a pin behind an argument that takes more than one head word", () => {
+    const hash = keccak256("0x1234")
+    // a static tuple of two words before the message moves its head
+    const shifted = c.calldataMatches(
+      [{ a: 1, b: 2 } as any, hash],
+      ["tuple(uint256 a, uint256 b)", "bytes"]
+    )()
+    const pinned = { ...shifted, children: [shifted.children![1]] } as any
+    expect(
+      kinds([
+        {
+          targetAddress: LIB,
+          signature: "signMessage(bytes)",
+          delegatecall: true,
+          condition: { ...shifted, children: shifted.children },
+        },
+      ])
+    ).toEqual(["sign-message"])
+    expect(
+      kinds([
+        {
+          targetAddress: LIB,
+          signature: "signMessage(bytes)",
+          delegatecall: true,
+          condition: pinned,
+        },
+      ])
+    ).toEqual([])
+  })
+
+  it("flags calls to the avatar itself and Safe approvals", () => {
+    const AVATAR = "0x00000000000000000000000000000000000000cc"
+    const hazards = permissionHazards(
+      processPermissions([
+        {
+          targetAddress: AVATAR,
+          signature: "addOwnerWithThreshold(address,uint256)",
+        },
+        { targetAddress: OTHER, signature: "approveHash(bytes32)" },
+        {
+          targetAddress: OTHER,
+          signature:
+            "execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
+        },
+      ]).targets,
+      { avatar: AVATAR }
+    ).map((h) => h.kind)
+    expect(hazards.sort()).toEqual(
+      ["avatar-self", "safe-approval", "safe-approval"].sort()
+    )
   })
 })
