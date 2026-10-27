@@ -1,5 +1,6 @@
 import { Clearance, Function, Target } from "../types"
 
+import { checkAllowanceUnits } from "../allowance"
 import { checkRootConditionIntegrity } from "../condition/conditionIntegrity"
 
 export const targetIntegrity = (targets: Target[]): void => {
@@ -11,6 +12,14 @@ export const targetIntegrity = (targets: Target[]): void => {
   }
 
   targets.forEach(targetEntry)
+
+  checkAllowanceUnits(
+    targets.flatMap((target) =>
+      target.functions.flatMap((func) =>
+        func.condition ? [func.condition] : []
+      )
+    )
+  )
 }
 
 const targetEntry = (target: Target): void => {

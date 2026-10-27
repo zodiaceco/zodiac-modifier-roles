@@ -76,6 +76,18 @@ export {
   allowSignTypedMessage,
 } from "./eip712-signer"
 export { encodeKey, decodeKey } from "./keys"
+export {
+  accrueAllowance,
+  accrueThenUpdate,
+  encodeSetAllowance,
+  checkAllowanceUnits,
+  type AllowanceRefill,
+} from "./allowance"
+export {
+  encodeAllowanceConversion,
+  MAX_ALLOWANCE_DECIMALS,
+  type AllowanceConversion,
+} from "./target/authoring/c/allowance"
 export { postRole } from "./postRole"
 export { fetchLicense, License, LicenseError } from "./licensing"
 
