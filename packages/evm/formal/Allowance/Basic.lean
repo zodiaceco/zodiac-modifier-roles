@@ -131,9 +131,11 @@ def worth (K : Nat) : Spend → Nat
 def totalWorth (K : Nat) (sps : List Spend) : Nat := (sps.map (worth K)).sum
 
 /-- The SDK's `accrueThenUpdate`: what `setAllowance` stores to change the
-    refill at `now`. The balance and timestamp are accrued under the old
-    configuration; the new configuration starts from there. -/
-def accrueThenUpdate (c : Config) (s : State) (now : Nat) : State := accrue c s now
+    refill at `now`. The balance is accrued under the old configuration;
+    the new configuration starts at `now` (or at a later stored start). A
+    partly elapsed old period is not credited. -/
+def accrueThenUpdate (c : Config) (s : State) (now : Nat) : State :=
+  ⟨(accrue c s now).balance, max now (accrue c s now).timestamp⟩
 
 /-- Full periods from `t0` to `t` (none without a refill period). -/
 def periods (c : Config) (t0 t : Nat) : Nat := if c.period = 0 then 0 else (t - t0) / c.period

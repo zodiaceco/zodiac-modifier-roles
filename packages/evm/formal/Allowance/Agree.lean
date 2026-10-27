@@ -452,11 +452,12 @@ theorem update_retroactive :
 
 /-! ## Changing the refill: `accrueThenUpdate` -/
 
-/-- Crediting first changes nothing when the configuration stays: later
-    balances are those of the untouched allowance. -/
-theorem accrueThenUpdate_same (c : Config) (s : State) {now t : Nat} (h : now ≤ t) :
-    accrue c (accrueThenUpdate c s now) t = accrue c s t :=
-  accrue_accrue c s h
+/-- The update keeps the balance accrued under the old configuration and
+    starts the new one no earlier than `now`. -/
+theorem accrueThenUpdate_spec (c : Config) (s : State) (now : Nat) :
+    (accrueThenUpdate c s now).balance = (accrue c s now).balance ∧
+      now ≤ (accrueThenUpdate c s now).timestamp :=
+  ⟨rfl, Nat.le_max_left _ _⟩
 
 /-- **No retroactive refill.** Transactions under the old configuration `c`
     up to `now`, the update at `now`, then transactions under the new
@@ -469,7 +470,7 @@ theorem update_limit (c c' : Config) (s0 : State) (now T : Nat)
     let a := accrueThenUpdate c (run c s0 before).1 now
     charged (run c s0 before).2 + charged (run c' a after).2 ≤
       s0.balance + c.refill * periods c s0.timestamp now +
-        c'.refill * periods c' a.timestamp T := by
+        c'.refill * periods c' now T := by
   intro a
   simp only [a, accrueThenUpdate]
   have hI : Inv c s0.timestamp s0.balance now s0 0 :=
@@ -482,7 +483,14 @@ theorem update_limit (c c' : Config) (s0 : State) (now T : Nat)
   have ht := accrue_time c f now
   have hm := Nat.mul_le_mul_left c.refill
     (periods_mono c (t0 := s0.timestamp) (T := now) (t := (accrue c f now).timestamp) (by omega))
-  have h2 := spending_limit c' (accrue c f now) after T ha
+  have h2 := spending_limit c' ⟨(accrue c f now).balance, max now (accrue c f now).timestamp⟩
+    after T ha
+  have hn : periods c' (max now (accrue c f now).timestamp) T ≤ periods c' now T := by
+    unfold periods; split
+    · exact Nat.le_refl _
+    · exact Nat.div_le_div_right (by omega)
+  have hn' := Nat.mul_le_mul_left c'.refill hn
+  simp only at h2
   rw [hp, Nat.mul_add] at hm
   omega
 
@@ -495,6 +503,16 @@ theorem accrueThenUpdate_not_retroactive :
     let new : Config := ⟨5, 2 ^ 128 - 1, 100⟩
     (accrue new (accrueThenUpdate old ⟨0, 0⟩ 1000) 1000).balance = 0 ∧
       (accrue new (accrueThenUpdate old ⟨0, 0⟩ 1000) 1100).balance = 5 := by
+  refine ⟨?_, ?_⟩ <;> rfl
+
+/-- A shorter period does not pay for the partly elapsed old one: old period
+    100 last accrued at 1000, update at 1099 to period 1. Keeping the
+    accrued timestamp (1000) would credit 99 new periods at once. -/
+theorem accrueThenUpdate_shorter_period :
+    let old : Config := ⟨1, 2 ^ 128 - 1, 100⟩
+    let new : Config := ⟨1, 2 ^ 128 - 1, 1⟩
+    (accrue new (accrueThenUpdate old ⟨0, 1000⟩ 1099) 1099).balance = 0 ∧
+      (accrue new (accrue old ⟨0, 1000⟩ 1099) 1099).balance = 99 := by
   refine ⟨?_, ?_⟩ <;> rfl
 
 end Allowance

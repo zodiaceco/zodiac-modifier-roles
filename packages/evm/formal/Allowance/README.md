@@ -43,7 +43,7 @@ lake build Allowance
 | `accrue_bounds`                   | With the storage word sizes (`uint128` amounts, `uint64` times), the elapsed periods times the period fit `uint64`, `balance + refill·k` fits `uint256`, and the results fit the storage words.                                   |
 | `spending_limit`                  | **Spending limit.** Over any transactions up to time `T`, the role is charged at most the stored balance plus `refill` for each full period from the stored timestamp to `T`.                                                     |
 | `value_limit`                     | The same bound on the **value** spent, in balance units, across any mix of prices and decimals (`spending_limit` with `charged_covers`).                                                                                         |
-| `accrueThenUpdate_same`           | The SDK's `accrueThenUpdate` changes nothing when the parameters stay: later balances are those of the untouched allowance.                                                                                                     |
+| `accrueThenUpdate_spec`           | The SDK's `accrueThenUpdate` keeps the balance accrued under the old refill and starts the new one no earlier than `now` (a partly elapsed old period is not credited; `accrueThenUpdate_shorter_period`). |
 | `update_limit`                    | **No retroactive refill through the SDK.** For transactions under the old refill up to `now`, `accrueThenUpdate` at `now`, then transactions under the new refill: the role is charged at most the starting balance, plus the old refill for the periods up to `now`, plus the new refill for the periods after the update. |
 | `update_retroactive`              | `updateAllowance` keeps balance and timestamp without accruing first. So a new refill also pays for the periods since the last accrual: an allowance with no refill, untouched for ten periods, gets ten periods of the new refill at once. |
 
@@ -52,7 +52,12 @@ lake build Allowance
 - `accrueThenUpdate(current, { refill, maxRefill, period }, now)` (with
   `encodeSetAllowance`): changes the refill without the retroactive credit
   of `updateAllowance`. It credits the old refill up to `now` and passes the
-  accrued balance and timestamp to `setAllowance`. `setAllowance` sets the
+  accrued balance to `setAllowance`, with the new refill starting at `now`.
+  (It first kept the accrued timestamp, which can lie before `now`: a
+  shorter new period then paid for the partly elapsed old one, and a new
+  refill on an allowance without one paid for its whole idle time.
+  `update_limit` had hidden this by counting the new refill's periods from
+  that timestamp; it now counts them from `now`.) `setAllowance` sets the
   balance outright, so anything the role spends between `now` and the call's
   execution is credited back. Plan it right before executing, and never with
   a `now` later than the execution.

@@ -87,7 +87,35 @@ describe("accrueThenUpdate", () => {
       1350n
     )
     expect(next.balance).toBe(21n)
-    expect(next.timestamp).toBe(1300n)
+    // the new period starts at the update, not at the last old period
+    expect(next.timestamp).toBe(1350n)
+  })
+
+  it("does not let a shorter period pay for the partly elapsed old one", () => {
+    const next = accrueThenUpdate(
+      { ...base, refill: 1n, period: 100n, timestamp: 1000n },
+      { refill: 1n, maxRefill: 0n, period: 1n },
+      1099n
+    )
+    expect(accrueAllowance(next, 1099n).balance).toBe(next.balance)
+  })
+
+  it("does not credit the idle time of an allowance without refill", () => {
+    const next = accrueThenUpdate(
+      { ...base, refill: 0n, period: 0n, timestamp: 0n },
+      { refill: 1n, maxRefill: 0n, period: 1n },
+      5000n
+    )
+    expect(accrueAllowance(next, 5000n).balance).toBe(next.balance)
+  })
+
+  it("keeps a start the allowance has in the future", () => {
+    const next = accrueThenUpdate(
+      { ...base, timestamp: 9000n },
+      { refill: 1n, maxRefill: 0n, period: 1n },
+      5000n
+    )
+    expect(next.timestamp).toBe(9000n)
   })
 
   it("encodes to setAllowance", () => {

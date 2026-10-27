@@ -43,8 +43,9 @@ export interface AllowanceRefill {
  * The contract's `updateAllowance` keeps the stored balance and timestamp,
  * so at the next use the new refill also pays for every period since the
  * allowance was last touched. This instead credits the old refill up to
- * `now`, then starts the new refill and period from the accrued timestamp:
- * pass the result to `setAllowance` (`encodeSetAllowance`).
+ * `now`, then starts the new refill and period at `now` (or at a later
+ * start the allowance already has): pass the result to `setAllowance`
+ * (`encodeSetAllowance`). A partly elapsed old period is not credited.
  *
  * `now` must not be later than when the call executes (use the latest block
  * time), or periods that have not yet elapsed are credited. The call sets
@@ -65,7 +66,7 @@ export const accrueThenUpdate = (
   return {
     key: current.key,
     balance,
-    timestamp,
+    timestamp: timestamp > now ? timestamp : now,
     refill: next.refill,
     maxRefill: next.maxRefill === 0n ? U128_MAX : next.maxRefill,
     period: next.period,
