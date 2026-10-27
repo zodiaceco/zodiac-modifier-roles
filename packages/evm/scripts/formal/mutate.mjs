@@ -30,10 +30,8 @@ const TARGETS = {
     files: [
       "normalize/index.ts",
       "normalize/effects.ts",
-      "normalize/padToMatchTypeTree.ts",
       "normalize/pushDownOr.ts",
       "conditionId.ts",
-      "typeTree.ts",
     ],
     test: ["test/formal/sdk-normalize.spec.ts"],
     env: { SDK_NORMALIZE_CASES: "6000" },
