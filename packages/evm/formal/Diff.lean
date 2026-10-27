@@ -9,6 +9,7 @@ import MultiSend
 import SafeSigning
 import Allowance
 import EndToEnd.Batch
+import EndToEnd.Library
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -61,6 +62,11 @@ prints `none` (a revert) or the consumptions as for `ev`. `<unwrappers>`:
 `to:selector` (hex) joined by `,`, or `-`. `<perms>`: the role's entries
 `<to hex, or g for global>/<selector hex, or * for the whole target>/<options>/<nodes>`
 joined by `;`, or `-`.
+
+A line `pn <i> <b|t> <nodes>` packs and unpacks the tree as `ev` does and
+prints `1` if `EndToEnd.pinsArg` holds for argument `i` with the `bytes`
+leaf (`b`, `leafBytes`) or the EIP-712 `types` leaf (`t`, `leafTypes`),
+else `0` (`unpack-failed` if the model cannot unpack it).
 
 A line `iv <nodes>` builds the SDK tree and runs `Bridge.invB` (the
 well-typedness `Bridge` assumes) and prints `ok`, or `bad <node> <clauses>`:
@@ -215,6 +221,18 @@ def runEval (value allowances hex nodesStr : String) : String :=
       let cons := if r.cons.isEmpty then "-" else ",".intercalate (r.cons.map fun c =>
         s!"{(hexOf c.key).drop 2}:{c.balance}:{c.consumed}")
       s!"{r.status} {cons}"
+
+/-- The `pn` query (see the header). -/
+def runPins (iStr leaf nodesStr : String) : String :=
+  match toPackingFlat (parseNodes nodesStr).toList with
+  | none => "bad-input"
+  | some fs =>
+    match ConditionPacking.unpack (zeros 32)
+        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0) with
+    | none => "unpack-failed"
+    | some (root, _) =>
+      let lf := if leaf == "t" then EndToEnd.leafTypes else EndToEnd.leafBytes
+      if EndToEnd.pinsArg lf iStr.toNat! (fs.length + 1) root then "1" else "0"
 
 /-- `az`: the batch model `EndToEnd.authorize` (`_authorize`). -/
 def runAuthorize (value op toHex hex allowances unwrappers perms : String) : String :=
@@ -563,6 +581,7 @@ def runLine (line : String) : String :=
          compValue := n.compValue } : ConditionPacking.Flat)
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
+  | ["pn", i, leaf, nodesStr] => runPins i leaf nodesStr
   | ["iv", nodesStr] => runInv (buildCond (parseNodes nodesStr) 0)
   | ["nz", nodesStr] => showCond (Normalize.normalize 1000 (buildCond (parseNodes nodesStr) 0))
   | ["ck", sStr, nodesStr] =>
