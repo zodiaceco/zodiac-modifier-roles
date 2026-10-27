@@ -8,6 +8,7 @@ export { chains } from "./chains"
  */
 export { c, forAll } from "./target/authoring"
 export { targetIntegrity } from "./target/integrity"
+export { permissionHazards, type PermissionHazard } from "./target/hazards"
 
 /*
  *

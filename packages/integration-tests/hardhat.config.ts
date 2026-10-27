@@ -28,6 +28,7 @@ export default defineConfig({
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/Roles.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/evaluate/WithinRatioChecker.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/serialize/ConditionStorer.sol",
+      "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/evaluate/CustomConditionChecker.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/signing/SignTypedMessageLib.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/unwrappers/MultiSendUnwrapper.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/__test__/fixtures/MultiSend.sol",

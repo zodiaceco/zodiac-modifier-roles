@@ -106,6 +106,20 @@ Validates and optimizes target configuration integrity.
 
 **Returns:** [Target](#target)
 
+#### `permissionHazards(targets, options?)`
+
+Lists permissions that grant more than they appear to. These are accepted by the contract, so they are returned as warnings rather than thrown: delegatecall to a whole target or to an unknown target's function, `signMessage` without pinned messages, typed-message permissions that do not pin the types or the domain's `chainId` and `verifyingContract`, typed messages that authorize the avatar elsewhere (`RoleTx`, `SafeTx`, `SafeMessage`), calls to the Roles Modifier or the avatar itself, and `approveHash` / `execTransaction` on other Safes. See [What a signature authorizes](/general/signing#what-a-signature-authorizes).
+
+**Parameters:**
+
+- `targets` - [Target](#target)s of a role, e.g. from `processPermissions`
+- `options.signingLib` - address of `SignTypedMessageLib` (defaults to the SDK's)
+- `options.rolesModifier` - address of the Roles Modifier
+- `options.avatar` - address of the avatar
+- `options.ownedSafes` - Safes the avatar is an owner of
+
+**Returns:** `PermissionHazard[]` (`target`, `selector`, `kind`, `message`)
+
 #### `validatePresets(permissions, presets)`
 
 Validates permissions against preset configurations.
