@@ -67,6 +67,11 @@ export const allowCowOrderSigning = ({
       return token
     })
 
+  // An empty list would leave that token unrestricted
+  if (sell.length === 0 || buy.length === 0) {
+    throw new Error("`sell` and `buy` must each list at least one token")
+  }
+
   // Throw if sell and buy are identical single-element arrays (swapping a token into itself is not possible)
   if (
     sell.length === 1 &&

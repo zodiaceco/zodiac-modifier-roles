@@ -19,8 +19,17 @@ export const coercePermission = <P extends Permission>(
 ): P extends FunctionPermission
   ? FunctionPermissionCoerced
   : TargetPermission => {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(permission.targetAddress)) {
+    throw new Error(`Invalid target address: ${permission.targetAddress}`)
+  }
+
   const selector = () => {
     if ("selector" in permission) {
+      if (!/^0x[0-9a-fA-F]{8}$/.test(permission.selector)) {
+        throw new Error(
+          `Invalid selector (expected 4 bytes hex): ${permission.selector}`
+        )
+      }
       return { selector: permission.selector.toLowerCase() as `0x${string}` }
     }
 

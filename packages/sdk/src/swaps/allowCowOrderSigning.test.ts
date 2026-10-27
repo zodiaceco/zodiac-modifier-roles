@@ -11,6 +11,23 @@ const WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as const
 const COW = "0xDEf1CA1fb7FBcDC777520aa7f396b4E015F497aB" as const
 
 describe("allowCowOrderSigning", () => {
+  it("throws on an empty sell or buy list, which would leave the token unrestricted", () => {
+    expect(() =>
+      allowCowOrderSigning({
+        chainId: SupportedChainId.MAINNET,
+        sell: [],
+        buy: [COW],
+      })
+    ).toThrow("at least one token")
+    expect(() =>
+      allowCowOrderSigning({
+        chainId: SupportedChainId.MAINNET,
+        sell: [WETH],
+        buy: [],
+      })
+    ).toThrow("at least one token")
+  })
+
   it("should return valid permissions", () => {
     const permissions = allowCowOrderSigning({
       chainId: SupportedChainId.MAINNET,

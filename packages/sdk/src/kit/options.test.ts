@@ -1,3 +1,4 @@
+import { ParamType } from "ethers"
 import { expect, test } from "vitest"
 import { c, encodeKey } from "zodiac-roles-sdk"
 import { Condition, Encoding, Operator } from "../main/types"
@@ -55,4 +56,56 @@ test("allowance options accept a plain label", () => {
   })
 
   expect(withLabel.condition).toEqual(withEncodedKey.condition)
+})
+
+test("callWithinAllowance goes next to the Matches, which v3 requires", () => {
+  const permission = allow.mainnet.lido.stETH.submit(c.pass, {
+    callWithinAllowance: "calls",
+  })
+  const condition = permission.condition as Condition
+  expect(condition.operator).toBe(Operator.And)
+  expect(condition.children![0].operator).toBe(Operator.Matches)
+  expect(
+    condition.children![0].children!.some(
+      (child) => child.operator === Operator.CallWithinAllowance
+    )
+  ).toBe(false)
+})
+
+test("callWithinAllowance without scopings is the allowance alone", () => {
+  const permission = allow.mainnet.lido.stETH.submit(undefined, {
+    callWithinAllowance: "calls",
+  })
+  expect(permission.condition).toEqual({
+    paramType: Encoding.None,
+    operator: Operator.CallWithinAllowance,
+    compValue: encodeKey("calls"),
+  })
+})
+
+test("falsy values are scopings, not wildcards", () => {
+  const permission = allow.mainnet.lido.stETH.approve(undefined, 0)
+  const condition = permission.condition as Condition
+  expect(condition).toBeDefined()
+  expect(condition.children![1].operator).toBe(Operator.EqualTo)
+})
+
+test("throws on more arguments than scopings and options", () => {
+  expect(() =>
+    (allow.mainnet.lido.stETH.submit as any)(undefined, {}, {})
+  ).toThrow("got 3 arguments")
+  expect(() => (allow.mainnet.lido.stETH.submit as any)(undefined, 5)).toThrow(
+    "options object"
+  )
+})
+
+test("a permission with callWithinAllowance nests in calldataMatches", () => {
+  for (const scoping of [c.pass, undefined]) {
+    const permission = allow.mainnet.lido.stETH.submit(scoping, {
+      callWithinAllowance: "calls",
+    })
+    const nested = c.calldataMatches(permission)(ParamType.from("bytes"))
+    expect(nested.operator).toBe(Operator.And)
+    expect(nested.children![0]).toEqual(permission.condition)
+  }
 })

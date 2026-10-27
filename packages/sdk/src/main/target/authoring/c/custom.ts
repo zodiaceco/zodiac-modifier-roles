@@ -1,10 +1,8 @@
 import { BigNumberish, BytesLike, getAddress, hexlify, ParamType } from "ethers"
 import { Encoding, Operator } from "../../../types"
+import { AVATAR_IS_OWNER_OF_ERC721_ADDRESS } from "../../../addresses"
 
 import { ConditionFunction } from "../types"
-
-const AVATAR_IS_OWNER_OF_ERC_721_ADDRESS =
-  "0x91B1bd7BCC5E623d5CE76b0152253499a9C819d1"
 
 /**
  * Asserts that the value is scope represents an ERC721 token ID owned by the avatar.
@@ -18,10 +16,15 @@ export const avatarIsOwnerOfErc721: ConditionFunction<BigNumberish> = (
       "`avatarIsOwnerOfErc721` is only supported for uint256 params"
     )
   }
+  if (BigInt(AVATAR_IS_OWNER_OF_ERC721_ADDRESS) === 0n) {
+    throw new Error(
+      "`avatarIsOwnerOfErc721` is not available yet: the v3 AvatarIsOwnerOfERC721 checker is not deployed"
+    )
+  }
   return {
     paramType: Encoding.Static,
     operator: Operator.Custom,
-    compValue: encodeCustomCompValue(AVATAR_IS_OWNER_OF_ERC_721_ADDRESS),
+    compValue: encodeCustomCompValue(AVATAR_IS_OWNER_OF_ERC721_ADDRESS),
   }
 }
 
