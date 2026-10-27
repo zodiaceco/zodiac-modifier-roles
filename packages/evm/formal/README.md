@@ -30,7 +30,8 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
 | [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
 | [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
-| [End to end](#end-to-end): signing permissions reach a Roles Modifier's `RoleTx` only through the permissions `permissionHazards` flags; every transaction the avatar executes, batches included, passed its own permission, and the spending limit holds across executions | [`EndToEnd`](EndToEnd/README.md) | In progress |
+| [End to end](#end-to-end): signing permissions reach a Roles Modifier's `RoleTx` only through the permissions `permissionHazards` flags; every transaction the avatar executes, batches included, passed its own permission, and the spending limit holds across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
+| [Attribution and reentrancy](#end-to-end): executions never interleave; each runs as an enabled, active member, each signature once | [`EndToEnd`](EndToEnd/README.md#attribution-and-reentrancy) | Tested |
 
 Not covered yet:
 
@@ -818,6 +819,17 @@ check 389 of 425 (most survivors are equivalent rewrites or sit at
 Packable size limits the generators rarely reach), pack 7 of 9 (survivors in the `checkAndPack`
 wrapper).
 
+`node scripts/formal/mutate-consumer.mjs` targets what the Lean models cannot
+see: memory aliasing. The models treat the consumption list as an immutable
+value; `AllowanceConsumer` gets that from copy-on-write over shared entry
+pointers. Four hand-written mutants break it (an entry updated in place, the
+list updated in place, the free memory pointer not advanced, or one word
+short) and run the unit tests, the evaluator differential test and
+`batch.spec`. All four are killed. The two in-place mutants were first
+caught only by `batch.spec`; a unit test (`02Or.spec`: a failed `Or` branch
+charging an allowance charged before the `Or`) now catches them too. The
+evaluator differential test still does not generate that shape.
+
 ## Layout
 
 | Path                   | Contents                                                                             |
@@ -869,6 +881,21 @@ the first. Together, a batch settles as one `Allowance.tx` per allowance
 - unwrappers are registered only for `MultiSend`;
 - conditions that read outside state see it as it was before the batch;
 - nothing else writes the allowances in between.
+
+Attribution and reentrancy are tested on chain, not proven: executions of
+one Roles Modifier never interleave (every external call before the
+avatar's is a staticcall, a nested execution reverts, and only owner and
+caller-keyed functions succeed during one), which is the sequential history
+the spending limit assumes. A stateful fuzz with hostile targets and
+ERC-1271 signers predicts every outcome. It found that with `shouldRevert`
+false the submitter of a relayed transaction can make the call fail for lack
+of gas while using up the signature (documented).
+
+`permissionHazards` is tested against `pinsArg` itself
+(`test/formal/hazards-pins.spec.ts`): on random conditions over the signing
+library's arguments, packed and unpacked as the contract does, the SDK never
+reports a pin `pinsArg` rejects (three seeds of 3,000; it is stricter on
+about 1% of the `types` cases).
 
 See [`EndToEnd/README.md`](EndToEnd/README.md).
 

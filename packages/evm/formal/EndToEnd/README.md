@@ -6,7 +6,9 @@ is about how they compose:
 - the signing library the Safe delegatecalls;
 - other Roles Modifiers that accept the Safe's EIP-1271 signature;
 - MultiSend batches, whose transactions are checked one by one and settled
-  together.
+  together;
+- who an execution is attributed to, and reentrancy (tested on chain, not
+  proven; see [below](#attribution-and-reentrancy)).
 
 ```
 cd packages/evm/formal
@@ -76,6 +78,19 @@ signed, 770 refused by Roles, none refused by the library after Roles let
 them through. Typed: about 350 signed, 600 refused by Roles, 50 refused by
 the library.
 
+`packages/evm/test/formal/hazards-pins.spec.ts` tests the SDK's
+`permissionHazards` against `pinsArg` itself, the definition `only_flagged`
+is about. It generates random conditions on the signing library's arguments
+(pins of the right and wrong shapes, `And`/`Or` over them, other arguments
+that do or do not take one head word, other leading bytes) and runs
+`pinsArg` on the tree the packing model packs and unpacks (`pn` query).
+Wherever the SDK raises no `sign-message` or `sign-typed-message-types`
+hazard, `pinsArg` must hold. Three seeds of 3,000: no exception; about 500
+`bytes` and 290 `types` cases pinned. The SDK is stricter in about 30
+`types` cases per seed, all with an argument before `types` described by an
+`And` over children of different types: the SDK cannot tell how many head
+words it takes, the unpacked tree can.
+
 ## Batches: every executed transaction passed its permission
 
 `Authorization._authorize` checks a call through a role. For a call whose
@@ -123,7 +138,8 @@ Not modelled:
   transaction of a batch. It is not unwrapped: Roles checks it as a plain
   delegatecall, against a permission on `MultiSend`, and
   `permissionHazards` flags delegatecall permissions.
-- Membership, which is checked once per execution; that is theorem 3.
+- Membership, which is checked once per execution (see
+  [attribution and reentrancy](#attribution-and-reentrancy)).
 
 ### Test
 
@@ -149,10 +165,105 @@ calls, with about 245 allowance balances charged. The rest were refused, by
 scope, options, conditions, exceeded allowances or malformed batches, and
 Roles refused exactly those the model refused.
 
+## Attribution and reentrancy
+
+Tested on chain, not proven in Lean. What can go wrong here is EVM
+behaviour: transient storage, staticcalls, rollback on revert, a call that
+fails without reverting. A Lean model would have to assume exactly that, so
+the test runs the compiled contracts with a real Safe instead.
+
+### The reentrancy argument
+
+1. All four execution entry points start with `nonReentrant`, a transient
+   flag set before any external call and cleared on exit. `moduleOnly` and
+   `moduleOnlySigned` (zodiac-core) add a second transient guard, the
+   authenticated module (`AlreadyAuthenticated`).
+2. Before the avatar's call, every external call Roles makes is a
+   staticcall: the ERC-1271 `isValidSignature`, the unwrapper (a `view`
+   function), custom checkers, price adapters. Between entry and the
+   avatar's call nothing changes state except Roles' own write of the used
+   digest.
+3. During the avatar's call, a nested execution reverts with `Reentrancy`.
+   Of the other state-changing functions, a caller who is not the owner can
+   only use those keyed by the caller: `invalidate` (its own digests) and
+   `renounceRole` (its own memberships). Every other one is owner-only.
+4. After the call, `_persist` writes what was computed before it.
+
+So the successful executions of one Roles Modifier never interleave. Each
+reads the state at its entry, and the only writes between those reads and
+its settlement are owner calls and the caller-keyed ones. That is the
+sequential history `Execs` (`Batch.lean`) describes, apart from owner writes
+made during an execution, which settlement overwrites (the documented
+caveat). So `executions_limit` holds for every on-chain history in which the
+owner does not change allowances during an execution. Different Roles
+Modifiers, even on one Safe, have separate guards: one can execute inside
+another's execution, and each settles its own state.
+
+### Test
+
+`packages/integration-tests/test/e2e/attribution.spec.ts`, with a real Safe
+1.4.1, the v3 `Roles` (two on the same Safe), and hostile helpers
+(`integration-tests/contracts/Adversaries.sol`): a target that calls into
+Roles while the avatar calls it, an ERC-1271 signer that is also a module
+and can misbehave (always valid, revert, wrong or short answers, try to
+execute during the check), a target that reverts.
+
+Deterministic cases:
+- From inside an executed call, all four entry points revert with
+  `Reentrancy`, also when the caller is an enabled member that can run the
+  same calls at the top level.
+- From inside an executed call, every state-changing function of Roles' ABI
+  (29) is called: 4 `Reentrancy`, 22 owner-only, `setUp` already
+  initialized, and only `invalidate` and `renounceRole` succeed. The list
+  comes from the ABI, so a new function is covered automatically.
+- An ERC-1271 signer cannot execute from inside `isValidSignature`.
+- The signature parser: too short, the module list's sentinel (address 1,
+  which passes the `modules[signer] != 0` check but has no key and no code),
+  an EOA named as a contract signer, a non-member's signature, another
+  Roles Modifier's digest, a changed field, replay, cancellation with
+  `invalidate`, 65-byte contract signatures.
+- A failed call with `shouldRevert` false uses the digest and changes
+  nothing else; with `true` everything reverts.
+- Memberships: a batch is one use; a disabled module with a membership
+  cannot execute, directly or by signature.
+- Nesting an execution through a second Roles Modifier on the same Safe.
+
+A stateful fuzz runs random sequences of owner changes (grants with start,
+end and uses, revocations, default roles, enabling and disabling modules,
+allowances), time jumps, renouncements, cancellations, signer modes, and
+executions: direct (all entry points, EOA and contract modules, non-modules)
+and relayed (ECDSA, ERC-1271 in every mode, malformed, replayed, changed
+and cross-domain signatures), of calls that succeed, fail, re-enter Roles,
+are batches or are not allowed. A reference model predicts the exact outcome
+(success, a failed call, or the error) and the state after each step: the
+allowance, the used digests, the membership updates and uses, the ether
+sent, and that every nested execution was refused. `ATTRIBUTION_STEPS`,
+`ATTRIBUTION_SEED`. Three seeds of 5,000 steps: every outcome predicted.
+Per seed, about 175 direct and 85 relayed executions succeeded, 30 calls
+failed without reverting, 105 executions re-entered (all refused), 185
+replays were refused, and the rest were refused for membership, module,
+signature or permission reasons.
+
+### Findings (documented in `docs/general/membership.mdx`)
+
+- **The submitter picks the gas.** With `shouldRevert` false, a relayed
+  call that fails does not revert the submission. Whoever submits it can
+  give the call too little gas: the call fails and the signature is used
+  up. In the test, the lowest gas limit without a revert is 178,000 with
+  `shouldRevert` false (the call fails) and 272,000 with `true` (the call
+  runs). The fuzz uses a fixed gas limit for this reason; an estimated one
+  produced exactly this case.
+- **A 65-byte contract signature is read as ECDSA first.** If that recovers
+  an address, it is the signer, so the contract's valid signature is
+  rejected. It is never wrongly accepted.
+- **Renouncing inside the own execution.** A member that renounces a role
+  during an execution under that role keeps it if its uses are limited
+  (settlement writes the uses back), and loses it if they are unlimited
+  (settlement writes nothing). Only the member itself can do this.
+- A batch is one use of a membership.
+
 ## Not covered (yet)
 
-- Attribution of every execution to an active member (direct call or
-  signature, each signature at most once).
 - Settlement: equal to running the steps in order, unless the executed
   transaction changes the Roles Modifier's own state (documented caveat;
   `integration-tests/test/e2e/composition.spec.ts` shows the overwrite).
