@@ -71,7 +71,8 @@ Scope signing permissions as tightly as execution permissions:
 
 - Do not allow `SignTypedMessageLib.signMessage`. It signs a raw 32-byte hash, and a condition on a hash cannot tell what was hashed: allowing it, with any condition other than pinning exact hashes, lets the role sign anything, including transactions of other Roles Modifiers and Safes.
 - Do not allow `SignTypedMessageLib` as a whole target, or a `signTypedMessage` selector without pinning `types`: the library accepts typed messages under any selector, so either allows any typed message.
-- Constrain the EIP-712 domain (`chainId`, `verifyingContract`) of typed-message permissions. With the types pinned but the domain open, the role can sign that message type for every contract that uses it.
+- Pin the EIP-712 domain's `chainId` and `verifyingContract` in typed-message permissions. With the types pinned but either left open, the role can sign that message type for other contracts or chains.
+- Treat typed messages that authorize the Safe elsewhere like the permissions they grant: `RoleTx` (relayed transactions of a Roles Modifier where the Safe is a member), and `SafeTx` and `SafeMessage` (transactions and messages of Safes it owns).
 
 `personalSign` cannot produce an EIP-712 signature: the EIP-191 prefix makes its hash differ from every EIP-712 digest.
 

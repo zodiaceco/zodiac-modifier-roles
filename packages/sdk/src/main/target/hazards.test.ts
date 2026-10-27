@@ -145,4 +145,100 @@ describe("permissionHazards", () => {
       ])
     ).toEqual([])
   })
+
+  it("flags a domain with only chainId pinned, or an Or branch that leaves it open", () => {
+    expect(
+      kinds([
+        allowSignTypedMessage({
+          types,
+          domain: { chainId: 1n },
+          message: { amount: 1n },
+        }),
+      ])
+    ).toEqual(["sign-typed-message-domain"])
+
+    const isolated = allowSignTypedMessage({
+      types,
+      domain: { chainId: 1n, verifyingContract: OTHER },
+      message: { amount: 1n },
+    })
+    const open = allowSignTypedMessage({
+      types,
+      domain: c.pass,
+      message: { amount: 1n },
+    })
+    expect(kinds([isolated, { ...open, condition: open.condition }])).toEqual([
+      "sign-typed-message-domain",
+    ])
+  })
+
+  it("flags a domain without verifyingContract", () => {
+    expect(
+      kinds([
+        allowSignTypedMessage({
+          types: {
+            EIP712Domain: [
+              { name: "name", type: "string" },
+              { name: "chainId", type: "uint256" },
+            ],
+            Order: [{ name: "amount", type: "uint256" }],
+          } as const,
+          domain: { name: "App", chainId: 1n },
+          message: { amount: 1n },
+        }),
+      ])
+    ).toEqual(["sign-typed-message-domain"])
+  })
+
+  it("flags typed messages that authorize the avatar elsewhere", () => {
+    const roleTx = allowSignTypedMessage({
+      types: {
+        EIP712Domain: [
+          { name: "chainId", type: "uint256" },
+          { name: "verifyingContract", type: "address" },
+        ],
+        RoleTx: [
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+          { name: "operation", type: "uint8" },
+          { name: "roleKey", type: "bytes32" },
+          { name: "shouldRevert", type: "bool" },
+          { name: "salt", type: "bytes32" },
+        ],
+      } as const,
+      domain: { chainId: 1n, verifyingContract: OTHER },
+      message: c.pass as any,
+    })
+    expect(permissionHazards(processPermissions([roleTx]).targets)).toEqual([
+      expect.objectContaining({
+        kind: "sign-typed-message-authority",
+        message: expect.stringContaining("RoleTx"),
+      }),
+    ])
+
+    const safeTx = allowSignTypedMessage({
+      types: {
+        EIP712Domain: [
+          { name: "chainId", type: "uint256" },
+          { name: "verifyingContract", type: "address" },
+        ],
+        SafeTx: [
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+          { name: "operation", type: "uint8" },
+          { name: "safeTxGas", type: "uint256" },
+          { name: "baseGas", type: "uint256" },
+          { name: "gasPrice", type: "uint256" },
+          { name: "gasToken", type: "address" },
+          { name: "refundReceiver", type: "address" },
+          { name: "nonce", type: "uint256" },
+        ],
+      } as const,
+      domain: { chainId: 1n, verifyingContract: OTHER },
+      message: c.pass as any,
+    })
+    expect(kinds([safeTx])).toEqual(["sign-typed-message-authority"])
+  })
 })

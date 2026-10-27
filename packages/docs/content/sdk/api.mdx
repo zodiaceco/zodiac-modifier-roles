@@ -108,7 +108,7 @@ Validates and optimizes target configuration integrity.
 
 #### `permissionHazards(targets, options?)`
 
-Lists permissions that grant more than they appear to. These are accepted by the contract, so they are returned as warnings rather than thrown: delegatecall to a whole target or to an unknown target's function, `signMessage` without pinned messages, typed-message permissions that do not pin the types or leave the domain open, and calls to the Roles Modifier itself. See [What a signature authorizes](/general/signing#what-a-signature-authorizes).
+Lists permissions that grant more than they appear to. These are accepted by the contract, so they are returned as warnings rather than thrown: delegatecall to a whole target or to an unknown target's function, `signMessage` without pinned messages, typed-message permissions that do not pin the types or the domain's `chainId` and `verifyingContract`, typed messages that authorize the avatar elsewhere (`RoleTx`, `SafeTx`, `SafeMessage`), and calls to the Roles Modifier itself. See [What a signature authorizes](/general/signing#what-a-signature-authorizes).
 
 **Parameters:**
 

@@ -6,6 +6,8 @@ import {
   Operator,
   Target,
 } from "../types"
+import { AbiCoder, id } from "ethers"
+
 import { SIGN_TYPED_MESSAGE_LIB_ADDRESS } from "../addresses"
 
 export interface PermissionHazard {
@@ -17,6 +19,7 @@ export interface PermissionHazard {
     | "sign-message"
     | "sign-typed-message-types"
     | "sign-typed-message-domain"
+    | "sign-typed-message-authority"
     | "roles-modifier"
   message: string
 }
@@ -47,9 +50,14 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
  * - `sign-typed-message-types`: a typed-message selector of the signing
  *   library whose condition does not pin `types`. The library accepts typed
  *   messages under any selector, so this allows any typed message.
- * - `sign-typed-message-domain`: a typed-message permission that leaves the
- *   EIP-712 domain unconstrained, so the role can sign that message type for
- *   every contract that uses it.
+ * - `sign-typed-message-domain`: a typed-message permission that does not
+ *   pin the domain's `chainId` and `verifyingContract` (or whose domain has
+ *   no `verifyingContract`, or an unknown layout), so the role can sign that
+ *   message type for other contracts or chains.
+ * - `sign-typed-message-authority`: typed messages that authorize actions
+ *   of the avatar elsewhere: `RoleTx` (relayed transactions of a Roles
+ *   Modifier where the avatar is a member), `SafeTx` and `SafeMessage`
+ *   (transactions and messages of Safes the avatar owns).
  * - `roles-modifier`: calls to the Roles Modifier itself. Through the avatar
  *   (its owner) this is configuration access, and settlement of the same
  *   transaction overwrites allowance and membership changes it makes.
@@ -128,13 +136,28 @@ export const permissionHazards = (
           message:
             "the signing library accepts typed messages under any selector: without pinning `types`, this allows any typed message",
         })
-      } else if (!constrainsParameter(fn.condition, 0)) {
-        hazards.push({
-          ...at,
-          kind: "sign-typed-message-domain",
-          message:
-            "the EIP-712 domain is not constrained: the role can sign this message type for every contract that uses it",
-        })
+      } else {
+        const typeSets = pinnedValues(fn.condition, [2]).map(decodeTypes)
+        if (typeSets.some((nodes) => nodes.some((h) => AUTHORITY_TYPES[h]))) {
+          const names = [
+            ...new Set(
+              typeSets.flat().flatMap((h) => AUTHORITY_TYPES[h] ?? [])
+            ),
+          ]
+          hazards.push({
+            ...at,
+            kind: "sign-typed-message-authority",
+            message: `signing ${names.join(", ")} messages authorizes actions of the avatar elsewhere: relayed transactions of Roles Modifiers where it is a member, transactions and messages of Safes it owns`,
+          })
+        }
+        if (!domainIsolated(fn.condition, typeSets)) {
+          hazards.push({
+            ...at,
+            kind: "sign-typed-message-domain",
+            message:
+              "the EIP-712 domain's chainId and verifyingContract are not both pinned: the role can sign this message type for other contracts or chains",
+          })
+        }
       }
     }
   }
@@ -142,24 +165,38 @@ export const permissionHazards = (
   return hazards
 }
 
-/** Whether every way `c` passes requires `test` of parameter `i` of the
- *  calldata: an Or needs it in every branch, an And in some child. */
-const onParameter = (
+/** Whether every way `c` passes requires `test` of the value at `path`
+ *  (child indexes through Matches nodes): an Or needs it in every branch,
+ *  an And in some child. */
+const onPath = (
   c: Condition,
-  i: number,
+  path: readonly number[],
   test: (p: Condition) => boolean
 ): boolean => {
   if (c.operator === Operator.Or) {
-    return (c.children ?? []).every((x) => onParameter(x, i, test))
+    return (c.children ?? []).every((x) => onPath(x, path, test))
   }
   if (c.operator === Operator.And) {
-    return (c.children ?? []).some((x) => onParameter(x, i, test))
+    return (c.children ?? []).some((x) => onPath(x, path, test))
   }
-  if (c.paramType === Encoding.AbiEncoded && c.operator === Operator.Matches) {
-    const p = c.children?.[i]
-    return p !== undefined && test(p)
+  if (path.length === 0) return test(c)
+  if (c.operator === Operator.Matches) {
+    const p = c.children?.[path[0]]
+    return p !== undefined && onPath(p, path.slice(1), test)
   }
   return false
+}
+
+/** The EqualTo values that any branch of `c` compares at `path` with. */
+const pinnedValues = (c: Condition, path: readonly number[]): string[] => {
+  if (c.operator === Operator.Or || c.operator === Operator.And) {
+    return (c.children ?? []).flatMap((x) => pinnedValues(x, path))
+  }
+  if (path.length === 0) {
+    return c.operator === Operator.EqualTo && c.compValue ? [c.compValue] : []
+  }
+  const p = c.operator === Operator.Matches ? c.children?.[path[0]] : undefined
+  return p ? pinnedValues(p, path.slice(1)) : []
 }
 
 /** Fixes the value to exact values: EqualTo, an Or of them, or an And with
@@ -169,13 +206,77 @@ const isPinned = (c: Condition): boolean =>
   (c.operator === Operator.Or && (c.children ?? []).every(isPinned)) ||
   (c.operator === Operator.And && (c.children ?? []).some(isPinned))
 
-/** Checks anything at all: a node other than Pass and a plain Matches (an
- *  AbiEncoded Matches with a prefix checks it). */
-const hasCheck = (c: Condition): boolean =>
-  (c.operator !== Operator.Pass && c.operator !== Operator.Matches) ||
-  (c.operator === Operator.Matches && (c.compValue?.length ?? 0) > 6) ||
-  (c.children ?? []).some(hasCheck)
+const pinsParameter = (c: Condition, i: number) => onPath(c, [i], isPinned)
 
-const pinsParameter = (c: Condition, i: number) => onParameter(c, i, isPinned)
-const constrainsParameter = (c: Condition, i: number) =>
-  onParameter(c, i, hasCheck)
+/** The type hashes of the struct nodes of a pinned `types` value
+ *  (`abi.encode(tuple(uint256 parent, uint8 encoding, bytes32 typeHash)[])`). */
+const decodeTypes = (compValue: string): string[] => {
+  try {
+    const [nodes] = AbiCoder.defaultAbiCoder().decode(
+      ["tuple(uint256,uint8,bytes32)[]"],
+      compValue
+    )
+    return (nodes as [bigint, bigint, string][]).map(([, , h]) =>
+      h.toLowerCase()
+    )
+  } catch {
+    return []
+  }
+}
+
+const AUTHORITY_TYPES: Record<string, string> = Object.fromEntries(
+  [
+    "RoleTx(address to,uint256 value,bytes data,uint8 operation,bytes32 roleKey,bool shouldRevert,bytes32 salt)",
+    "SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)",
+    "SafeMessage(bytes message)",
+  ].map((t) => [id(t).toLowerCase(), t.slice(0, t.indexOf("("))])
+)
+
+/** Field indexes of every EIP712Domain layout (fields in the order
+ *  EIP-712 defines), by type hash. */
+const DOMAIN_LAYOUTS: Record<string, { chainId?: number; contract?: number }> =
+  (() => {
+    const fields = [
+      ["string name", "name"],
+      ["string version", "version"],
+      ["uint256 chainId", "chainId"],
+      ["address verifyingContract", "contract"],
+      ["bytes32 salt", "salt"],
+    ] as const
+    const layouts: Record<string, { chainId?: number; contract?: number }> = {}
+    for (let mask = 1; mask < 32; mask++) {
+      const present = fields.filter((_, i) => mask & (1 << i))
+      const layout: { chainId?: number; contract?: number } = {}
+      present.forEach(([, key], i) => {
+        if (key === "chainId") layout.chainId = i
+        if (key === "contract") layout.contract = i
+      })
+      const hash = id(
+        `EIP712Domain(${present.map(([f]) => f).join(",")})`
+      ).toLowerCase()
+      layouts[hash] = layout
+    }
+    return layouts
+  })()
+
+/** Whether every way the condition passes pins the domain's chainId and
+ *  verifyingContract, for the domain layout of the pinned types. */
+const domainIsolated = (c: Condition, typeSets: string[][]): boolean => {
+  const layouts = typeSets.map((hashes) =>
+    hashes.map((h) => DOMAIN_LAYOUTS[h]).find(Boolean)
+  )
+  const layout = layouts[0]
+  if (
+    !layout ||
+    layouts.some(
+      (l) =>
+        !l || l.chainId !== layout.chainId || l.contract !== layout.contract
+    )
+  ) {
+    return false // unknown or differing domain layouts
+  }
+  if (layout.contract === undefined) return false
+  const pinned = (i: number | undefined) =>
+    i === undefined || onPath(c, [0, i], isPinned)
+  return pinned(layout.chainId) && pinned(layout.contract)
+}
