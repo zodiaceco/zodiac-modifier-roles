@@ -34,11 +34,11 @@ suite("processPermissions()", () => {
         { targetAddress: AddressOne },
         {
           targetAddress: AddressTwo,
-          selector: "0x1",
+          selector: "0x00000001",
         },
         {
           targetAddress: AddressTwo,
-          selector: "0x2",
+          selector: "0x00000002",
           condition: DUMMY_COMP(1),
         },
       ])
@@ -56,13 +56,13 @@ suite("processPermissions()", () => {
           executionOptions: ExecutionOptions.None,
           functions: [
             {
-              selector: "0x1",
+              selector: "0x00000001",
               executionOptions: ExecutionOptions.None,
               wildcarded: true,
               condition: undefined,
             },
             {
-              selector: "0x2",
+              selector: "0x00000002",
               executionOptions: ExecutionOptions.None,
               wildcarded: false,
               condition: normalizeCondition(DUMMY_COMP(1)),

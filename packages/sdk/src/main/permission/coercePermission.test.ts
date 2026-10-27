@@ -16,10 +16,10 @@ suite("coercePermission()", () => {
   it("lowercases address", () => {
     expect(
       coercePermission({
-        targetAddress: "0xABCD",
+        targetAddress: "0xABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD",
       })
     ).to.deep.equal({
-      targetAddress: "0xabcd",
+      targetAddress: "0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd",
       send: false,
       delegatecall: false,
     })
