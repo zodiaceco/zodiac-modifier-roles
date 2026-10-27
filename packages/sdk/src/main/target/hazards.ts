@@ -69,9 +69,10 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
  *   transaction overwrites allowance and membership changes it makes.
  * - `avatar-self`: calls to the avatar itself: changing its owners, modules,
  *   guard or fallback handler (which answers its EIP-1271 checks).
- * - `safe-approval`: `approveHash` or `execTransaction` on another Safe.
- *   As an owner of that Safe, the avatar approves its transactions and
- *   messages (EIP-1271 included) this way.
+ * - `safe-approval`: `approveHash` or `execTransaction` on another Safe, or
+ *   any permission on a Safe the avatar owns (`options.ownedSafes`). As an
+ *   owner of that Safe, the avatar approves its transactions and messages
+ *   (EIP-1271 included) this way.
  *
  * A value counts as pinned only through an `EqualTo` in the argument's own
  * encoding and shape (for `types`, an array of `(uint256, uint8, bytes32)`
@@ -84,6 +85,7 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
  * @param options.signingLib Address of `SignTypedMessageLib`
  * @param options.rolesModifier Address of the Roles Modifier the role is on
  * @param options.avatar Address of the avatar
+ * @param options.ownedSafes Safes the avatar is an owner of
  */
 export const permissionHazards = (
   targets: readonly Target[],
@@ -91,7 +93,13 @@ export const permissionHazards = (
     signingLib = SIGN_TYPED_MESSAGE_LIB_ADDRESS,
     rolesModifier,
     avatar,
-  }: { signingLib?: string; rolesModifier?: string; avatar?: string } = {}
+    ownedSafes = [],
+  }: {
+    signingLib?: string
+    rolesModifier?: string
+    avatar?: string
+    ownedSafes?: readonly string[]
+  } = {}
 ): PermissionHazard[] => {
   const hazards: PermissionHazard[] = []
 
@@ -112,6 +120,15 @@ export const permissionHazards = (
         target: address,
         kind: "avatar-self",
         message: `${address} is the avatar itself: its owners, modules, guard and fallback handler (which answers its EIP-1271 checks) can be changed this way`,
+      })
+    }
+
+    const ownedSafe = ownedSafes.some((x) => same(x, address))
+    if (ownedSafe && target.clearance === Clearance.Target) {
+      hazards.push({
+        target: address,
+        kind: "safe-approval",
+        message: `${address} is a Safe the avatar owns: calling any of its functions includes approveHash and execTransaction, which approve its transactions and messages (EIP-1271 included)`,
       })
     }
 

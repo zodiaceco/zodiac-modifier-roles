@@ -341,5 +341,15 @@ describe("permissionHazards", () => {
     expect(hazards.sort()).toEqual(
       ["avatar-self", "safe-approval", "safe-approval"].sort()
     )
+
+    // a whole Safe the avatar owns
+    expect(
+      permissionHazards(
+        processPermissions([{ targetAddress: OTHER }]).targets,
+        {
+          ownedSafes: [OTHER],
+        }
+      ).map((h) => h.kind)
+    ).toEqual(["safe-approval"])
   })
 })
