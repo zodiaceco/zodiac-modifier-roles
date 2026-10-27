@@ -61,6 +61,22 @@ This is enough for most real-world use cases:
 
 The trailing portion of the message (nonces, timestamps, session IDs) is not constrained, since those are effectively single-use values that the verifying app is expected to validate.
 
+## What a signature authorizes
+
+A signature from the Safe is accepted wherever the Safe's EIP-1271 signature counts.
+That includes every contract that authenticates the Safe by signature: the apps the permission is meant for, but also any Roles Modifier where the Safe is a member (its `execTransactionWithSignature` takes EIP-1271 signatures), and any Safe that has this Safe as an owner.
+A signing permission therefore grants whatever the signed message authorizes in those places, not just in the intended app.
+
+Scope signing permissions as tightly as execution permissions:
+
+- Do not allow `SignTypedMessageLib.signMessage`. It signs a raw 32-byte hash, and a condition on a hash cannot tell what was hashed: allowing it, with any condition other than pinning exact hashes, lets the role sign anything, including transactions of other Roles Modifiers and Safes.
+- Do not allow `SignTypedMessageLib` as a whole target, or a `signTypedMessage` selector without pinning `types`: the library accepts typed messages under any selector, so either allows any typed message.
+- Constrain the EIP-712 domain (`chainId`, `verifyingContract`) of typed-message permissions. With the types pinned but the domain open, the role can sign that message type for every contract that uses it.
+
+`personalSign` cannot produce an EIP-712 signature: the EIP-191 prefix makes its hash differ from every EIP-712 digest.
+
+The SDK's `permissionHazards(targets)` flags these permissions, along with delegatecall permissions and permissions on the Roles Modifier itself.
+
 ## SDK
 
 For code examples covering both flows — defining permissions and producing the signing transaction calldata — see the [SDK signing reference](/sdk/signing).

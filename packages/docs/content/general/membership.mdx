@@ -1,3 +1,5 @@
+import { Callout } from "nextra/components";
+
 # Membership
 
 Roles are granted to members — addresses that are allowed to execute transactions through the Roles Modifier on behalf of the controlled account.
@@ -24,6 +26,14 @@ Memberships can optionally cap the number of times a member may execute transact
 - By default, memberships allow unlimited uses.
 - When a use count is configured, each successful execution decrements the remaining count.
 - Once the count reaches zero, the membership is effectively exhausted and the member can no longer execute transactions under that role.
+
+<Callout type="warning">
+  The new count is written after the transaction ran. If the transaction
+  itself changes this membership (for example, a call through the role that
+  revokes it via the avatar), the write overwrites that change. Do not mix
+  role configuration calls with calls that execute through a role in the
+  same transaction.
+</Callout>
 
 ## Automatic Expiry
 

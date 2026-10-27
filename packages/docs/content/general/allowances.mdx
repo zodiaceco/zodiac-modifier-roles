@@ -1,3 +1,5 @@
+import { Callout } from "nextra/components";
+
 # Allowances
 
 Allowances serve as a mechanism for enforcing spending limits or other types of quotas for individual roles.
@@ -55,6 +57,16 @@ To enforce a rate limit on the number of calls to a function, use a [`CallWithin
 Allowances consumed during condition evaluation are tracked per transaction and only settled after the transaction has been successfully executed.
 If the condition evaluation fails or the underlying call reverts, no allowance balances are updated.
 This ensures that allowances accurately reflect actual spending rather than attempted spending.
+
+<Callout type="warning">
+  The whole transaction is checked before it runs, against the allowance
+  balances at that point, and the new balances are written after it ran. If
+  the transaction itself changes an allowance it spends from (for example, a
+  batch through a role that also calls `setAllowance` on this Roles Modifier
+  via the avatar), the check ignores that change and the settlement
+  overwrites it. Do not mix role configuration calls with calls that execute
+  through a role in the same transaction.
+</Callout>
 
 ## Denominated Allowances
 
