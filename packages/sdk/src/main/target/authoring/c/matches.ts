@@ -2,7 +2,10 @@ import { BigNumberish, isHexString, ParamType } from "ethers"
 import { Condition, Operator, Encoding } from "../../../types"
 
 import { coercePermission } from "../../../permission/coercePermission"
-import { checkParameterTypeCompatibility } from "../../../condition/conditionIntegrity"
+import {
+  checkParameterTypeCompatibility,
+  checkRootConditionIntegrity,
+} from "../../../condition/conditionIntegrity"
 import { describeStructure } from "./helpers/describeStructure"
 import { isFixedArray, parameterType } from "./helpers/parameterType"
 
@@ -231,18 +234,9 @@ const calldataMatchesFunctionPermission =
     }
 
     const { selector, condition } = coercePermission(functionPermission)
-    if (condition) {
-      if (
-        condition.operator !== Operator.Matches ||
-        condition.paramType !== Encoding.AbiEncoded
-      ) {
-        throw new Error(
-          `calldataMatches expects a function permission with an \`Operator.matches\`, \`ParamType.AbiEncoded\` condition, got: \`Operator.${
-            Operator[condition.operator]
-          }\`, \`ParamType.${Encoding[condition.paramType]}\``
-        )
-      }
-    }
+    // any condition valid for a function's calldata: a Matches on the
+    // parameters, or one with a call allowance next to it, or alone
+    if (condition) checkRootConditionIntegrity(condition)
 
     const selectorCondition = bitmask({
       mask: "0xffffffff",

@@ -1,3 +1,4 @@
+import { ParamType } from "ethers"
 import { expect, test } from "vitest"
 import { c, encodeKey } from "zodiac-roles-sdk"
 import { Condition, Encoding, Operator } from "../main/types"
@@ -96,4 +97,15 @@ test("throws on more arguments than scopings and options", () => {
   expect(() => (allow.mainnet.lido.stETH.submit as any)(undefined, 5)).toThrow(
     "options object"
   )
+})
+
+test("a permission with callWithinAllowance nests in calldataMatches", () => {
+  for (const scoping of [c.pass, undefined]) {
+    const permission = allow.mainnet.lido.stETH.submit(scoping, {
+      callWithinAllowance: "calls",
+    })
+    const nested = c.calldataMatches(permission)(ParamType.from("bytes"))
+    expect(nested.operator).toBe(Operator.And)
+    expect(nested.children![0]).toEqual(permission.condition)
+  }
 })
