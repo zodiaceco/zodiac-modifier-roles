@@ -1,0 +1,157 @@
+# End to end: how authority composes across contracts
+
+The other libraries each prove one contract or function faithful. This one
+is about how they compose:
+- Roles with the Safe it controls;
+- the signing library the Safe delegatecalls;
+- other Roles Modifiers that accept the Safe's EIP-1271 signature;
+- MultiSend batches, whose transactions are checked one by one and settled
+  together.
+
+```
+cd packages/evm/formal
+lake build EndToEnd
+```
+
+## Signing routes into Roles authority
+
+A Roles Modifier `R` runs `execTransactionWithSignature` for a module `S` (a
+Safe) once `S.isValidSignature(D, "")` accepts the digest `D` of a `RoleTx`
+for `R`. A role on `S`'s own Roles Modifier can make `S` accept digests
+through `SignTypedMessageLib`. The question: which of those permissions let
+a role act with `S`'s roles on `R`?
+
+| Theorem                       | Statement                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `personal_ne_typed` (`Hashes`) | A `personal_sign` hash is never an EIP-712 digest, unless keccak256 has a collision.                                                                                                                                                                                                                                            |
+| `typed_typeHash`              | If the encoder's digest has the EIP-712 form with type hash `th`, then `types[1]` (the message root) carries `th`, unless keccak256 has a collision.                                                                                                                                                                             |
+| `pinsArg_sound` (`Pins`)      | If `evaluate` passes a condition that pins argument `i` (every passing branch reaches, through `Or` / `And` and the calldata `Matches`, an `EqualTo` of the expected shape at `i`'s head position), the bytes Roles reads at `tailLocation(data, 4, 32 * i)` are one of the pinned values.                                       |
+| `route_bytes` (`Library`)     | **Roles' reader and Solidity's decoder agree.** If Roles passes a call with the `bytes` argument pinned and Solidity's ABI decoder accepts the calldata, the message `signMessage` / `personalSign` gets is a pinned message, on any calldata.                                                                                     |
+| `route_types`                 | **Roles' reader and the hand-written fallback agree.** If Roles passes a call with `types` pinned (an array of 96-byte elements), the fallback's `typesPtr = calldataload(0x44) + 4` points at the same bytes, and the length and elements it reads are those of a pinned value.                                                    |
+| `route_typed`                 | So a typed-message permission with pinned types produces a `RoleTx` digest only if a pinned value has the `RoleTx` type hash at `types[1]`.                                                                                                                                                                                     |
+| `only_flagged` (`Routes`)     | **Only flagged signing permissions reach a `RoleTx`.** If the key the library stored under a permission Roles passed makes the Safe accept a `RoleTx` digest `D`, then: `signMessage` without a pin, or with `D` itself pinned; or a typed message without pinned types, or with `RoleTx` types; never `personalSign`. Each unless keccak256 has a collision. |
+
+These are the conditions the SDK's `permissionHazards` checks
+(`sign-message`, `sign-typed-message-types`,
+`sign-typed-message-authority`). Two of its rules came from the proof:
+- the `types` pin must read 96-byte elements, or Roles compares fewer bytes
+  than the library hashes;
+- a pin must sit at its argument's head position (the arguments before it
+  one word each), or Roles reads it elsewhere than the library does.
+
+The other ways to make a Safe's EIP-1271 check accept something sit outside
+the signing library, and `permissionHazards` flags them as well:
+- the Safe's owners;
+- delegatecall into other code;
+- calls to the Safe itself (fallback handler, owners, modules);
+- `approveHash` / `execTransaction` on Safes it owns.
+
+Assumptions:
+- keccak256 has no collision. The evaluator model compares values longer
+  than 32 bytes by their preimages, and the theorems state the collision
+  case explicitly.
+- Calldata is shorter than `2^256` bytes.
+
+## Tests
+
+`packages/integration-tests/test/e2e/pins.spec.ts` uses a real Safe 1.4.1,
+the v3 `Roles` and `SignTypedMessageLib`. It sends random and malformed
+calldata through a role that may only sign pinned messages, or typed
+messages with pinned types. The mutations:
+- moved offsets and lengths;
+- decoys the offsets can point at;
+- dirty padding;
+- truncation and junk;
+- swapped head words.
+
+For every call Roles lets through and the library executes, the stored key
+is checked:
+- `signMessage`: it is a pinned message's key;
+- `signTypedMessage`: it is the key of the digest of the pinned types, with
+  the `domain` and `message` the fallback reads.
+
+Three seeds of 1,000 calls each: 0 violations. `signMessage`: about 230
+signed, 770 refused by Roles, none refused by the library after Roles let
+them through. Typed: about 350 signed, 600 refused by Roles, 50 refused by
+the library.
+
+## Batches: every executed transaction passed its permission
+
+`Authorization._authorize` checks a call through a role. For a call whose
+target and selector have an unwrapper registered, it checks each transaction
+of the batch instead, threading one consumption list through them. After the
+avatar executes, `Settlement._persist` writes that list.
+
+`Batch.lean` transcribes `_authorize` and `_transaction` (`authorize`):
+- scope resolution (the target or function entry, then the global entry);
+- the calldata length check;
+- the execution options;
+- the condition, run by the evaluator model `Evaluate`.
+
+It also transcribes `_persist` on the allowances (`persist`, in
+`Consume.lean`).
+
+| Theorem                          | Statement                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `evalC_steps` (`Consume`)        | **Failed branches leave no trace.** When `evaluate` passes, the consumptions it returns are the input list after a sequence of successful `consume` steps: the charges on the path that passed. That holds for every tree, under `Or`, the array operators and `Zip` alike.                    |
+| `steps_spec`                     | **One entry per key.** Along such steps the list never holds a key twice. Each entry keeps the accrued balance and is never overdrawn. For every key, the steps are exactly `Allowance.consumeAll` on that key's charges.                                                                     |
+| `persist_get`, `persist_tx`      | `_persist` writes every entry in order, so a second entry for a key would overwrite the first. With one entry per key, each key is written once. What it stores for every key is `Allowance.tx` on that key's charges.                                                                     |
+| `executed_authorized` (`Batch`)  | **Every transaction the avatar executes passed its permission.** When `_authorize` lets a call through, the avatar executes either the call itself or, with an unwrapper registered, exactly the transactions `MultiSend`'s loop runs (`MultiSend.unwrap_exec`). Each of them resolved a scope entry for its target and selector, had options that allow its value and operation, and passed its condition on its own calldata. |
+| `authorize_persist`              | **Settlement after a batch is one `Allowance.tx` per allowance**, with the charges of all the batch's transactions, in order.                                                                                                                                                                |
+| `executions_limit`               | **Spending limit, end to end.** Over any executions through Roles at block times up to `T`, batches included, the charges to an allowance total at most its stored balance plus `refill` for each full period up to `T` (`Allowance.spending_limit`).                                          |
+
+Hypotheses. Each is a fact about the deployment, not something the code can
+check:
+- **Unwrappers.** An unwrapper is registered only as `MultiSendUnwrapper` for
+  a `MultiSend` or `MultiSendCallOnly`. Roles checks what the unwrapper
+  returns and never the outer call, so a custom unwrapper must return exactly
+  what its target executes.
+- **The state before the batch.** The transactions of a batch are all checked
+  before any of them executes. Conditions that read outside state (custom
+  checkers, `WithinRatio`, price adapters) see it as it was before the batch,
+  for every transaction in it. In the model, one `envOf` holds for the whole
+  batch. Accrued balances are read once, at the first charge.
+- **Nothing else writes the allowances** between executions: neither owner
+  calls nor the executed transactions themselves. This is the settlement
+  caveat in the docs.
+- A custom checker that fails reports a failure status, not `Ok` (as
+  `EnvOk` in `Bridge`).
+
+Not modelled:
+- A batch nested in a batch, a delegatecall to `MultiSend` as one
+  transaction of a batch. It is not unwrapped: Roles checks it as a plain
+  delegatecall, against a permission on `MultiSend`, and
+  `permissionHazards` flags delegatecall permissions.
+- Membership, which is checked once per execution; that is theorem 3.
+
+### Test
+
+`packages/integration-tests/test/e2e/batch.spec.ts` uses a real Safe 1.4.1,
+the v3 `Roles`, `MultiSend` and `MultiSendUnwrapper`. Each case gives a fresh
+role random permissions (target-wide, per function, global) whose
+conditions charge three allowances:
+- on parameters and array elements;
+- on the ether value, and per call;
+- twice in one `And`;
+- in `Or` branches that fail after charging.
+
+The role then sends one call or a MultiSend batch of one to four
+transactions, sometimes malformed, sometimes sending value or
+delegatecalling. The Lean driver runs `EndToEnd.authorize` on the same
+input (`az` query). For every case the test compares:
+- whether Roles lets the call through;
+- every allowance's stored balance afterwards.
+
+`BATCH_CASES`, `BATCH_SEED`. Three seeds of 1,000 cases each: 0 differences.
+Per seed, about 290 calls went through: about 145 batches and 145 single
+calls, with about 245 allowance balances charged. The rest were refused, by
+scope, options, conditions, exceeded allowances or malformed batches, and
+Roles refused exactly those the model refused.
+
+## Not covered (yet)
+
+- Attribution of every execution to an active member (direct call or
+  signature, each signature at most once).
+- Settlement: equal to running the steps in order, unless the executed
+  transaction changes the Roles Modifier's own state (documented caveat;
+  `integration-tests/test/e2e/composition.spec.ts` shows the overwrite).

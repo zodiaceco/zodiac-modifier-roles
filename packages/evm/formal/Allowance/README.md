@@ -98,11 +98,12 @@ checks the SDK's `accrueAllowance` against the contract's
 
 ## Not covered
 
-- Within one transaction, which spends count. Under `Or`, `And` and the
-  array operators, a failed branch's consumption is discarded. That
-  threading of the consumption list is the evaluator's, modelled in
-  `Evaluate` (which takes the accrued balance as given). The theorems here
-  take the spends of the path that passed.
+- Within one transaction, which spends count: proven in
+  [`EndToEnd`](../EndToEnd/README.md#batches-every-executed-transaction-passed-its-permission).
+  A failed branch's consumption is discarded (`evalC_steps`). The list keeps
+  one entry per key (`steps_spec`), so `_persist` stores one `tx` per
+  allowance, for a batch too (`authorize_persist`). `executions_limit` is
+  `spending_limit` over executions through Roles.
 - Price adapters themselves. A price is whatever the adapter returns, and a
   manipulable or stale price makes the value wrong. Adapters are chosen by
   the owner.

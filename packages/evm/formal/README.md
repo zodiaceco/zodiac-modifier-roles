@@ -30,6 +30,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
 | [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
 | [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
+| [End to end](#end-to-end): signing permissions reach a Roles Modifier's `RoleTx` only through the permissions `permissionHazards` flags; every transaction the avatar executes, batches included, passed its own permission, and the spending limit holds across executions | [`EndToEnd`](EndToEnd/README.md) | In progress |
 
 Not covered yet:
 
@@ -826,3 +827,36 @@ wrapper).
 To add a property, add a `[[lean_lib]]` to `lakefile.toml` and append its name
 to `defaultTargets`. Then add a row to the status table and a section with its
 theorems here.
+
+## End to end
+
+`EndToEnd` is about how the contracts compose, not about one function. A
+Safe that is a member of a Roles Modifier `R` answers `R`'s
+`execTransactionWithSignature` through EIP-1271, and roles on the Safe's
+own Roles Modifier can make it sign. `only_flagged` proves which signing
+permissions can make it sign a `RoleTx` for `R`:
+- `signMessage` without a pin;
+- typed messages without pinned types, or with `RoleTx` types;
+- never `personalSign`.
+
+These are exactly the permissions the SDK's `permissionHazards` flags. The
+proof goes through Roles' reader against Solidity's ABI decoder
+(`route_bytes`) and against the signing library's hand-written fallback
+(`route_types`), on any calldata. Two of the check's rules came from it: the
+`types` element shape, and the head position of a pin.
+
+For batches, `executed_authorized` proves that every transaction the avatar
+executes passed its own permission: the call itself, or each transaction
+`MultiSend` runs (through `MultiSend.unwrap_exec`). `evalC_steps` and
+`steps_spec` prove that a passing evaluation charges only along the path
+that passed, and that the consumption list never holds a key twice.
+`_persist` writes every entry, so a second entry for a key would overwrite
+the first. Together, a batch settles as one `Allowance.tx` per allowance
+(`authorize_persist`), and the spending limit holds over any executions
+(`executions_limit`). The hypotheses:
+- unwrappers are registered only for `MultiSend`;
+- conditions that read outside state see it as it was before the batch;
+- nothing else writes the allowances in between.
+
+See [`EndToEnd/README.md`](EndToEnd/README.md).
+

@@ -8,6 +8,7 @@ import EIP712
 import MultiSend
 import SafeSigning
 import Allowance
+import EndToEnd.Batch
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -53,6 +54,13 @@ Trees can also be given nested, independently of any flattening:
 is `iv` on it, and `fl <tree> <nodes>` prints `eq` if the flat BFS array
 `<nodes>` reads back as the tree (`buildCond`, the driver's `nest`), else
 `ne`.
+
+A line `az <value> <op> <to hex> <calldata hex> <allowances> <unwrappers> <perms>`
+runs the batch model `EndToEnd.authorize` (`Authorization._authorize`) and
+prints `none` (a revert) or the consumptions as for `ev`. `<unwrappers>`:
+`to:selector` (hex) joined by `,`, or `-`. `<perms>`: the role's entries
+`<to hex, or g for global>/<selector hex, or * for the whole target>/<options>/<nodes>`
+joined by `;`, or `-`.
 
 A line `iv <nodes>` builds the SDK tree and runs `Bridge.invB` (the
 well-typedness `Bridge` assumes) and prints `ok`, or `bad <node> <clauses>`:
@@ -207,6 +215,64 @@ def runEval (value allowances hex nodesStr : String) : String :=
       let cons := if r.cons.isEmpty then "-" else ",".intercalate (r.cons.map fun c =>
         s!"{(hexOf c.key).drop 2}:{c.balance}:{c.consumed}")
       s!"{r.status} {cons}"
+
+/-- `az`: the batch model `EndToEnd.authorize` (`_authorize`). -/
+def runAuthorize (value op toHex hex allowances unwrappers perms : String) : String :=
+  let bal : List (Bytes × Nat) :=
+    if allowances == "-" then []
+    else (allowances.splitOn ",").map fun kv =>
+      match kv.splitOn ":" with
+      | [k, b] => (parseHex k, b.toNat!)
+      | _ => ([], 0)
+  let num (h : String) : Nat := DecoderFaithfulness.wordVal (parseHex h)
+  let uw : List Nat :=
+    if unwrappers == "-" then []
+    else (unwrappers.splitOn ",").map fun s =>
+      match s.splitOn ":" with
+      | [t, sl] => EndToEnd.fnKey (num t) (num sl)
+      | _ => 0
+  -- each entry: `<to hex or g>/<selector hex or *>/<options>/<nodes>`
+  let ents : List (Option Nat × Option Nat × Nat × String) :=
+    if perms == "-" then []
+    else (perms.splitOn ";").map fun e =>
+      match e.splitOn "/" with
+      | [t, sl, o, ns] =>
+        (if t == "g" then none else some (num t), if sl == "*" then none else some (num sl),
+          o.toNat!, ns)
+      | _ => (none, none, 0, "")
+  let keyOf : Option Nat × Option Nat → Nat
+    | (some t, some sl) => EndToEnd.fnKey t sl
+    | (some t, none) => EndToEnd.targetKey t
+    | (none, some sl) => EndToEnd.globalKey sl
+    | (none, none) => 0
+  let trees : List (Option (Condition × Nat)) := ents.map fun (_, _, _, ns) =>
+    match toPackingFlat (parseNodes ns).toList with
+    | none => none
+    | some fs => ConditionPacking.unpack (zeros 32)
+        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0)
+  let idx (k : Nat) : Option Nat := (ents.zipIdx.find? fun ((t, sl, _, _), _) => keyOf (t, sl) == k).map (·.2)
+  let p : EndToEnd.Perms :=
+    { clearance := fun t =>
+        if ents.any (fun (t', sl, _, _) => t' == some t && sl.isNone) then 1
+        else if ents.any (fun (t', sl, _, _) => t' == some t && sl.isSome) then 2 else 0
+      scope := fun k => match idx k with
+        | some i => ((ents.getD i (none, none, 0, "")).2.2.1) * 2 ^ 160 + i + 1
+        | none => 0
+      load := fun sc => ((trees.getD (sc % 2 ^ 160 - 1) none).getD
+        (⟨.None, .Or, [], false, 0, 0, []⟩, 0))
+      unwrapper := fun k => uw.contains k }
+  let envOf (e : MultiSend.Entry) : Evaluate.Env :=
+    { value := e.value
+      balance := fun k => ((bal.find? (·.1 == k)).map (·.2)).getD 0
+      scale := fun _ _ => (254, 0)
+      customCall := fun _ _ _ _ => .inl 254
+      ratio := fun _ _ => 254 }
+  if trees.any Option.isNone then "bad-input" else
+  match EndToEnd.authorize p envOf (num toHex) value.toNat! (parseHex hex) op.toNat! with
+  | none => "none"
+  | some cons =>
+    if cons.isEmpty then "-" else ",".intercalate (cons.map fun c =>
+      s!"{(hexOf c.key).drop 2}:{c.balance}:{c.consumed}")
 
 /-- The clauses of `invP` a node fails (see the `iv` query). -/
 def invWhy (c : Normalize.Cond) : List String :=
@@ -489,6 +555,8 @@ def runLine (line : String) : String :=
       if decide (buildCond (parseNodes nodesStr) 0 = c) then "eq" else "ne" else
   match line.splitOn " " with
   | ["ev", value, allowances, hex, nodesStr] => runEval value allowances hex nodesStr
+  | ["az", value, op, to, hex, allowances, unwrappers, perms] =>
+    runAuthorize value op to hex allowances unwrappers perms
   | ["pk", nodesStr] =>
     let fs := (parseNodes nodesStr).toList.map fun n =>
       ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,
