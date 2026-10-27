@@ -467,6 +467,64 @@ describe("Operator - Or", () => {
       const { balance: balanceB } = await roles.accruedAllowance(allowanceKeyB);
       expect(balanceB).to.equal(90);
     });
+
+    it("rolls back a failed branch's charge to an allowance charged before the Or", async () => {
+      // The consumption list shares entries between copies: a failed branch
+      // that updated the shared entry (or list) in place would leak here.
+      const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
+
+      const allowanceKey =
+        "0x000000000000000000000000000000000000000000000000000000000000000a";
+      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+
+      const withinAllowance = {
+        paramType: Encoding.Static,
+        operator: Operator.WithinAllowance,
+        compValue: allowanceKey,
+      };
+      // And: charge A, then Or(charge A again and fail, pass)
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.None,
+              operator: Operator.And,
+              children: [
+                withinAllowance,
+                {
+                  paramType: Encoding.None,
+                  operator: Operator.Or,
+                  children: [
+                    {
+                      paramType: Encoding.None,
+                      operator: Operator.And,
+                      children: [
+                        withinAllowance,
+                        {
+                          paramType: Encoding.Static,
+                          operator: Operator.GreaterThan,
+                          compValue: abiCoder.encode(["uint256"], [999]),
+                        },
+                      ],
+                    },
+                    { paramType: Encoding.Static, operator: Operator.Pass },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await expect(invoke(10)).to.not.be.revert(ethers);
+
+      // charged once
+      const { balance } = await roles.accruedAllowance(allowanceKey);
+      expect(balance).to.equal(90);
+    });
   });
 
   describe("violation context", () => {
