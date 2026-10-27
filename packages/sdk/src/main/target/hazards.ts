@@ -174,35 +174,50 @@ export const permissionHazards = (
 const onPath = (
   c: Condition,
   path: readonly number[],
-  test: (p: Condition) => boolean
+  test: (p: Condition) => boolean,
+  depth = 0
 ): boolean => {
   if (c.operator === Operator.Or) {
-    return (c.children ?? []).every((x) => onPath(x, path, test))
+    return (c.children ?? []).every((x) => onPath(x, path, test, depth))
   }
   if (c.operator === Operator.And) {
-    return (c.children ?? []).some((x) => onPath(x, path, test))
+    return (c.children ?? []).some((x) => onPath(x, path, test, depth))
   }
   if (path.length === 0) return test(c)
-  if (c.operator === Operator.Matches && c.paramType === Encoding.AbiEncoded) {
+  if (decodesArguments(c, depth)) {
     const p = c.children?.[path[0]]
-    return p !== undefined && onPath(p, path.slice(1), test)
+    return p !== undefined && onPath(p, path.slice(1), test, depth + 1)
   }
   return false
 }
 
+/** An AbiEncoded Matches that decodes the arguments at this depth: after
+ *  the 4-byte selector at the top level (the calldata), from the start
+ *  below (an encoded struct). With other leading bytes it reads another
+ *  block, so its children are not these arguments. */
+const decodesArguments = (c: Condition, depth: number): boolean => {
+  if (c.operator !== Operator.Matches || c.paramType !== Encoding.AbiEncoded) {
+    return false
+  }
+  const cv = c.compValue ?? "0x"
+  const leading = cv.length >= 6 ? parseInt(cv.slice(2, 6), 16) : 4
+  return leading === (depth === 0 ? 4 : 0)
+}
+
 /** The EqualTo values that any branch of `c` compares at `path` with. */
-const pinnedValues = (c: Condition, path: readonly number[]): string[] => {
+const pinnedValues = (
+  c: Condition,
+  path: readonly number[],
+  depth = 0
+): string[] => {
   if (c.operator === Operator.Or || c.operator === Operator.And) {
-    return (c.children ?? []).flatMap((x) => pinnedValues(x, path))
+    return (c.children ?? []).flatMap((x) => pinnedValues(x, path, depth))
   }
   if (path.length === 0) {
     return c.operator === Operator.EqualTo && c.compValue ? [c.compValue] : []
   }
-  const p =
-    c.operator === Operator.Matches && c.paramType === Encoding.AbiEncoded
-      ? c.children?.[path[0]]
-      : undefined
-  return p ? pinnedValues(p, path.slice(1)) : []
+  const p = decodesArguments(c, depth) ? c.children?.[path[0]] : undefined
+  return p ? pinnedValues(p, path.slice(1), depth + 1) : []
 }
 
 /** Fixes a value of encoding `enc` to exact values: an EqualTo read as

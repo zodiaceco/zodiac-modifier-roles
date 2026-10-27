@@ -45,6 +45,11 @@ describe("permissionHazards", () => {
       ])
     ).toEqual(["sign-message"])
     expect(kinds([msg(c.calldataMatches([hash], ["bytes"]))])).toEqual([])
+    // a Matches with other leading bytes reads another block
+    const pinnedElsewhere = c.calldataMatches([hash], ["bytes"])() as any
+    expect(kinds([msg({ ...pinnedElsewhere, compValue: "0x0024" })])).toEqual([
+      "sign-message",
+    ])
     // pinning the offset word of the bytes pins nothing of the message
     expect(kinds([msg(c.calldataMatches([32n], ["uint256"]))])).toEqual([
       "sign-message",
