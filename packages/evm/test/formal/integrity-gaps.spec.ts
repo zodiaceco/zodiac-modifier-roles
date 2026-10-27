@@ -614,9 +614,51 @@ function injectNP(kids: Node[], where: string, legit: boolean): Node[] {
 
 const opName = (op: Operator) => Operator[op];
 
+/** The shape that exposes memory aliasing in the consumption list (in
+ *  `GAP_EVAL` mode): charge `k`, then an `Or` whose first branch charges `k`
+ *  again and fails, then (sometimes) charge `k` once more:
+ *  `And[charge(k), Or[And[charge(k), fail], n], charge(k)?]`. If the failed
+ *  branch's charge leaked into the shared entry or list, the reported
+ *  consumption is too high, or the last charge is refused. Charges are per
+ *  call (1 each, independent of the ether value); `fail` is an ether value
+ *  below 0, which never holds. Placed by `gen`, so it also sits inside array
+ *  element conditions (iterators roll back too) and nested `Or`s. */
+function aliasWrap(n: Node): Node {
+  tag("alias");
+  const k = pick(KEYS);
+  const charge = (): Node => ({
+    paramType: Encoding.None,
+    operator: Operator.CallWithinAllowance,
+    compValue: k,
+    np: true,
+  });
+  const fail: Node = {
+    paramType: Encoding.EtherValue,
+    operator: Operator.LessThan,
+    compValue: word(Uint8Array.from([0])),
+    np: true,
+  };
+  const failing: Node = {
+    paramType: Encoding.None,
+    operator: Operator.And,
+    children: [charge(), fail],
+    np: true,
+  };
+  return {
+    paramType: Encoding.None,
+    operator: Operator.And,
+    children: [
+      charge(),
+      { paramType: Encoding.None, operator: Operator.Or, children: [failing, n] },
+      ...(chance(0.5) ? [charge()] : []),
+    ],
+  };
+}
+
 /** A positional condition for a value `v` of type `t`. */
 function gen(t: Ty, v: any, depth = 0): Node {
   let n = genBase(t, v, depth);
+  if (EVAL && chance(0.12) && depth < 4) return aliasWrap(n);
   if (chance(0.12) && depth < 4) {
     // And/Or of two conditions on the same value, maybe with EtherValue
     // checks beside them (legit: logical nodes evaluate every child in place).
@@ -1538,10 +1580,12 @@ describe("Integrity gaps (fuzz)", function () {
       flat: any[];
       value: number;
       bal: bigint[];
+      alias: boolean;
     };
     const queries: Q[] = [];
     for (let c = 0; c < EVAL; c++) {
       const { t, v, root } = genCase();
+      const alias = tags.has("alias");
       let data = raw(t, v);
       if (chance(0.5)) data = corrupt(data);
       const flat = flattenCondition(strip(root)).map((f) => ({ ...f }));
@@ -1562,6 +1606,7 @@ describe("Integrity gaps (fuzz)", function () {
         flat,
         value,
         bal,
+        alias,
       });
     }
     // The contract first: cases that run out of gas (a corrupted array
@@ -1683,6 +1728,13 @@ describe("Integrity gaps (fuzz)", function () {
         );
     });
     await connection?.close();
+    const aliasCompared = asked.filter((q) => q.alias).length;
+    const aliasOk = asked.filter(
+      (q, k) => q.alias && answers[k].startsWith("0 "),
+    ).length;
+    console.log(
+      `      aliasing shape: ${aliasCompared} compared, ${aliasOk} passed`,
+    );
     console.log(
       `      ${EVAL} cases${PACKED ? " (packed path)" : ""}: ${compared} compared, ${rejected} rejected by ${PACKED ? "the SDK check" : "Integrity"}, ${oog} out of gas, ${diffs.length} differences`,
     );

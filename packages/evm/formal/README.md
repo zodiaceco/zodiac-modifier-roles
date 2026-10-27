@@ -831,8 +831,11 @@ list updated in place, the free memory pointer not advanced, or one word
 short) and run the unit tests, the evaluator differential test and
 `batch.spec`. All four are killed. The two in-place mutants were first
 caught only by `batch.spec`; a unit test (`02Or.spec`: a failed `Or` branch
-charging an allowance charged before the `Or`) now catches them too. The
-evaluator differential test still does not generate that shape.
+charging an allowance charged before the `Or`) now catches them too, and
+so does the evaluator differential test: in `GAP_EVAL` mode the generator
+adds `And[charge(k), Or[And[charge(k), fail], n], charge(k)?]` around about
+one node in eight, also inside array element conditions (in 300 cases, 33
+compared with the shape).
 
 ## Layout
 
