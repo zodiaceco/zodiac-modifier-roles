@@ -25,8 +25,7 @@ items 1, 2 and 6, accepts the safe shapes of items 4 and 10, and covers item 7.
 The SDK implements it in src/main/condition/checkStored.ts, differentially
 tested against the Lean definition (packages/evm/test/formal/sdk-check.spec.ts).
 `checkAndPack` (src/main/condition/packConditions.ts) runs it and packs the
-buffer for the `...Packed` setters. Neither is wired into the SDK's apply
-flow yet.
+buffer for the `...Packed` setters.
 
 Severity:
 

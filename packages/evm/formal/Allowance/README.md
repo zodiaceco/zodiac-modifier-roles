@@ -103,7 +103,11 @@ checks the SDK's `accrueAllowance` against the contract's
   A failed branch's consumption is discarded (`evalC_steps`). The list keeps
   one entry per key (`steps_spec`), so `_persist` stores one `tx` per
   allowance, for a batch too (`authorize_persist`). `executions_limit` is
-  `spending_limit` over executions through Roles.
+  `spending_limit` over executions through Roles; executions never
+  interleave (tested, see
+  [attribution and reentrancy](../EndToEnd/README.md#attribution-and-reentrancy)),
+  so it covers on-chain histories in which the owner does not change
+  allowances during an execution.
 - Price adapters themselves. A price is whatever the adapter returns, and a
   manipulable or stale price makes the value wrong. Adapters are chosen by
   the owner.

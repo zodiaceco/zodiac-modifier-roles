@@ -53,9 +53,9 @@ Not covered yet:
   order and compValue checks listed in its
   [README](ConditionPacking/README.md#hypotheses-packable-and-where-integrity-checks-them);
   that Integrity enforces them is from reading the code, not proven.
-- What `WithinRatio`, `Custom` checkers and allowances do with their
-  operands: accrual, refills, timestamps and storing the consumptions.
-  (`Bitmask` and the comparison operators are proven, `EqualTo` up to a
+- What `WithinRatio` and `Custom` checkers do with their operands.
+  (Allowances are proven in [`Allowance`](#allowances) and
+  [`EndToEnd`](#end-to-end); `Bitmask` and the comparison operators are proven, `EqualTo` up to a
   keccak256 collision on the operand and the compValue; see
   [comparison operators](#comparison-operators).)
 - **The reading, not execution, is the reference.** `Bridge` proves that
@@ -121,8 +121,12 @@ Not covered yet:
   Whether Roles and the target contract decode non-canonical encodings the
   same way is not covered. Not planned for now; it depends on each
   target's decoder.
-- The rest of the contract: authorization flow, memberships, allowances,
-  unwrappers.
+- **Memberships, signatures and reentrancy** are tested on chain, not
+  proven ([attribution and reentrancy](EndToEnd/README.md#attribution-and-reentrancy)).
+- **Settlement order.** That settlement equals running the charges in
+  order holds unless the executed transaction changes the Roles Modifier's
+  own state (documented caveat, shown in
+  `integration-tests/test/e2e/composition.spec.ts`).
 
 ## Notation
 
