@@ -51,8 +51,8 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
  *   library whose condition does not pin `types`. The library accepts typed
  *   messages under any selector, so this allows any typed message.
  * - `sign-typed-message-domain`: a typed-message permission that does not
- *   pin the domain's `chainId` and `verifyingContract` (or whose domain has
- *   no `verifyingContract`, or an unknown layout), so the role can sign that
+ *   pin the domain's `chainId` and `verifyingContract` (or whose domain lacks
+ *   either field, or has an unknown layout), so the role can sign that
  *   message type for other contracts or chains.
  * - `sign-typed-message-authority`: typed messages that authorize actions
  *   of the avatar elsewhere: `RoleTx` (relayed transactions of a Roles
@@ -275,8 +275,10 @@ const domainIsolated = (c: Condition, typeSets: string[][]): boolean => {
   ) {
     return false // unknown or differing domain layouts
   }
-  if (layout.contract === undefined) return false
-  const pinned = (i: number | undefined) =>
-    i === undefined || onPath(c, [0, i], isPinned)
+  // without either field, signatures are valid for other contracts or chains
+  if (layout.contract === undefined || layout.chainId === undefined) {
+    return false
+  }
+  const pinned = (i: number) => onPath(c, [0, i], isPinned)
   return pinned(layout.chainId) && pinned(layout.contract)
 }

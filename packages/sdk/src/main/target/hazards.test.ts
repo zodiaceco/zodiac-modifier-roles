@@ -172,6 +172,21 @@ describe("permissionHazards", () => {
     ])
   })
 
+  it("flags a domain without chainId", () => {
+    expect(
+      kinds([
+        allowSignTypedMessage({
+          types: {
+            EIP712Domain: [{ name: "verifyingContract", type: "address" }],
+            Order: [{ name: "amount", type: "uint256" }],
+          } as const,
+          domain: { verifyingContract: OTHER },
+          message: { amount: 1n },
+        }),
+      ])
+    ).toEqual(["sign-typed-message-domain"])
+  })
+
   it("flags a domain without verifyingContract", () => {
     expect(
       kinds([
