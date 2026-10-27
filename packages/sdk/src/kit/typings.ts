@@ -8,15 +8,12 @@ import {
   isError,
   TransactionRequest,
 } from "ethers"
-import { Condition, Operator, Encoding } from "../main/types"
 // We import via alias to avoid double bundling of sdk functions
 import {
   c,
-  encodeKey,
   ExecutionFlags,
   TargetPermission,
   FunctionPermission,
-  FunctionPermissionCoerced,
 } from "zodiac-roles-sdk"
 
 // For things that are not publicly exported we still use relative paths.
@@ -108,68 +105,40 @@ const makeAllowFunction = <
   }
 
   return (...args: any[]): FunctionPermission => {
-    const scopings = args.slice(0, functionInputs.length) as any[]
-    const hasScopings = scopings.some((s) => !!s)
-    const options = (args[functionInputs.length] || {}) as Options
-    const presetFunction: FunctionPermission = {
-      targetAddress: contract.target as `0x${string}`,
-      signature: functionFragment.format("sighash"),
-      condition: hasScopings
-        ? c.calldataMatches(scopings, functionInputs)()
-        : undefined,
+    if (args.length > functionInputs.length + 1) {
+      throw new Error(
+        `${functionFragment.format("sighash")} takes ${functionInputs.length} scopings and an options object, got ${args.length} arguments`
+      )
     }
-    return applyOptions(coercePermission(presetFunction), options)
-  }
-}
-
-const emptyCalldataMatches = {
-  paramType: Encoding.AbiEncoded,
-  operator: Operator.Matches,
-  children: [],
-}
-
-/**
- * CallWithinAllowance is a global condition that restricts the call rate.
- * It must be appended as a child of the root calldata matches node.
- */
-const applyGlobalAllowance = (
-  condition: Condition = emptyCalldataMatches,
-  allowanceCondition: Condition
-) => {
-  if (
-    condition.paramType !== Encoding.AbiEncoded ||
-    condition.operator !== Operator.Matches
-  ) {
-    throw new Error(
-      "Global allowance can only be applied to calldata matches nodes"
-    )
-  }
-
-  return {
-    ...condition,
-    children: [...(condition.children || []), allowanceCondition],
-  }
-}
-
-const applyOptions = (
-  entry: FunctionPermissionCoerced,
-  options: Options
-): FunctionPermissionCoerced => {
-  let condition = entry.condition
-
-  if (options.callWithinAllowance) {
-    condition = applyGlobalAllowance(condition, {
-      paramType: Encoding.None,
-      operator: Operator.CallWithinAllowance,
-      compValue: encodeKey(options.callWithinAllowance),
-    })
-  }
-
-  return {
-    ...entry,
-    send: options.send,
-    delegatecall: options.delegatecall,
-    condition,
+    const scopings = args.slice(0, functionInputs.length) as any[]
+    // `false`, `0` and `""` are scopings too (equality checks): only an
+    // undefined entry leaves a parameter unscoped
+    const hasScopings = scopings.some((s) => s !== undefined)
+    const options = args[functionInputs.length] ?? {}
+    if (typeof options !== "object" || Array.isArray(options)) {
+      throw new Error(
+        `${functionFragment.format("sighash")}: the argument after the ${functionInputs.length} scopings must be an options object`
+      )
+    }
+    const { send, delegatecall, callWithinAllowance } = options as Options
+    const condition =
+      hasScopings || callWithinAllowance
+        ? // without scopings, the allowance alone (it reads no calldata)
+          c.calldataMatches(
+            hasScopings ? scopings : [],
+            hasScopings ? functionInputs : [],
+            { callWithinAllowance }
+          )()
+        : undefined
+    return {
+      ...coercePermission({
+        targetAddress: contract.target as `0x${string}`,
+        signature: functionFragment.format("sighash"),
+        condition,
+      }),
+      send,
+      delegatecall,
+    }
   }
 }
 
