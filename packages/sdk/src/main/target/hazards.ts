@@ -117,7 +117,10 @@ export const permissionHazards = (
       if (same(selector, PERSONAL_SIGN)) continue
 
       if (same(selector, SIGN_MESSAGE)) {
-        if (!fn.condition || !pinsParameter(fn.condition, 0)) {
+        if (
+          !fn.condition ||
+          !pinsParameter(fn.condition, 0, Encoding.Dynamic)
+        ) {
           hazards.push({
             ...at,
             kind: "sign-message",
@@ -129,7 +132,7 @@ export const permissionHazards = (
       }
 
       // any other selector is signTypedMessage (the library's fallback)
-      if (!fn.condition || !pinsParameter(fn.condition, 2)) {
+      if (!fn.condition || !pinsParameter(fn.condition, 2, Encoding.Array)) {
         hazards.push({
           ...at,
           kind: "sign-typed-message-types",
@@ -180,7 +183,7 @@ const onPath = (
     return (c.children ?? []).some((x) => onPath(x, path, test))
   }
   if (path.length === 0) return test(c)
-  if (c.operator === Operator.Matches) {
+  if (c.operator === Operator.Matches && c.paramType === Encoding.AbiEncoded) {
     const p = c.children?.[path[0]]
     return p !== undefined && onPath(p, path.slice(1), test)
   }
@@ -195,18 +198,25 @@ const pinnedValues = (c: Condition, path: readonly number[]): string[] => {
   if (path.length === 0) {
     return c.operator === Operator.EqualTo && c.compValue ? [c.compValue] : []
   }
-  const p = c.operator === Operator.Matches ? c.children?.[path[0]] : undefined
+  const p =
+    c.operator === Operator.Matches && c.paramType === Encoding.AbiEncoded
+      ? c.children?.[path[0]]
+      : undefined
   return p ? pinnedValues(p, path.slice(1)) : []
 }
 
-/** Fixes the value to exact values: EqualTo, an Or of them, or an And with
- *  one. */
-const isPinned = (c: Condition): boolean =>
-  c.operator === Operator.EqualTo ||
-  (c.operator === Operator.Or && (c.children ?? []).every(isPinned)) ||
-  (c.operator === Operator.And && (c.children ?? []).some(isPinned))
+/** Fixes a value of encoding `enc` to exact values: an EqualTo read as
+ *  `enc` (another encoding compares other bytes, e.g. a word reads only the
+ *  offset of `bytes`), an Or of them, or an And with one. */
+const isPinned =
+  (enc: Encoding) =>
+  (c: Condition): boolean =>
+    (c.operator === Operator.EqualTo && c.paramType === enc) ||
+    (c.operator === Operator.Or && (c.children ?? []).every(isPinned(enc))) ||
+    (c.operator === Operator.And && (c.children ?? []).some(isPinned(enc)))
 
-const pinsParameter = (c: Condition, i: number) => onPath(c, [i], isPinned)
+const pinsParameter = (c: Condition, i: number, enc: Encoding) =>
+  onPath(c, [i], isPinned(enc))
 
 /** The type hashes of the struct nodes of a pinned `types` value
  *  (`abi.encode(tuple(uint256 parent, uint8 encoding, bytes32 typeHash)[])`). */
@@ -279,6 +289,6 @@ const domainIsolated = (c: Condition, typeSets: string[][]): boolean => {
   if (layout.contract === undefined || layout.chainId === undefined) {
     return false
   }
-  const pinned = (i: number) => onPath(c, [0, i], isPinned)
+  const pinned = (i: number) => onPath(c, [0, i], isPinned(Encoding.Static))
   return pinned(layout.chainId) && pinned(layout.contract)
 }

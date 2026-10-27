@@ -45,6 +45,10 @@ describe("permissionHazards", () => {
       ])
     ).toEqual(["sign-message"])
     expect(kinds([msg(c.calldataMatches([hash], ["bytes"]))])).toEqual([])
+    // pinning the offset word of the bytes pins nothing of the message
+    expect(kinds([msg(c.calldataMatches([32n], ["uint256"]))])).toEqual([
+      "sign-message",
+    ])
     expect(
       kinds([
         msg(c.calldataMatches([c.or(hash, keccak256("0x5678"))], ["bytes"])),
