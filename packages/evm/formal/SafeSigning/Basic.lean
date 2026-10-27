@@ -10,9 +10,12 @@ import DecoderFaithfulness.Bytes
 signature by looking that mapping up. Both build the key as Safe's
 `SafeMessage` hash.
 
-`K` is keccak256, a parameter. The only facts about it the theorems use are
-that its outputs are 32 bytes, and, for "nothing else is signed", that it
-has no collision (`Collision K` is the alternative in each statement).
+`K` is keccak256, a parameter. The only fact about it the theorems use is
+that its outputs are 32 bytes. "Nothing else is signed" holds unless `K`
+collides on two inputs the statement names (`CollisionIn K xs`, with `xs`
+computed from the statement's own values): exhibiting one would be a
+keccak256 collision. (Some collision of keccak256 exists, since it has more
+inputs than outputs, so "unless `K` has any collision" would prove nothing.)
 
 The reference for `personalSign` is EIP-191 itself: the message is prefixed
 with `"\x19Ethereum Signed Message:\n"` and its length in decimal.
@@ -108,7 +111,25 @@ def valid32 (K : Bytes → Bytes) (handlerTypeHash ds : Bytes) (signed : Bytes �
     (h : Bytes) : Prop :=
   validBytes K handlerTypeHash ds signed h
 
-/-- `K` has a collision. -/
-def Collision (K : Bytes → Bytes) : Prop := ∃ x y, x ≠ y ∧ K x = K y
+/-- `K` collides on two of the inputs `xs`. Theorems name `xs` explicitly,
+    from their own values, so the alternative is a concrete collision. -/
+def CollisionIn (K : Bytes → Bytes) (xs : List Bytes) : Prop :=
+  ∃ x ∈ xs, ∃ y ∈ xs, x ≠ y ∧ K x = K y
+
+theorem CollisionIn.mono {K : Bytes → Bytes} {xs ys : List Bytes} (h : CollisionIn K xs)
+    (hs : ∀ x ∈ xs, x ∈ ys) : CollisionIn K ys := by
+  obtain ⟨x, hx, y, hy, hne, he⟩ := h
+  exact ⟨x, hs x hx, y, hs y hy, hne, he⟩
+
+/-- `K x = K y` for named `x`, `y`: they are equal, or a collision among them. -/
+theorem eq_or_collision {K : Bytes → Bytes} {x y : Bytes} {xs : List Bytes}
+    (hx : x ∈ xs) (hy : y ∈ xs) (h : K x = K y) : x = y ∨ CollisionIn K xs := by
+  by_cases hne : x = y
+  · exact .inl hne
+  · exact .inr ⟨x, hx, y, hy, hne, h⟩
+
+/-- The three inputs `safeMessageHash K typeHash ds m` hashes. -/
+def safeMessageInputs (K : Bytes → Bytes) (typeHash ds m : Bytes) : List Bytes :=
+  [m, typeHash ++ K m, [0x19, 0x01] ++ ds ++ K (typeHash ++ K m)]
 
 end SafeSigning

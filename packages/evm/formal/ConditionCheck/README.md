@@ -136,20 +136,21 @@ Pluck with that index, and `ZipOK` constrains every such Pluck.
 `__compareSigned`) on `__input`'s result. keccak256 is a parameter.
 `__compare` compares a 32-byte value as the word itself and a longer one by
 its hash, so the `EqualTo` theorems take an operand and a compValue of one
-length class (`SameClass`) and assume no other value of that class has the
-compValue's key (`CollisionFree`): a theorem for words
-(`collisionFree_word`), keccak256's second-preimage resistance for longer
-compValues. Across classes nothing could be assumed: a word the caller
-chooses can equal any hash. The check keeps a static operand and its
+length class (`SameClass`). Within a class, the check passes on a value
+different from the compValue only if the two have the same key
+(`KeyCollides`): never for words (`keyCollides_word`), and for longer values
+a keccak256 collision on exactly these two byte strings. Across classes
+nothing similar holds: a word the caller chooses can equal any hash. The check keeps a static operand and its
 compValue in one class: `EqualTo` on a static tuple needs a compValue of
 exactly the tuple's size (before, a one-field static tuple with a longer
 compValue passed on the word `keccak256(compValue)`).
 
 - `equalTo_iff`: an `EqualTo` on a parameter `u` passes exactly when
-  `enc(u)` equals the stored compValue.
+  `enc(u)` equals the stored compValue, or the two collide
+  (`equalTo_iff_word`: for a 32-byte compValue, exactly equality).
 - `equalTo_intended`: with the compValue the SDK writes, `abi.encode(v)` (the
   packer drops the offset word for dynamic values, `storedCv`), it passes
-  exactly when `enc(u) = enc(v)`.
+  exactly when `enc(u) = enc(v)`, or the two collide.
 - `compare_word`: `GreaterThan`/`LessThan` compare the 32-byte word as an
   unsigned integer, the signed variants as two's complement (`toInt`).
 - `checked_equalTo`: end to end on a stored array the check accepts.
@@ -321,8 +322,8 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
 - `comparePasses` matches `__compare`/`__compareSigned` (hand transcription;
   the fuzzer's reference evaluator agrees with `evaluate` on `EqualTo` and
   comparisons end to end).
-- keccak256 has no second preimages of compValues longer than 32 bytes
-  (`CollisionFree`), for the `EqualTo` theorems; for an operand that is not
-  inlined, a 32-byte encoding is an empty value (fixed bytes), so matching a
-  longer compValue needs a preimage of it.
+- The `EqualTo` theorems hold up to a keccak256 collision on the operand
+  and the compValue (`KeyCollides`); for an operand that is not inlined, a
+  32-byte encoding is an empty value (fixed bytes), so matching a longer
+  compValue needs a preimage of it.
 - `opsOk` is not proven; it only makes the check stricter.

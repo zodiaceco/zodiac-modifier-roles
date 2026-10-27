@@ -54,8 +54,8 @@ Not covered yet:
   that Integrity enforces them is from reading the code, not proven.
 - What `WithinRatio`, `Custom` checkers and allowances do with their
   operands: accrual, refills, timestamps and storing the consumptions.
-  (`Bitmask` and the comparison operators are proven, `EqualTo` assuming
-  keccak256 has no second preimage of a compValue; see
+  (`Bitmask` and the comparison operators are proven, `EqualTo` up to a
+  keccak256 collision on the operand and the compValue; see
   [comparison operators](#comparison-operators).)
 - **The reading, not execution, is the reference.** `Bridge` proves that
   the stored tree computes the contract's *reading* of the tree as written.
@@ -403,8 +403,9 @@ slot), `packableB_sound`, and `checkCondition_avatar` (the avatar stored in
 
 (`equalTo_intended`, `compare_word`, signed variants likewise, `checked_equalTo`
 end to end), for an operand and compValue of one length class (both 32 bytes,
-or both longer), assuming keccak256 has no second preimage of the compValue.
-The check keeps a static operand's compValue at exactly its size.
+or both longer), unless the two differ and keccak256 collides on exactly
+these two values (`KeyCollides`, impossible for words). The check keeps a
+static operand's compValue at exactly its size.
 
 ### Findings
 
@@ -423,8 +424,7 @@ decoding.
 - The decoder and packing proofs' trusted bases.
 - `Run` (`Slots.lean`) matches `evaluate`'s control flow, and `_pluck` is the
   only writer of the slots.
-- `comparePasses` matches `__compare`/`__compareSigned`; keccak256 has no
-  collisions (for `EqualTo`).
+- `comparePasses` matches `__compare`/`__compareSigned`.
 - The fuzzer (`GAP_CHECK=1`) also evaluates every accepted tree without
   Integrity and compares with a reference evaluator.
 
@@ -689,9 +689,11 @@ Trusted (tested, not proven):
   the packer and unpacker (memory pointers are not modeled), the
   comparisons;
 - `EnvOk` and an environment that is a fixed function of its arguments;
-- keccak256: no second preimage of a compValue (`CollisionFree`); the
-  evaluator model also represents a hash as distinct from every word
-  (`B32`), which a caller can only break with a preimage;
+- keccak256: theorems that depend on it hold unless keccak256 collides on
+  two inputs they name (see [hash collisions](#hash-collisions)); the
+  evaluator model also represents a hash by its preimage, distinct from
+  every word (`B32`), which a caller can only break with a collision or a
+  preimage;
 - natural numbers for EVM words where the model needs no wraparound, and no
   gas;
 - the Lean kernel and toolchain; for the tests, the Lean compiler and the
@@ -731,12 +733,22 @@ calls it makes): when the unwrapper accepts, MultiSend executes exactly the
 transactions Roles checked, in order (`unwrap_exec`). Tested against both
 contracts on chain. Details: [MultiSend/README.md](MultiSend/README.md).
 
+## Hash collisions
+
+keccak256 is a parameter `K` of the theorems. Where a statement depends on
+it, the alternative is a collision on inputs the theorem names, computed from
+its own values (`SafeSigning.CollisionIn K xs`,
+`ConditionCheck.KeyCollides`). So the theorem says: the property holds, or
+these specific byte strings are a keccak256 collision, which no one knows how
+to find. An alternative "keccak256 has some collision" would be vacuous: it
+has more inputs than outputs, so collisions exist.
+
 ## Signing through the Safe
 
 `SafeSigning` takes EIP-191 as the reference and proves that the library's
 `uintToString` is the decimal, that `personalSign` and `signTypedMessage`
 make exactly their hash valid in the Safe's `isValidSignature` (unless
-keccak256 collides), and that `signMessage` with a 32-byte message signs that
+keccak256 collides on the inputs involved), and that `signMessage` with a 32-byte message signs that
 raw hash, so it subsumes every other signing permission. Tested against a
 real Safe and its fallback handler. Details:
 [SafeSigning/README.md](SafeSigning/README.md).

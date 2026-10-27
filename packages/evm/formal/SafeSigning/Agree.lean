@@ -86,17 +86,18 @@ theorem uintToString_eq (n : Nat) : uintToString n = decimal n := by
 /-! ## The `SafeMessage` hash determines its message, unless keccak collides -/
 
 theorem safeMessageHash_inj (K : Bytes → Bytes) (th ds a b : Bytes)
-    (h : safeMessageHash K th ds a = safeMessageHash K th ds b) : a = b ∨ Collision K := by
+    (h : safeMessageHash K th ds a = safeMessageHash K th ds b) :
+    a = b ∨ CollisionIn K (safeMessageInputs K th ds a ++ safeMessageInputs K th ds b) := by
   unfold safeMessageHash at h
-  by_cases h1 : [0x19, 0x01] ++ ds ++ K (th ++ K a) = [0x19, 0x01] ++ ds ++ K (th ++ K b)
-  · have h2 : K (th ++ K a) = K (th ++ K b) := List.append_cancel_left h1
-    by_cases h3 : th ++ K a = th ++ K b
-    · have h4 : K a = K b := List.append_cancel_left h3
-      by_cases h5 : a = b
-      · exact Or.inl h5
-      · exact Or.inr ⟨a, b, h5, h4⟩
-    · exact Or.inr ⟨_, _, h3, h2⟩
-  · exact Or.inr ⟨_, _, h1, h⟩
+  rcases eq_or_collision (xs := safeMessageInputs K th ds a ++ safeMessageInputs K th ds b)
+    (by simp [safeMessageInputs]) (by simp [safeMessageInputs]) h with h1 | hc
+  · rcases eq_or_collision (xs := safeMessageInputs K th ds a ++ safeMessageInputs K th ds b)
+      (by simp [safeMessageInputs]) (by simp [safeMessageInputs])
+      (List.append_cancel_left h1) with h3 | hc
+    · exact eq_or_collision (by simp [safeMessageInputs]) (by simp [safeMessageInputs])
+        (List.append_cancel_left h3)
+    · exact .inr hc
+  · exact .inr hc
 
 /-! ## `personalSign` -/
 
@@ -114,9 +115,11 @@ theorem personalSign_valid (K : Bytes → Bytes) (th ds m : Bytes) (hTH : th = s
     keccak256 collides. -/
 theorem personalSign_exact (K : Bytes → Bytes) (th ds m h : Bytes) (hTH : th = safeTypeHash K)
     (hv : validBytes K th ds (· = personalSignKey K ds m) h) :
-    h = personalHash K m ∨ Collision K := by
+    h = personalHash K m ∨
+      CollisionIn K (safeMessageInputs K th ds h ++ safeMessageInputs K th ds (personalHash K m)) := by
   unfold validBytes personalSignKey at hv
-  rw [hTH, uintToString_eq] at hv
+  subst hTH
+  rw [uintToString_eq] at hv
   exact safeMessageHash_inj K _ ds h _ hv
 
 /-! ## `signTypedMessage` -/
@@ -126,9 +129,10 @@ theorem signTyped_valid (K : Bytes → Bytes) (th ds digest : Bytes) (hTH : th =
   unfold valid32 validBytes signTypedKey; rw [hTH]
 
 theorem signTyped_exact (K : Bytes → Bytes) (th ds digest h : Bytes) (hTH : th = safeTypeHash K)
-    (hv : validBytes K th ds (· = signTypedKey K ds digest) h) : h = digest ∨ Collision K := by
+    (hv : validBytes K th ds (· = signTypedKey K ds digest) h) :
+    h = digest ∨ CollisionIn K (safeMessageInputs K th ds h ++ safeMessageInputs K th ds digest) := by
   unfold validBytes signTypedKey at hv
-  rw [hTH] at hv
+  subst hTH
   exact safeMessageHash_inj K _ ds h _ hv
 
 /-! ## `signMessage` signs raw hashes -/

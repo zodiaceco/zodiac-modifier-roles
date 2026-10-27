@@ -23,13 +23,13 @@ a role act with `S`'s roles on `R`?
 
 | Theorem                       | Statement                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `personal_ne_typed` (`Hashes`) | A `personal_sign` hash is never an EIP-712 digest, unless keccak256 has a collision.                                                                                                                                                                                                                                            |
-| `typed_typeHash`              | If the encoder's digest has the EIP-712 form with type hash `th`, then `types[1]` (the message root) carries `th`, unless keccak256 has a collision.                                                                                                                                                                             |
+| `personal_ne_typed` (`Hashes`) | A `personal_sign` hash is never an EIP-712 digest, unless keccak256 collides on the two digests' inputs.                                                                                                                                                                                                                                            |
+| `typed_typeHash`              | If the encoder's digest has the EIP-712 form with type hash `th`, then `types[1]` (the message root) carries `th`, unless keccak256 collides on the two digests' inputs.                                                                                                                                                                             |
 | `pinsArg_sound` (`Pins`)      | If `evaluate` passes a condition that pins argument `i` (every passing branch reaches, through `Or` / `And` and the calldata `Matches`, an `EqualTo` of the expected shape at `i`'s head position), the bytes Roles reads at `tailLocation(data, 4, 32 * i)` are one of the pinned values.                                       |
 | `route_bytes` (`Library`)     | **Roles' reader and Solidity's decoder agree.** If Roles passes a call with the `bytes` argument pinned and Solidity's ABI decoder accepts the calldata, the message `signMessage` / `personalSign` gets is a pinned message, on any calldata.                                                                                     |
 | `route_types`                 | **Roles' reader and the hand-written fallback agree.** If Roles passes a call with `types` pinned (an array of 96-byte elements), the fallback's `typesPtr = calldataload(0x44) + 4` points at the same bytes, and the length and elements it reads are those of a pinned value.                                                    |
 | `route_typed`                 | So a typed-message permission with pinned types produces a `RoleTx` digest only if a pinned value has the `RoleTx` type hash at `types[1]`.                                                                                                                                                                                     |
-| `only_flagged` (`Routes`)     | **Only flagged signing permissions reach a `RoleTx`.** If the key the library stored under a permission Roles passed makes the Safe accept a `RoleTx` digest `D`, then: `signMessage` without a pin, or with `D` itself pinned; or a typed message without pinned types, or with `RoleTx` types; never `personalSign`. Each unless keccak256 has a collision. |
+| `only_flagged` (`Routes`)     | **Only flagged signing permissions reach a `RoleTx`.** If the key the library stored under a permission Roles passed makes the Safe accept a `RoleTx` digest `D`, then: `signMessage` without a pin, or with `D` itself pinned; or a typed message without pinned types, or with `RoleTx` types; never `personalSign`. Each unless keccak256 collides on inputs computed from the call and `D`. |
 
 These are the conditions the SDK's `permissionHazards` checks
 (`sign-message`, `sign-typed-message-types`,
@@ -47,9 +47,10 @@ the signing library, and `permissionHazards` flags them as well:
 - `approveHash` / `execTransaction` on Safes it owns.
 
 Assumptions:
-- keccak256 has no collision. The evaluator model compares values longer
-  than 32 bytes by their preimages, and the theorems state the collision
-  case explicitly.
+- keccak256: the evaluator model compares values longer than 32 bytes by
+  their preimages; the signing theorems hold unless keccak256 collides on
+  inputs they name (`CollisionIn K xs`, see
+  [hash collisions](../README.md#hash-collisions)).
 - Calldata is shorter than `2^256` bytes.
 
 ## Tests

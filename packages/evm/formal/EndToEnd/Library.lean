@@ -333,7 +333,8 @@ theorem hashStructE_lt {K : Bytes → Bytes} {data : Bytes} {types : List EIP712
     signs the digest `hashTypedMessage` computes from the `types` it reads,
     and that digest has the EIP-712 form with type hash `th` (e.g. a `RoleTx`
     for some Roles Modifier), then a pinned value decodes to type nodes whose
-    message root carries `th`, unless keccak256 has a collision. -/
+    message root carries `th`, unless keccak256 collides on the inputs of the
+    two digests. -/
 theorem route_typed {env : Env} {data : Calldata} {n F f : Nat} {root : Condition}
     {cons : List Consumption} {sl : Slots} (K : Bytes → Bytes) (hK : ∀ x, (K x).length = 32)
     (hdl : data.length < 2 ^ 256)
@@ -344,7 +345,8 @@ theorem route_typed {env : Env} {data : Calldata} {n F f : Nat} {root : Conditio
     (hD : EIP712.hashTypedMessage K domain message ts = some (typedDigest K domainSep th fields)) :
     (∃ e, PinUnder 2 root e ∧ pinnedLeaf leafTypes e = true ∧
       decodeTypes (wordVal (key e.compValue)) (pinnedRaw e.compValue) = some ts ∧
-      (ts.getD 1 default).typeHash = th) ∨ SafeSigning.Collision K := by
+      (ts.getD 1 default).typeHash = th) ∨
+      SafeSigning.CollisionIn K (typedInputs K domain message ts ++ typedDigestInputs K domainSep th fields) := by
   obtain ⟨e, hu, hl, hlen, hraw⟩ := route_types hdl hpin hrun
   -- `types[1]` exists (the encoder hashes the message from it) and is 32 bytes
   have h1 : 1 < ts.length := by
