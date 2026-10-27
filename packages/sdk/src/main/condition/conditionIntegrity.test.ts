@@ -6,6 +6,7 @@ import {
   checkConditionIntegrity,
   checkRootConditionIntegrity,
 } from "./conditionIntegrity"
+import { migrateConditionV2 } from "./migrateV2"
 
 suite("checkConditionIntegrity()", () => {
   it("should throw for And without children", () => {
@@ -147,5 +148,16 @@ suite("checkRootConditionIntegrity() with v3 operators", () => {
         operator: Operator.Pluck,
       })
     ).toThrow("must have a compValue")
+  })
+
+  it("accepts a Pass on None, as migrateConditionV2 makes of a v2 root Pass", () => {
+    expect(() =>
+      checkRootConditionIntegrity(
+        migrateConditionV2({
+          paramType: Encoding.None,
+          operator: Operator.Pass,
+        })
+      )
+    ).not.toThrow()
   })
 })

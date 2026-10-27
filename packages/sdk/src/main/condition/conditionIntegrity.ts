@@ -48,7 +48,10 @@ const checkConditionIntegrityRecursive = (condition: Condition): void => {
 
 const checkParamTypeIntegrity = (condition: Condition): void => {
   const COMPATIBLE_TYPES: Record<Operator, Encoding[]> = {
+    // any encoding, like the contract: a Pass on None (what migrateConditionV2
+    // makes of a v2 condition that allows everything) reads nothing
     [Operator.Pass]: [
+      Encoding.None,
       Encoding.Static,
       Encoding.Dynamic,
       Encoding.Tuple,
