@@ -23,6 +23,13 @@ rolesMod.setTransactionUnwrapper(
 
 Addresses of the official MultiSend deployments on all chains are listed at https://github.com/safe-global/safe-deployments.
 
+### How a batch is checked
+
+- Each transaction of the batch must pass its own permission: the target or function entry for it, its execution options (value, delegatecall), and its condition on its own calldata. The batch passes only if every transaction does.
+- All transactions are checked before any of them executes. Conditions that read state outside the calldata (custom conditions, `WithinRatio`, price adapters) see that state as it was before the batch, for every transaction in it, not as earlier transactions of the batch leave it.
+- Allowances are charged across the whole batch: two transactions metered by the same allowance draw from one balance, and the batch is settled once, after it executed.
+- A batch inside a batch (a transaction of the batch that delegatecalls `MultiSend`) is not unwrapped. It is checked as a single delegatecall against the role's permission on `MultiSend`, and the transactions inside it are not checked one by one.
+
 ## Custom unwrappers
 
 Custom transaction unwrapping logic can be implemented as contracts conforming to the `ITransactionUnwrapper` interface.
@@ -48,3 +55,5 @@ interface ITransactionUnwrapper {
 
 The `UnwrappedTransaction` struct uses `dataLocation` and `dataSize` to reference a slice of the original calldata rather than copying the data bytes.
 This design avoids unnecessary memory allocation when unwrapping batch transactions.
+
+Roles checks the transactions the unwrapper returns and never the call itself. An unwrapper must therefore return exactly the transactions its target executes for that calldata, on any calldata, also malformed: anything the target executes that the unwrapper leaves out runs unchecked.
