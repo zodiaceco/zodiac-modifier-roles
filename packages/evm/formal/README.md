@@ -118,10 +118,12 @@ Not covered yet:
   missing: the check accepted a `Slice` over a `Slice`, which adequacy does
   not model; it now requires a leaf below a `Slice` (one `Slice` with the
   combined shift does the same).
-- **Malformed calldata, on the target.** `Bridge` holds on every calldata.
-  Whether Roles and the target contract decode non-canonical encodings the
-  same way is not covered. Not planned for now; it depends on each
-  target's decoder.
+- **Non-canonical calldata, on the target.** For targets compiled by solc,
+  [target decoding](TargetDecode/README.md) proves that each check Roles
+  makes is a check on what the target decodes. That the checks then combine
+  to the same verdict is tested, not proven; crafted encodings can choose
+  among `Or` branches (documented). Targets with other decoders (Vyper,
+  hand-written) and custom checkers are not covered.
 - **Memberships, signatures and reentrancy** are tested on chain, not
   proven ([attribution and reentrancy](EndToEnd/README.md#attribution-and-reentrancy)).
 - **Settlement order.** That settlement equals running the charges in
@@ -853,6 +855,8 @@ compared with the shape).
 | `MultiSend/`           | The batch format, the unwrapper and MultiSend's loop, README                         |
 | `SafeSigning/`         | EIP-191, `uintToString`, the stored keys and the Safe's `isValidSignature`, README   |
 | `Allowance/`           | Refill, charging with decimals and prices, the spending limit, README                |
+| `EndToEnd/`            | Signing routes, batches, the spending limit over executions, README                  |
+| `TargetDecode/`        | Values read by following offsets, solc's decoder, Roles' walker on any layout, README |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
