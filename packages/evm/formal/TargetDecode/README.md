@@ -76,6 +76,12 @@ choice among the branches that pass, and so which allowances are
 charged. Found by the fuzz in `Or[And[charge K, EqualTo(bytes)], Bitmask]`:
 the crafted calldata passed without charging `K`.
 
+This needs non-standard encoding crafted on purpose, so only an
+adversarial role member can do it; standard-encoded calls always take the
+first passing branch. Documented in the `Or` section of
+`packages/docs/content/general/conditions.mdx`: when branches overlap,
+don't rely on an earlier branch's allowance being charged.
+
 ## Not covered (yet)
 
 - **The walker on loose layouts** (the `LP` counterpart of decoder
