@@ -61,6 +61,11 @@ export {
   checkAndPack,
   checkAndPackCondition,
 } from "./condition/packConditions"
+export {
+  migrateConditionV2,
+  MigrateV2Error,
+  type ConditionV2,
+} from "./condition/migrateV2"
 
 /*
  *
