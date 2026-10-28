@@ -104,7 +104,10 @@ structure RootFit (Γ : Plucks) (root : Condition) (tys : Nat → TN) : Prop whe
     that sits at a member of argument `j` (`domain` or `message`) the
     encoder read, or reads a window inside one. `ms j` is the length the
     library uses for argument `j`, `tys j` its type tree, and the encoder's
-    walk of both arguments succeeded. -/
+    walk of both arguments succeeded. The member is the one the encoder's
+    walk of `tys j` reads, by its path from the argument root (`Reach`).
+    `tys` is taken as given: it is the type tree the library builds only
+    when the permission pins `types` (`RootFit` does not require that). -/
 theorem sign_agree (Γ : Plucks) (data : Bytes) (root : Condition) (tys : Nat → TN)
     (ms : Nat → Nat) (hroot : RootFit Γ root tys)
     (hread : ∀ j, j < 2 → ∃ fuel v,
@@ -112,7 +115,7 @@ theorem sign_agree (Γ : Plucks) (data : Bytes) (root : Condition) (tys : Nat �
     {p : List Nat} {d : Condition} {l : Nat} (he : Eval data root p d l) :
     (p = [] ∧ d = root) ∨ (∃ j, j < 2 ∧ p = [j] ∧ d = root.children.getD j default) ∨
     (∃ q, p = 2 :: q ∧ NoPZ d) ∨
-    (∃ j q, j < 2 ∧ p = j :: q ∧ q ≠ [] ∧ Site Γ data (argAt data j + 32) (ms j) d l) := by
+    (∃ j q, j < 2 ∧ p = j :: q ∧ q ≠ [] ∧ Site Γ data (argAt data j + 32) (ms j) (tys j) d l) := by
   induction he with
   | @visit p d l hv =>
     cases hv with
@@ -130,7 +133,7 @@ theorem sign_agree (Γ : Plucks) (data : Bytes) (root : Condition) (tys : Nat �
           Visit data (root.children.getD j default) L p' d l →
           (∃ j', j' < 2 ∧ j :: p' = [j'] ∧ d = root.children.getD j' default) ∨
           (∃ j' q, j' < 2 ∧ j :: p' = j' :: q ∧ q ≠ [] ∧
-            Site Γ data (argAt data j' + 32) (ms j') d l) := by
+            Site Γ data (argAt data j' + 32) (ms j') (tys j') d l) := by
         intro j hj L ht hb hv
         have hLa : L = argAt data j := fallback_offset data j L ht hb
         obtain ⟨fuel, v, hr⟩ := hread j hj
@@ -156,7 +159,7 @@ theorem sign_agree (Γ : Plucks) (data : Bytes) (root : Condition) (tys : Nat �
       · have := hroot.op; rcases hzop with h | h <;> simp_all
       · have := (hroot.args j hj).op; rcases hzop with h | h <;> simp_all
       · cases hnz; rcases hzop with h | h <;> simp_all
-      · rcases hsite with ⟨t, _, _, _, _, hfit, _, _⟩ | ⟨hw, _⟩
+      · rcases hsite with ⟨t, _, _, _, _, _, hfit, _, _⟩ | ⟨hw, _⟩
         · cases hfit with
           | zip _ hex hall =>
             obtain ⟨lf, hg, hm⟩ := hex f hf
@@ -173,19 +176,21 @@ theorem sign_agree (Γ : Plucks) (data : Bytes) (root : Condition) (tys : Nat �
     · have := hroot.op; simp_all
     · have := (hroot.args j hj).op; simp_all
     · cases hnz; simp_all
-    · rcases hsite with ⟨t, fuel, r, v, hL, hfit, hread', _⟩ | ⟨hw, _⟩
+    · rcases hsite with ⟨t, fuel, r, v, hR, hL, hfit, hread', _⟩ | ⟨hw, _⟩
       · cases hfit with
         | pluck _ hpl =>
           obtain ⟨th, rfl⟩ := hpl lf (by rw [hslot]; exact hg)
           obtain ⟨fu, rfl⟩ := readV_succ hread'
           rw [hL] at hch
-          obtain ⟨elocs, vs, rfl, rfl, hel, hk⟩ :=
+          obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hk⟩ :=
             children_agree_array (c := zipStub ((zipFields z).getD f default)) hread' rfl
               (by simpa [zipStub] using hmeta) locs hch
           have hi' : i < elocs.length := by simpa using hi
+          have hR' : Reach (view data (argAt data j + 32) (ms j)) (tys j) lf elocs[i] := by
+            simpa using Reach.child (k := i) hR hcl hi'
           refine Or.inr (Or.inr (Or.inr ⟨j, q ++ i :: p, hj, by simp, by simp, ?_⟩))
-          exact visit_agree Γ data _ _ hv'
-            (Or.inl ⟨lf, fu, _, _, by simp, hft, hk i hi' (by omega), Or.inl hmeta⟩)
+          exact visit_agree Γ data _ _ (tys j) hv'
+            (Or.inl ⟨lf, fu, _, _, hR', by simp, hft, hk i hi' (by omega), Or.inl hmeta⟩)
         | leaf hn => simp_all [NoDescend]
         | _ => simp_all [IsZip]
       · cases hw <;> simp_all [NoDescend]

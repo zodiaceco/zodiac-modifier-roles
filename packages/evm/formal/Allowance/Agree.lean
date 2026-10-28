@@ -18,7 +18,8 @@ import Allowance.Basic
 * `accrue_eq`: closed form, `k` full periods credited at once.
 * `accrue_accrue`: accruing at `t1` then `t2` is accruing at `t2`: when
   transactions happen does not change the balance.
-* `accrue_cap`: refills never raise the balance above `maxRefill`.
+* `accrue_cap`: refills never raise the balance above
+  `max(balance, maxRefill)` (a balance already above the cap stays).
 * `accrue_bounds`: with the storage word sizes nothing overflows.
 * `update_retroactive`: `updateAllowance` keeps balance and timestamp
   without accruing, so the new refill also pays the periods that elapsed

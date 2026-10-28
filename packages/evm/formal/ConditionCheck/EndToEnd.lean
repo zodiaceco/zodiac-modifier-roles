@@ -13,7 +13,13 @@ with a `...Packed` setter (no Integrity on-chain):
    `annotate (rawTree fs 0)`;
 3. `checked_input` (`checkCondition_sound` + `decoder_input`): on every
    well-typed calldata, every node `evaluate` reaches in that tree that reads
-   `__input` reads the spec encoding of its value.
+   `__input` reads the spec encoding of its value (or a window of it below a
+   `Slice`, the ether value, or the node is inside a variant branch that does
+   not fit, `InStray`).
+
+`stored_input` covers a root of type `.call` only. A variant root (an `Or` of
+`AbiEncoded` branches, type `.dynamic` with `s = true`) is not covered by a
+chained input theorem.
 -/
 
 namespace ConditionCheck
@@ -36,7 +42,7 @@ theorem stored_input {s : Bool} {fs : List ConditionPacking.Flat} (hP : Conditio
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
     input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) (ConditionPacking.rawTree avatar fs 0) 0 (.call pre args) p d l := by
   rw [ConditionPacking.pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, -⟩ := hu

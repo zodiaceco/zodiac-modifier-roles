@@ -10,7 +10,8 @@ pruning gone, normalization keeps these for every node of a well-typed tree
 `norm_inv` proves it; `readWorld_normOk` turns it into the assumptions of
 the normalization proof (`World.NormOk`).
 
-`inv` is what the SDK check enforces, node by node (`invP`): what adequacy
+`inv` is what the SDK check is tested to imply (`checkStored ⇒ inv` is
+tested, not proven), node by node (`invP`): what adequacy
 needs (`adOk`); the children of an `And`/`Or` that read a parameter share one
 layout, and the others are inlined and empty unless a sibling that reads a
 parameter is not inlined (so the node is not); the children of a check on a
@@ -43,7 +44,7 @@ def descOp (o : Nat) : Bool := o == 0 || (15 ≤ o && o ≤ 22) || o == 28
 
 def isLog (c : Cond) : Prop := c.op = 1 ∨ c.op = 2
 
-/-- The local well-typedness the SDK check enforces. -/
+/-- The local well-typedness the SDK check is tested to imply. -/
 def invP (c : Cond) : Prop :=
   adOk c ∧
   (isLog c → c.enc = 0) ∧

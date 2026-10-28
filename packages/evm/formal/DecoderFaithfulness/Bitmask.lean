@@ -8,7 +8,8 @@ checks on the operand bytes `bs`, byte by byte. `decoder_bitmask` shows
 that `BitmaskChecker.check`, which works on 32-byte chunks with a rinse mask
 for the last chunk, returns exactly that on correctly encoded calldata,
 with `bs` the spec bytes of the parameter: its 32-byte word, its content
-for `bytes`/`string`, or the window below a `Slice`.
+for `bytes`/`string`, or a window of the content below a `Slice` (which
+window is tested, not proven).
 -/
 
 namespace DecoderFaithfulness
@@ -262,9 +263,10 @@ variable (root : Condition) (pre : Bytes) (args : List Val) (suffix : Bytes)
 /-- **Bitmask.** For every visited `Bitmask` node (Integrity: on a `Static`
     or `Dynamic` parameter), `BitmaskChecker.check` returns exactly
     `bitmaskSpec` on the spec bytes of the described component: its word,
-    its content for `bytes`/`string`, or below a `Slice` the window. This
-    holds for any memory contents after the compValue (`junk`). Or the node
-    is inside an interpretation that need not hold (only with `s = true`). -/
+    its content for `bytes`/`string`, or below a `Slice` a window of the
+    content. This holds for any memory contents after the compValue
+    (`junk`). Or the node is inside a variant branch that does not fit the
+    bytes value it is evaluated on (`InStray`, only with `s = true`). -/
 theorem decoder_bitmask {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
@@ -278,7 +280,7 @@ theorem decoder_bitmask {s : Bool}
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       bitmaskCheck (calldata pre args suffix) l d.compValue d.inlined d.size junk =
         bitmaskSpec bs d.compValue) ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
     ⟨d0, bs, u, rfl, hw, hat, _, _, hsub, hiw⟩ | hst

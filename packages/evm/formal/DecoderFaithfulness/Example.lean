@@ -289,7 +289,7 @@ theorem root3_zipOK {s : Bool} : ZipOK s root3 := by
     the Zip as well, is where the spec puts its component. -/
 example (p : List Nat) (d : Condition) (l : Nat)
     (hv : Eval (calldata selector args3 []) (annotate root3) p d l) :
-    Reached false (calldata selector args3 []) root3 (.call selector args3) p d l :=
+    Reached false (calldata selector args3 []) root3 0 (.call selector args3) p d l :=
   decoder_locations root3 selector args3 [] root3_desc root3_ok root3_zipOK (by decide +kernel) hv
 
 end DecoderFaithfulness.Example

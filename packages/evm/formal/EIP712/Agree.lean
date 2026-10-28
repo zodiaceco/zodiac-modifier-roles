@@ -19,7 +19,9 @@ Roles reads the same calldata with `AbiLocation.children`
   exactly at `base +` the encoder's location.
 * `visit_agree`: for a condition tree that follows the type tree (`FitT`),
   every node `evaluate` visits sits at `base +` the location where the
-  encoder reads the corresponding member, and that member was read.
+  encoder reads the corresponding member, and that member was read. The
+  member is one the encoder's walk of the argument's type tree `t0` reaches
+  from offset 0 of the view (`Reach`), by its path from the argument root.
 * `static_input` / `dynamic_input`: at such a node, the operand Roles
   compares is the word the encoder hashes, or a preimage that contains the
   bytes the encoder hashes.
@@ -234,6 +236,25 @@ theorem loop_agree (data : Bytes) (base m : Nat) (cs : List TN) (isArray : Bool)
                           hfit' hb rs hr
                         simp [this]; omega
 
+/-! ## The encoder's walk -/
+
+/-- Where the encoder reads the children of `t` at `r`: a tuple's members,
+    or an array's elements (after its length word). The location loop of
+    `blockLoop`. -/
+def childLocs (d : Bytes) (t : TN) (r : Nat) : Option (List Nat) :=
+  if t.encoding = .Array then
+    (wordAt d r).bind fun w => blockLoop d (fun _ l => some l) t.children true (r + 32) (wordVal w) 0 0
+  else if t.encoding = .Tuple then
+    blockLoop d (fun _ l => some l) t.children false r t.children.length 0 0
+  else none
+
+/-- `Reach d t0 t r`: the encoder's walk of the type tree `t0` (read at
+    offset `0` of `d`) reads the subtree `t` at offset `r`. -/
+inductive Reach (d : Bytes) (t0 : TN) : TN → Nat → Prop
+  | root : Reach d t0 t0 0
+  | child {t r locs k} : Reach d t0 t r → childLocs d t r = some locs → (hk : k < locs.length) →
+      Reach d t0 (t.children.getD (if t.encoding = .Array then 0 else k) default) locs[k]
+
 /-! ## Per node -/
 
 /-- The children of a `Tuple` type node: where Roles' `children` finds them
@@ -244,7 +265,8 @@ theorem children_agree_tuple {data : Bytes} {base m fuel r : Nat} {t : TN} {v : 
     (hfit : ∀ k (h1 : k < c.children.length) (h2 : k < t.children.length),
       MetaFit c.children[k] t.children[k]) :
     ∀ locs', children data (base + r) c = some locs' →
-    ∃ (locs : List Nat) (vs : List V), locs' = locs.map (base + ·) ∧ v = .list vs ∧ locs.length = t.children.length ∧
+    ∃ (locs : List Nat) (vs : List V), locs' = locs.map (base + ·) ∧ v = .list vs ∧
+      childLocs (view data base m) t r = some locs ∧ locs.length = t.children.length ∧
       vs.length = t.children.length ∧
       ∀ k (h1 : k < locs.length) (h2 : k < vs.length) (h3 : k < t.children.length),
         readV (view data base m) fuel t.children[k] locs[k] = some vs[k] := by
@@ -273,7 +295,7 @@ theorem children_agree_tuple {data : Bytes} {base m fuel r : Nat} {t : TN} {v : 
           simp [List.getD_eq_getElem?_getD, hk]
         rw [h1, h2]
         exact hfit k (by omega) hk) hl locs' hc
-    refine ⟨locs, vs, this, rfl, hll, hvl, fun k h1 h2 h3 => ?_⟩
+    refine ⟨locs, vs, this, rfl, by simp [childLocs, he, hl], hll, hvl, fun k h1 h2 h3 => ?_⟩
     have := hk k h1 h2
     simp only [Bool.false_eq_true, ite_false, Nat.zero_add] at this
     have h4 : t.children.getD k default = t.children[k] := by
@@ -286,7 +308,8 @@ theorem children_agree_array {data : Bytes} {base m fuel r : Nat} {l : TN} {th :
     (hread : readV (view data base m) (fuel + 1) ⟨.Array, [l], th⟩ r = some v)
     (hce : c.encoding = .Array) (hfit : MetaFit (c.children.headD default) l) :
     ∀ locs', children data (base + r) c = some locs' →
-    ∃ (locs : List Nat) (vs : List V), locs' = locs.map (base + ·) ∧ v = .list vs ∧ locs.length = vs.length ∧
+    ∃ (locs : List Nat) (vs : List V), locs' = locs.map (base + ·) ∧ v = .list vs ∧
+      childLocs (view data base m) ⟨.Array, [l], th⟩ r = some locs ∧ locs.length = vs.length ∧
       ∀ k (h1 : k < locs.length) (h2 : k < vs.length),
         readV (view data base m) fuel l locs[k] = some vs[k] := by
   intro locs' hc
@@ -315,7 +338,7 @@ theorem children_agree_array {data : Bytes} {base m fuel r : Nat} {l : TN} {th :
       · rw [show base + r + 32 = base + (r + 32) by omega, ← load_view data base m r hwb, ← hwv] at hc
         have := loop_agree data base m [l] true (r + 32) (fun _ => c.children.headD default)
           (wordVal w) 0 0 locs (by intro k _; simpa using hfit) hl locs' hc
-        refine ⟨locs, vs, this, rfl, by omega, fun k h1 h2 => ?_⟩
+        refine ⟨locs, vs, this, rfl, by simp [childLocs, hw, hl], by omega, fun k h1 h2 => ?_⟩
         simpa using hk k h1 h2
 
 /-! ## Every node `evaluate` visits -/
@@ -381,23 +404,25 @@ inductive FitT (Γ : Plucks) : Condition → TN → Prop
       0 < sliceSize c.compValue → sliceSize c.compValue ≤ 32 →
       FitW Γ (c.children.headD default) → FitT Γ c t
 
-/-- `d` at `l` is the member of type `t` the encoder read at `r` (in the
-    view from `base`). -/
-def Member (Γ : Plucks) (data : Bytes) (base m : Nat) (d : Condition) (l : Nat) : Prop :=
-  ∃ t fuel r v, l = base + r ∧ FitT Γ d t ∧ readV (view data base m) fuel t r = some v ∧
-    MetaOk d t
+/-- `d` at `l` is the member of type `t` that the encoder's walk of the
+    argument's type tree `t0` reads at `r` (in the view from `base`). -/
+def Member (Γ : Plucks) (data : Bytes) (base m : Nat) (t0 : TN) (d : Condition) (l : Nat) :
+    Prop :=
+  ∃ t fuel r v, Reach (view data base m) t0 t r ∧ l = base + r ∧ FitT Γ d t ∧
+    readV (view data base m) fuel t r = some v ∧ MetaOk d t
 
 /-- `d` at `l` reads `d.size` bytes inside a member the encoder read: inside
     the word of a `Static` member (from byte `sh`), or inside the content of
     a `bytes` / `string` member (from byte `sh`). -/
-def Window (Γ : Plucks) (data : Bytes) (base m : Nat) (d : Condition) (l : Nat) : Prop :=
+def Window (Γ : Plucks) (data : Bytes) (base m : Nat) (t0 : TN) (d : Condition) (l : Nat) :
+    Prop :=
   FitW Γ d ∧ 0 < d.size ∧ d.size ≤ 32 ∧ ∃ t fuel r v sh,
-    readV (view data base m) fuel t r = some v ∧
+    Reach (view data base m) t0 t r ∧ readV (view data base m) fuel t r = some v ∧
     ((∃ w, t.encoding = .Static ∧ v = .atom w ∧ l = base + r + sh ∧ sh + d.size ≤ 32) ∨
      (∃ b, t.encoding = .Dynamic ∧ v = .dyn b ∧ l = base + r + 32 + sh ∧ sh + d.size ≤ b.length))
 
-def Site (Γ : Plucks) (data : Bytes) (base m : Nat) (d : Condition) (l : Nat) : Prop :=
-  Member Γ data base m d l ∨ Window Γ data base m d l
+def Site (Γ : Plucks) (data : Bytes) (base m : Nat) (t0 : TN) (d : Condition) (l : Nat) : Prop :=
+  Member Γ data base m t0 d l ∨ Window Γ data base m t0 d l
 
 theorem readV_succ {t : TN} {fuel r : Nat} {d : Bytes} {v : V}
     (h : readV d fuel t r = some v) : ∃ f, fuel = f + 1 := by
@@ -465,45 +490,52 @@ theorem fitW_withSize {Γ : Plucks} {c : Condition} (n : Nat) (h : FitW Γ c) :
 /-- **Every node `evaluate` visits, on any calldata, sits where the encoder
     read the corresponding member, or reads a window inside it**, when the
     encoder's walk succeeded and the condition follows the type tree. -/
-theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) {c : Condition} {loc : Nat}
-    {p : List Nat} {d : Condition} {l : Nat} (hv : Visit data c loc p d l) :
-    Site Γ data base m c loc → Site Γ data base m d l := by
+theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) (t0 : TN) {c : Condition}
+    {loc : Nat} {p : List Nat} {d : Condition} {l : Nat} (hv : Visit data c loc p d l) :
+    Site Γ data base m t0 c loc → Site Γ data base m t0 d l := by
   induction hv with
   | here => exact id
   | @logical c loc p d l ch hop hmem _ ih =>
-    rintro (⟨t, fuel, r, v, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
+    rintro (⟨t, fuel, r, v, hR, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
     · cases hfit with
-      | logical _ hm hf => exact ih (Or.inl ⟨t, fuel, r, v, hloc, hf ch hmem, hread, hm ch hmem⟩)
+      | logical _ hm hf =>
+        exact ih (Or.inl ⟨t, fuel, r, v, hR, hloc, hf ch hmem, hread, hm ch hmem⟩)
       | leaf hn => rcases hop with h | h <;> simp_all [NoDescend]
       | zip hz => rcases hop with h | h <;> rcases hz with h' | h' <;> simp_all
       | array _ _ _ hop' => rcases hop with h | h <;> rcases hop' with h' | h' | h' | h' <;> simp_all
       | _ => rcases hop with h | h <;> simp_all
     · cases hw <;> rcases hop with h | h <;> simp_all [NoDescend]
   | @matchesChild c loc p d l locs i hi hop hch hlen _ ih =>
-    rintro (⟨t, fuel, r, v, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
+    rintro (⟨t, fuel, r, v, hR, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
     · obtain ⟨f, rfl⟩ := readV_succ hread
       cases hfit with
       | tuple _ he hna hnabi hlb hl hm hf =>
         rw [if_neg (by rintro ⟨_, h⟩; exact hnabi h), hlb, Nat.add_zero, hloc] at hch
-        obtain ⟨elocs, vs, rfl, rfl, hel, hvl, hk⟩ := children_agree_tuple hread he hna hl hm locs hch
+        obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hvl, hk⟩ :=
+          children_agree_tuple hread he hna hl hm locs hch
         have hi' : i < elocs.length := by simpa using hi
         have hic : i < c.children.length := by simp at hlen; omega
         have hit : i < t.children.length := by omega
         have hg : c.children.getD i default = c.children[i] := by
           simp [List.getD_eq_getElem?_getD, hic]
-        exact ih (Or.inl ⟨_, f, _, _, by simp, by rw [hg]; exact hf i hic hit,
+        have hR' : Reach (view data base m) t0 t.children[i] elocs[i] := by
+          have := Reach.child (k := i) hR hcl hi'
+          simpa [he, List.getD_eq_getElem?_getD, hit] using this
+        exact ih (Or.inl ⟨_, f, _, _, hR', by simp, by rw [hg]; exact hf i hic hit,
           hk i hi' (by omega) hit, Or.inl (by rw [hg]; exact hm i hic hit)⟩)
       | @array _ l' th he hlb _ hop' hm hf =>
         rw [if_neg (by rintro ⟨_, h⟩; rw [he] at h; exact absurd h (by decide)), hlb, Nat.add_zero,
           hloc] at hch
         have hic : i < c.children.length := by omega
         have hne : c.children ≠ [] := by intro h; rw [h] at hic; simp at hic
-        obtain ⟨elocs, vs, rfl, rfl, hel, hk⟩ :=
+        obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hk⟩ :=
           children_agree_array hread he (hm _ (headD_mem hne)) locs hch
         have hi' : i < elocs.length := by simpa using hi
         have hg : c.children.getD i default = c.children[i] := by
           simp [List.getD_eq_getElem?_getD, hic]
-        exact ih (Or.inl ⟨_, f, _, _, by simp, by rw [hg]; exact hf _ (List.getElem_mem hic),
+        have hR' : Reach (view data base m) t0 l' elocs[i] := by
+          simpa using Reach.child (k := i) hR hcl hi'
+        exact ih (Or.inl ⟨_, f, _, _, hR', by simp, by rw [hg]; exact hf _ (List.getElem_mem hic),
           hk i hi' (by omega), Or.inl (by rw [hg]; exact hm _ (List.getElem_mem hic))⟩)
       | leaf hn => simp_all [NoDescend]
       | zip hz => rcases hz with h | h <;> simp_all
@@ -511,15 +543,17 @@ theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) {c : Condition} 
       | _ => simp_all
     · cases hw <;> simp_all [NoDescend]
   | @arrayIter c loc p d l locs i hi hop hch _ ih =>
-    rintro (⟨t, fuel, r, v, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
+    rintro (⟨t, fuel, r, v, hR, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
     · obtain ⟨f, rfl⟩ := readV_succ hread
       cases hfit with
       | @array _ l' th he hlb hne hop' hm hf =>
         rw [hloc] at hch
-        obtain ⟨elocs, vs, rfl, rfl, hel, hk⟩ :=
+        obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hk⟩ :=
           children_agree_array hread he (hm _ (headD_mem hne)) locs hch
         have hi' : i < elocs.length := by simpa using hi
-        exact ih (Or.inl ⟨_, f, _, _, by simp, hf _ (headD_mem hne), hk i hi' (by omega),
+        have hR' : Reach (view data base m) t0 l' elocs[i] := by
+          simpa using Reach.child (k := i) hR hcl hi'
+        exact ih (Or.inl ⟨_, f, _, _, hR', by simp, hf _ (headD_mem hne), hk i hi' (by omega),
           Or.inl (hm _ (headD_mem hne))⟩)
       | leaf hn => rcases hop with h | h <;> simp_all [NoDescend]
       | zip hz => rcases hop with h | h <;> rcases hz with h' | h' <;> simp_all
@@ -527,17 +561,19 @@ theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) {c : Condition} 
       | _ => rcases hop with h | h <;> simp_all
     · cases hw <;> rcases hop with h | h <;> simp_all [NoDescend]
   | @arrayTail c loc p d l locs j hj hop hch hle hjc _ ih =>
-    rintro (⟨t, fuel, r, v, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
+    rintro (⟨t, fuel, r, v, hR, hloc, hfit, hread, _⟩ | ⟨hw, _⟩)
     · obtain ⟨f, rfl⟩ := readV_succ hread
       cases hfit with
       | @array _ l' th he hlb hne hop' hm hf =>
         rw [hloc] at hch
-        obtain ⟨elocs, vs, rfl, rfl, hel, hk⟩ :=
+        obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hk⟩ :=
           children_agree_array hread he (hm _ (headD_mem hne)) locs hch
         have hg : c.children.getD j default = c.children[j] := by
           simp [List.getD_eq_getElem?_getD, hjc]
         have hj' : elocs.length - c.children.length + j < elocs.length := by simpa using hj
-        exact ih (Or.inl ⟨_, f, _, _, by simp, by rw [hg]; exact hf _ (List.getElem_mem hjc),
+        have hR' : Reach (view data base m) t0 l' elocs[elocs.length - c.children.length + j] := by
+          simpa using Reach.child (k := elocs.length - c.children.length + j) hR hcl hj'
+        exact ih (Or.inl ⟨_, f, _, _, hR', by simp, by rw [hg]; exact hf _ (List.getElem_mem hjc),
           hk _ hj' (by omega), Or.inl (by rw [hg]; exact hm _ (List.getElem_mem hjc))⟩)
       | leaf hn => simp_all [NoDescend]
       | zip hz => rcases hz with h | h <;> simp_all
@@ -545,13 +581,14 @@ theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) {c : Condition} 
       | _ => simp_all
     · cases hw <;> simp_all [NoDescend]
   | @slice c loc p d l hop _ hle _ ih =>
-    rintro (⟨t, fuel, r, v, hloc, hfit, hread, _⟩ | ⟨hw, _, _, t, fuel, r, v, sh, hread, hwin⟩)
+    rintro (⟨t, fuel, r, v, hR, hloc, hfit, hread, _⟩ |
+      ⟨hw, _, _, t, fuel, r, v, sh, hR, hread, hwin⟩)
     · cases hfit with
       | slice _ hkind hs1 hs2 hfw =>
         apply ih
         right
         refine ⟨fitW_withSize _ hfw, by simpa using hs1, by simpa using hs2, t, fuel, r, v,
-          sliceShift c.compValue, hread, ?_⟩
+          sliceShift c.compValue, hR, hread, ?_⟩
         rcases hkind with ⟨hst, hin, hsz⟩ | ⟨hdy, hin⟩
         · left
           obtain ⟨w, rfl, _, _⟩ := readV_static hread hst
@@ -572,7 +609,7 @@ theorem visit_agree (Γ : Plucks) (data : Bytes) (base m : Nat) {c : Condition} 
         right
         rename_i hs1 hs2
         refine ⟨fitW_withSize _ hfw, by simpa using hs1, by simpa using hs2, t, fuel, r, v,
-          sh + sliceShift c.compValue, hread, ?_⟩
+          sh + sliceShift c.compValue, hR, hread, ?_⟩
         rw [hin, if_pos rfl] at hle
         rcases hwin with ⟨w, h1, h2, h3, h4⟩ | ⟨b, h1, h2, h3, h4⟩
         · exact Or.inl ⟨w, h1, h2, by rw [hin, if_pos rfl, h3]; omega, by simp; omega⟩
@@ -737,7 +774,7 @@ theorem message_agree (Γ : Plucks) (data : Bytes) (L m : Nat) {c : Condition} {
     {fuel : Nat} {v : V} (hmf : MsgFit Γ c tm) (hL : 0 < L)
     (hread : readV (view data (L + 32) m) fuel tm 0 = some v)
     {p : List Nat} {d : Condition} {l : Nat} (hv : Visit data c L p d l) :
-    (p = [] ∧ d = c) ∨ (p ≠ [] ∧ Site Γ data (L + 32) m d l) := by
+    (p = [] ∧ d = c) ∨ (p ≠ [] ∧ Site Γ data (L + 32) m tm d l) := by
   obtain ⟨f, rfl⟩ := readV_succ hread
   have hop := hmf.op
   cases hv with
@@ -747,7 +784,7 @@ theorem message_agree (Γ : Plucks) (data : Bytes) (L m : Nat) {c : Condition} {
     right
     refine ⟨by simp, ?_⟩
     rw [if_pos ⟨hL, hmf.enc⟩, hmf.lb, Nat.add_zero, show L + 32 = L + 32 + 0 by rfl] at hch
-    obtain ⟨elocs, vs, rfl, rfl, hel, hvl, hk⟩ :=
+    obtain ⟨elocs, vs, rfl, rfl, hcl, hel, hvl, hk⟩ :=
       children_agree_tuple hread hmf.tuple (by rw [hmf.enc]; decide) hmf.len hmf.metas locs hch
     have hi' : i < elocs.length := by simpa using hi
     have hic : i < c.children.length := by simp at hl; omega
@@ -755,7 +792,10 @@ theorem message_agree (Γ : Plucks) (data : Bytes) (L m : Nat) {c : Condition} {
     have hg : c.children.getD i default = c.children[i] := by
       simp [List.getD_eq_getElem?_getD, hic]
     rw [hg] at hv'
-    exact visit_agree Γ data (L + 32) m hv' (Or.inl ⟨_, f, _, _, by simp, hmf.fits i hic hit,
+    have hR : Reach (view data (L + 32) m) tm tm.children[i] elocs[i] := by
+      have := Reach.child (k := i) (Reach.root (d := view data (L + 32) m) (t0 := tm)) hcl hi'
+      simpa [hmf.tuple, List.getD_eq_getElem?_getD, hit] using this
+    exact visit_agree Γ data (L + 32) m tm hv' (Or.inl ⟨_, f, _, _, hR, by simp, hmf.fits i hic hit,
       hk i hi' (by omega) hit, Or.inl (hmf.metas i hic hit)⟩)
   | arrayIter _ _ _ hop' => rcases hop' with h | h <;> simp_all
   | arrayTail _ _ _ hop' => simp_all
@@ -765,12 +805,13 @@ theorem message_agree (Γ : Plucks) (data : Bytes) (L m : Nat) {c : Condition} {
     hashes**: bytes `[sh, sh + d.size)` of the member's word, or of the
     content of the `bytes` / `string` member (unless Roles finds it out of
     bounds, which fails the node). -/
-theorem window_input {Γ : Plucks} {data : Bytes} {base m : Nat} {d : Condition} {l : Nat}
-    (hw : Window Γ data base m d l) (hde : d.encoding ≠ .None) :
-    input data l d = .overflow ∨ ∃ t fuel r v sh, readV (view data base m) fuel t r = some v ∧
+theorem window_input {Γ : Plucks} {data : Bytes} {base m : Nat} {t0 : TN} {d : Condition}
+    {l : Nat} (hw : Window Γ data base m t0 d l) (hde : d.encoding ≠ .None) :
+    input data l d = .overflow ∨ ∃ t fuel r v sh, Reach (view data base m) t0 t r ∧
+      readV (view data base m) fuel t r = some v ∧
       ((∃ w, v = .atom w ∧ input data l d = .word (wordVal ((w.drop sh).take d.size))) ∨
        (∃ b, v = .dyn b ∧ input data l d = .word (wordVal ((b.drop sh).take d.size)))) := by
-  obtain ⟨_, hpos, h32, t, fuel, r, v, sh, hread, hwin⟩ := hw
+  obtain ⟨_, hpos, h32, t, fuel, r, v, sh, hR, hread, hwin⟩ := hw
   have hin : input data l d = if l + d.size > data.length then .overflow
       else if d.size = 32 then .word (load data l)
       else if d.size < 32 then .word (wordVal ((data.drop l).take d.size))
@@ -791,7 +832,7 @@ theorem window_input {Γ : Plucks} {data : Bytes} {base m : Nat} {d : Condition}
       · rename_i h; rw [load_eq_take (by omega), h]
       · rw [if_pos (by omega)]
     rw [hword]
-    refine ⟨t, fuel, r, v, sh, hread, ?_⟩
+    refine ⟨t, fuel, r, v, sh, hR, hread, ?_⟩
     rcases hwin with ⟨w, hst, rfl, hl, hle⟩ | ⟨b, hdy, rfl, hl, hle⟩
     · obtain ⟨w', hv, hw', hm⟩ := readV_static hread hst
       injection hv with hv

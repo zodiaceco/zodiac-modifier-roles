@@ -163,11 +163,13 @@ theorem toInt_spec (x : Nat) :
 
 /-- **End to end, `EqualTo`.** On a stored array the check accepts, with a
     typed root: for every well-typed calldata, every visited `EqualTo` node
-    passes exactly when its operand's spec encoding equals its compValue
-    (when the two are of one length class, which the check ensures for a
-    static operand: its compValue has exactly its size), unless it reads a
-    `Slice` window, the ether value, or sits in an interpretation that does
-    not fit (only with `s = true`). -/
+    passes exactly when its operand's spec encoding equals its compValue,
+    unless it reads a `Slice` window, the ether value, or sits in a variant
+    branch that does not fit (`InStray`, only with `s = true`). Two
+    hypotheses are assumed, not derived from `checkStored`: the operand and
+    the compValue are of one length class (`SameClass`; the check keeps a
+    static operand's compValue at exactly its size, but no theorem states
+    it), and the compValue has at least 32 bytes (`hcv`). -/
 theorem checked_equalTo {keccak : Bytes → Nat} (value : Nat)
     {s : Bool} {fs : List ConditionPacking.Flat} {lb : Nat} {ts : List Ty} {o : Bool}
     (h : checkStored s fs = some (.typed (.call lb ts o))) (avatar : Bytes)
@@ -183,7 +185,7 @@ theorem checked_equalTo {keccak : Bytes → Nat} (value : Nat)
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
     input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) (ConditionPacking.rawTree avatar fs 0) 0 (.call pre args) p d l := by
   have hs := checkStored_sound h avatar (fun _ => 0) (fun _ => 0)
   obtain ⟨_, _, _, hr, hz, hd⟩ := hs
   have hD := hd pre args (.inr ⟨lb, ts, o, rfl, .inl ⟨hpre, hargs⟩⟩) ⟨pre, args, rfl, hpre, hargs⟩

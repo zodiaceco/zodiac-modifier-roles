@@ -15,8 +15,11 @@ A result is `(some c', s')` (passes, with consumptions `c'`) or
 `(none, s')` (fails). The structural operators normalization rewrites are
 defined here: `Pass`, `And`, `Or`, and `Matches` on tuples and calldata
 (children read the fields in order; a non-structural child reads no field).
-Every other operator is the world's `ext`, which sees its children only
-through their meanings; `World.Ok` lists what is assumed of it.
+Every other operator is the world's `ext`, which gets the node itself and
+its children's meanings. `World.Ok` lists what is assumed of its effects;
+`World.NormOk.ext` assumes that rewriting a node's children does not change
+what `ext` does (proven for the contract's reading on well-typed trees,
+`Bridge.readWorld_normOk`).
 -/
 
 namespace Normalize

@@ -6,11 +6,14 @@ import ConditionPacking.Main
 
 The SDK normalizes a tree, flattens it (BFS) and packs it; the contract
 unpacks the buffer and evaluates. `sdk_pipeline`: for a well-typed tree
-(`inv`, which the SDK check enforces), on every calldata, whenever the
-contract's evaluation of the tree it unpacks from the stored buffer does
-not revert, it computes the contract's reading of the tree as the user wrote
-it: it passes exactly when that reading does, with the same allowance
-consumptions and Pluck slots. A revert denies the call.
+(`inv`, which the SDK check is tested to imply), on every calldata and
+every starting consumptions `cons` (empty for a single call, those of the
+earlier transactions in a MultiSend batch), whenever the contract's
+evaluation of the tree it unpacks from the stored buffer does not revert,
+it computes the contract's reading of the tree as the user wrote it: it
+passes exactly when that reading does, with the same allowance consumptions
+and Pluck slots. A revert denies the call. The reading uses `mp`, the
+number of Pluck slots read from the stored buffer.
 
 The flat array is related to the normalized tree by `nest` (read the tree
 back from the array: node `i`'s children are the later nodes whose parent is
@@ -190,18 +193,20 @@ include henv in
     every calldata, whenever the contract's evaluation of the tree it unpacks
     from the stored buffer does not revert, it passes exactly when the
     contract's reading of `c0` does, with the same allowance consumptions and
-    Pluck slots. -/
+    Pluck slots. `cons` are the consumptions the evaluation starts from: empty
+    for a single call, those of the earlier transactions in a batch. -/
 theorem sdk_pipeline (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List Flat) (hP : Packable fs)
     (hfs : nest fs 0 = normalize k c0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
     (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp))
-    (hne : (run env data tree mp []).status ≠ revert) :
-    Rel (run env data tree mp []) (sem (readWorld avatar env data mp) c0 (.pos 0) Slots.empty (toMap [])) := by
+    (cons : List Consumption) (hne : (run env data tree mp cons).status ≠ revert) :
+    Rel (run env data tree mp cons)
+      (sem (readWorld avatar env data mp) c0 (.pos 0) Slots.empty (toMap cons)) := by
   rw [pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, rfl⟩ := hu
   rw [unpacked_eq avatar fs hP 0, hfs] at hne ⊢
   unfold run at hne ⊢
-  exact normalize_meaning avatar env henv data (maxPluck fs) k hc 0 _ (by rw [depth_D]; omega) [] Slots.empty hne
+  exact normalize_meaning avatar env henv data (maxPluck fs) k hc 0 _ (by rw [depth_D]; omega) cons Slots.empty hne
 
 include henv in
 /-- The stored tree and the tree as written, evaluated by the contract,
@@ -209,11 +214,11 @@ include henv in
 theorem sdk_pipeline_agree (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List Flat) (hP : Packable fs)
     (hfs : nest fs 0 = normalize k c0) (junk junk' : Mem) {tree : Condition} {mp : Nat}
     (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp))
-    (hne : (run env data (D avatar c0) mp []).status ≠ revert)
-    (hne' : (run env data tree mp []).status ≠ revert) :
-    Agree (run env data (D avatar c0) mp []) (run env data tree mp []) := by
-  have h1 := eval_reading avatar env henv data mp hc 0 _ (by rw [depth_D]; omega) [] Slots.empty hne
-  exact h1.agree (sdk_pipeline avatar env henv data c0 hc k fs hP hfs junk junk' hu hne')
+    (cons : List Consumption) (hne : (run env data (D avatar c0) mp cons).status ≠ revert)
+    (hne' : (run env data tree mp cons).status ≠ revert) :
+    Agree (run env data (D avatar c0) mp cons) (run env data tree mp cons) := by
+  have h1 := eval_reading avatar env henv data mp hc 0 _ (by rw [depth_D]; omega) cons Slots.empty hne
+  exact h1.agree (sdk_pipeline avatar env henv data c0 hc k fs hP hfs junk junk' hu cons hne')
 
 end
 end Bridge

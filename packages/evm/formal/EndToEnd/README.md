@@ -18,10 +18,13 @@ lake build EndToEnd
 ## Signing routes into Roles authority
 
 A Roles Modifier `R` runs `execTransactionWithSignature` for a module `S` (a
-Safe) once `S.isValidSignature(D, "")` accepts the digest `D` of a `RoleTx`
-for `R`. A role on `S`'s own Roles Modifier can make `S` accept digests
-through `SignTypedMessageLib`. The question: which of those permissions let
-a role act with `S`'s roles on `R`?
+Safe) once `S.isValidSignature(D, sig)` accepts the digest `D` of a `RoleTx`
+for `R`. zodiac-core passes `sig = signature[20:]`, which the relayer
+chooses. Only an empty `sig` reaches the Safe's `signedMessages` (what
+`validBytes` models); a non-empty one goes to the Safe's owner check, a
+route listed separately below. A role on `S`'s own Roles Modifier can make
+`S` accept digests through `SignTypedMessageLib`. The question: which of
+those permissions let a role act with `S`'s roles on `R`?
 
 | Theorem                       | Statement                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -33,16 +36,20 @@ a role act with `S`'s roles on `R`?
 | `route_typed`                 | So a typed-message permission with pinned types produces a `RoleTx` digest only if a pinned value has the `RoleTx` type hash at `types[1]`.                                                                                                                                                                                     |
 | `only_flagged` (`Routes`)     | **Only flagged signing permissions reach a `RoleTx`.** If the key the library stored under a permission Roles passed makes the Safe accept a `RoleTx` digest `D`, then: `signMessage` without a pin, or with `D` itself pinned; or a typed message without pinned types, or with `RoleTx` types; never `personalSign`. Each unless keccak256 collides on inputs computed from the call and `D`. |
 
-These are the conditions the SDK's `permissionHazards` checks
-(`sign-message`, `sign-typed-message-types`,
-`sign-typed-message-authority`). Two of its rules came from the proof:
+`only_flagged` is about `pinsArg` (`FlaggedOrExact`), and covers the
+`SignTypedMessageLib` route only. The SDK's `permissionHazards` checks the
+same conditions (`sign-message`, `sign-typed-message-types`,
+`sign-typed-message-authority`); that it flags whatever `pinsArg` rejects is
+tested (`hazards-pins.spec.ts`, below), not proven. The SDK is stricter in
+about 1% of the `types` cases. Two of its rules came from the proof:
 - the `types` pin must read 96-byte elements, or Roles compares fewer bytes
   than the library hashes;
 - a pin must sit at its argument's head position (the arguments before it
   one word each), or Roles reads it elsewhere than the library does.
 
 The other ways to make a Safe's EIP-1271 check accept something sit outside
-the signing library, and `permissionHazards` flags them as well:
+the signing library. `permissionHazards` flags them as well; no theorem
+covers them:
 - the Safe's owners;
 - delegatecall into other code;
 - calls to the Safe itself (fallback handler, owners, modules);
@@ -87,9 +94,14 @@ that do or do not take one head word, other leading bytes) and runs
 Wherever the SDK raises no `sign-message` or `sign-typed-message-types`
 hazard, `pinsArg` must hold. Three seeds of 3,000: no exception; about 500
 `bytes` and 290 `types` cases pinned. The SDK is stricter in about 30
-`types` cases per seed, all with an argument before `types` described by an
-`And` over children of different types: the SDK cannot tell how many head
-words it takes, the unpacked tree can.
+`types` cases per seed (about 1%), all with an argument before `types`
+described by an `And` over children of different types: the SDK cannot tell
+how many head words it takes, the unpacked tree can.
+
+`NonVacuity.lean` (built with the library): a concrete two-transaction batch
+with real charges that `authorize` lets through, so the hypotheses of
+`executed_authorized`, `authorize_persist` and `executions_limit` hold on a
+non-trivial input.
 
 ## Batches: every executed transaction passed its permission
 
@@ -107,14 +119,30 @@ avatar executes, `Settlement._persist` writes that list.
 It also transcribes `_persist` on the allowances (`persist`, in
 `Consume.lean`).
 
+The glue around them is checked by reading the code, not modelled: each
+execution entry point reaches `_authorize`, the avatar is called with the
+same `to, value, data, operation`, and `_persist` runs only on success. All
+four entry points go through `_execWithRole` / `_execWithRoleReturnData`.
+
 | Theorem                          | Statement                                                                                                                                                                                                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `evalC_steps` (`Consume`)        | **Failed branches leave no trace.** When `evaluate` passes, the consumptions it returns are the input list after a sequence of successful `consume` steps: the charges on the path that passed. That holds for every tree, under `Or`, the array operators and `Zip` alike.                    |
 | `steps_spec`                     | **One entry per key.** Along such steps the list never holds a key twice. Each entry keeps the accrued balance and is never overdrawn. For every key, the steps are exactly `Allowance.consumeAll` on that key's charges.                                                                     |
 | `persist_get`, `persist_tx`      | `_persist` writes every entry in order, so a second entry for a key would overwrite the first. With one entry per key, each key is written once. What it stores for every key is `Allowance.tx` on that key's charges.                                                                     |
-| `executed_authorized` (`Batch`)  | **Every transaction the avatar executes passed its permission.** When `_authorize` lets a call through, the avatar executes either the call itself or, with an unwrapper registered, exactly the transactions `MultiSend`'s loop runs (`MultiSend.unwrap_exec`). Each of them resolved a scope entry for its target and selector, had options that allow its value and operation, and passed its condition on its own calldata. |
+| `executed_authorized` (`Batch`)  | **Every transaction the avatar executes passed its permission.** When `_authorize` lets a call through, the avatar executes either the call itself or, with an unwrapper registered, exactly the transactions `MultiSend`'s loop runs (`MultiSend.unwrap_exec`). Each of them resolved a scope entry for its target and selector, had options that allow its value and operation, and passed its condition on its own calldata, with the consumptions threaded from one transaction to the next (`chain p envOf [] es = some cons`; `Permitted` alone only says some consumptions exist). |
 | `authorize_persist`              | **Settlement after a batch is one `Allowance.tx` per allowance**, with the charges of all the batch's transactions, in order.                                                                                                                                                                |
-| `executions_limit`               | **Spending limit, end to end.** Over any executions through Roles at block times up to `T`, batches included, the charges to an allowance total at most its stored balance plus `refill` for each full period up to `T` (`Allowance.spending_limit`).                                          |
+| `executions_limit`               | **Spending limit, end to end.** Over any executions through Roles at block times up to `T`, batches included, the raw amounts charged to an allowance total at most its stored balance plus `refill` for each full period up to `T` (`Allowance.spending_limit`).                                |
+
+`executions_limit` bounds charged amounts. The conversion of a priced spend
+into balance units (`Env.scale` in the evaluator model) is abstract here:
+no theorem ties it to `Allowance.charge`. The value-level results
+(`value_limit`, `charged_covers`) are about the `Allowance` model; they are
+tested through Roles on single calls (`allowance.spec.ts`), not in batches.
+
+`envOf e` is not tied to `e` in the statements: the theorems hold for every
+`envOf`. `Permitted p (envOf e) e` means "its ether-value checks saw
+`e.value`" when `envOf` is chosen that way, as the driver (`Diff.lean`)
+does.
 
 Hypotheses. Each is a fact about the deployment, not something the code can
 check:
@@ -178,11 +206,13 @@ the test runs the compiled contracts with a real Safe instead.
    flag set before any external call and cleared on exit. `moduleOnly` and
    `moduleOnlySigned` (zodiac-core) add a second transient guard, the
    authenticated module (`AlreadyAuthenticated`).
-2. Before the avatar's call, every external call Roles makes is a
-   staticcall: the ERC-1271 `isValidSignature`, the unwrapper (a `view`
-   function), custom checkers, price adapters. Between entry and the
-   avatar's call nothing changes state except Roles' own write of the used
-   digest.
+2. Before the avatar's call, every external call Roles makes to other
+   code is a staticcall: the ERC-1271 `isValidSignature`, the unwrapper (a
+   `view` function), custom checkers, price adapters. `CustomConditionChecker.check`
+   and `WithinRatioChecker.check` are external library functions, which
+   Solidity calls with DELEGATECALL into Roles' own linked libraries; those
+   staticcall the checkers and adapters. Between entry and the avatar's call
+   nothing changes state except Roles' own write of the used digest.
 3. During the avatar's call, a nested execution reverts with `Reentrancy`.
    Of the other state-changing functions, a caller who is not the owner can
    only use those keyed by the caller: `invalidate` (its own digests) and

@@ -18,21 +18,21 @@ A successful build means every theorem below is proven. There is no `sorry`,
 
 | Property                                                                                                                                                      | Library                                                | Status |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------ |
-| [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter  | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
-| [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every array Integrity's width and order checks accept | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
+| [Decoder faithfulness](#decoder-faithfulness): on correctly encoded calldata, every condition checks exactly the bytes the ABI spec assigns to its parameter (inside a variant branch that does not fit, only where the branch starts) | [`DecoderFaithfulness`](DecoderFaithfulness/README.md) | Proven |
+| [Condition packing](#condition-packing): unpacking a packed condition array returns the input tree, for every `Packable` array (the checks we read Integrity as enforcing) | [`ConditionPacking`](ConditionPacking/README.md)       | Proven |
 | [Condition check](#condition-check): a decidable check on stored arrays (the spec for the SDK): packing, Pluck slots and the decoder hypotheses hold          | [`ConditionCheck`](ConditionCheck/README.md)           | Proven |
 | [Normalization](#normalization): the SDK's `normalizeCondition` never changes what a condition means (on decoded values)                                       | [`Normalize`](Normalize/README.md)                     | Proven |
 | [Evaluation on calldata](#evaluation-on-calldata): on every calldata, the evaluator computes the contract's own reading, which meets normalization's assumptions   | [`Bridge`](Bridge/)                                    | Proven |
 | [Normalization on calldata](#normalization-on-calldata): on every calldata, the normalized tree computes the contract's reading of the tree as written            | [`Bridge`](Bridge/)                                    | Proven |
-| [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree                              | [`Bridge`](Bridge/)                                    | Proven |
+| [SDK pipeline](#the-sdk-pipeline-end-to-end): normalize → flatten → pack → unpack → evaluate computes the reading of the user's tree, whenever the stored tree does not revert | [`Bridge`](Bridge/)                                    | Proven |
 | [Evaluator model](#the-evaluator-model): `Evaluate/Model.lean` against `ConditionEvaluator.evaluate`                                                             | [`Evaluate`](Evaluate/)                                | Tested |
 | [EIP-712 signing](#eip-712-signing): the contract signs the EIP-712 digest of what it reads, and Roles checks exactly the members it hashes                     | [`EIP712`](EIP712/README.md)                           | Proven |
 | [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
 | [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
 | [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
-| [End to end](#end-to-end): signing permissions reach a Roles Modifier's `RoleTx` only through the permissions `permissionHazards` flags; every transaction the avatar executes, batches included, passed its own permission, and the spending limit holds across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
+| [End to end](#end-to-end): through `SignTypedMessageLib`, a signing permission reaches a Roles Modifier's `RoleTx` only if its argument is not pinned (`pinsArg`) or is pinned to that `RoleTx` (that `permissionHazards` flags these is tested); every transaction the avatar executes, batches included, passed its own permission with consumptions threaded through the batch, and the raw charges obey the spending limit across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
 | [Attribution and reentrancy](#end-to-end): executions never interleave; each runs as an enabled, active member, each signature once | [`EndToEnd`](EndToEnd/README.md#attribution-and-reentrancy) | Tested |
-| [Target decoding](TargetDecode/README.md): on every layout solc's decoder accepts (tails reordered, shared or gapped, dirty padding), each node Roles visits is where the target reads its component; static operands are exactly the decoded values, an `EqualTo` passes only if the target decoded the pinned value, `Bitmask` and `Slice` see the bytes the target decodes. That checks combine per `Or` branch is tested | [`TargetDecode`](TargetDecode/README.md) | Proven |
+| [Target decoding](TargetDecode/README.md): on every layout solc's decoder accepts (tails reordered, shared or gapped, dirty padding), each node Roles visits is where the target reads its component; static operands are exactly the decoded values, an `EqualTo` passes only if the target decoded the pinned value (up to a keccak256 collision), `Bitmask` sees the bytes the target decodes and `Slice` a window of them. Inside a variant branch that does not fit, only where the branch starts. That checks combine per `Or` branch is tested | [`TargetDecode`](TargetDecode/README.md) | Proven |
 
 Not covered yet:
 
@@ -114,7 +114,7 @@ Not covered yet:
   normalized form it accepts (`test/formal/sdk-normalize.spec.ts`; 14,300
   over 8 seeds, all well-typed as written). `checkAndPackCondition` (the SDK
   entry point for the whole path) checks the tree as written too, so the
-  proof's hypothesis is enforced, not inferred. The test found one rule
+  check runs on the tree the hypothesis is about. The test found one rule
   missing: the check accepted a `Slice` over a `Slice`, which adequacy does
   not model; it now requires a leaf below a `Slice` (one `Slice` with the
   combined shift does the same).
@@ -177,10 +177,24 @@ and the same statements apply to them.
 
 The exact statements also cover nodes below `Slice` (windows), nodes that never
 read calldata, and interpretations that don't fit the data. Each theorem ends
-with **or (iv)**: with $`s = \mathsf{true}`$, $`d`$ may lie inside an
-interpretation that does not fit the data. That interpretation's root sits
-exactly at the right `bytes` value, but nothing is promised inside it. With
-$`s = \mathsf{false}`$, (iv) is impossible (`InStray.strict`).
+with **or (iv)** (`InStray`): with $`s = \mathsf{true}`$, $`d`$ may lie inside
+a variant branch (a node of the tree) that does not describe the `bytes` value
+it is evaluated on. The walk from the root reaches that branch exactly where
+the `bytes` value sits, by the same index path; nothing is promised inside
+it. With $`s = \mathsf{false}`$, (iv) is impossible (`InStray.strict`). So
+the full guarantee is for trees without variants (or checked with
+$`s = \mathsf{false}`$); the SDK's check defaults to $`s = \mathsf{true}`$,
+which allows variants.
+
+Below a `Slice` the theorems give *some* window $`w \sqsubseteq
+\mathsf{content}(u)`$, not which one. That it is
+$`[\mathit{shift}, \mathit{shift} + \mathit{size})`$ is tested (the Slice
+end-to-end tests in `test/formal/lean-model.spec.ts`).
+
+A review of the statements found that (iv) used to need only *some* bytes-like
+condition and *some* bytes value, so with $`s = \mathsf{true}`$ every theorem
+held without its hypotheses. It now needs the conditions above
+([details](DecoderFaithfulness/README.md#findings)).
 
 ### `decoder_locations`: every visited node sits where the spec puts its component
 
@@ -191,7 +205,7 @@ One of:
 &\text{(i)}\quad \mathsf{Desc}_s(d, u) \;\wedge\; \mathsf{cd}[\ell, |\mathsf{enc}(u)|] = \mathsf{enc}(u) \\
 &\text{(ii)}\quad \exists\, w \sqsubseteq \mathsf{content}(u),\; 1 \le |w| \le 32:\; \mathsf{cd}[\ell, |w|] = w \qquad \text{(below }\texttt{Slice}\text{)} \\
 &\text{(iii)}\quad d \text{ never reads calldata (e.g. }\texttt{EtherValue}\text{)} \\
-&\text{(iv)}\quad \text{inside an interpretation that does not fit}
+&\text{(iv)}\quad \text{inside a variant branch that does not fit, evaluated where its bytes value sits}
 \end{aligned}
 ```
 
@@ -237,12 +251,14 @@ For $`d`$ a `Tuple`, `Array` or `AbiEncoded` node:
 
 ```math
 \exists\, \vec\ell:\;\; \mathsf{children}(\mathsf{cd}, \ell', d) = \mathsf{some}(\vec\ell)
-\;\wedge\; |\vec\ell| = |\mathsf{components}(u)|
+\;\wedge\; |\vec\ell| = \begin{cases} |\mathsf{components}(u)| & d \text{ an }\texttt{Array} \\ |\mathsf{children}(d)| & \text{otherwise} \end{cases}
+\;\wedge\; |\vec\ell| \le |\mathsf{components}(u)|
 \qquad \text{or (iv)}
 ```
 
 Here $`\ell'`$ is $`\ell`$ moved past the length word and leading bytes for
-nested calldata. By `decoder_locations`, each $`\ell_i`$ is then where the spec
+nested calldata. A `Matches` may leave out trailing fields, so a tuple or call
+gets one location per child of the node, not per component. By `decoder_locations`, each $`\ell_i`$ is then where the spec
 put component $`i`$.
 
 ### `decoder_slice`: `Slice` rejects exactly when the spec window doesn't exist
@@ -399,7 +415,8 @@ the ether value.
 
 The parts: `checkCondition_sound` (the type check gives the decoder
 hypotheses), `run_sound` (the slot rule: no execution reads an unwritten
-slot), `packableB_sound`, and `checkCondition_avatar` (the avatar stored in
+slot), `packableB_sound` (`packableB` implies `Packable`), and
+`checkCondition_avatar` (the avatar stored in
 `EqualToAvatar` nodes doesn't matter).
 
 ### Comparison operators
@@ -414,7 +431,13 @@ slot), `packableB_sound`, and `checkCondition_avatar` (the avatar stored in
 end to end), for an operand and compValue of one length class (both 32 bytes,
 or both longer), unless the two differ and keccak256 collides on exactly
 these two values (`KeyCollides`, impossible for words). The check keeps a
-static operand's compValue at exactly its size.
+static operand's compValue at exactly its size. In `checked_equalTo` the
+length class (`SameClass`) and a compValue of at least 32 bytes are
+hypotheses; no theorem derives them from `checkStored`.
+
+The chained operand theorems (`checked_input`, `stored_input`) cover a root
+of type `call` only. A variant root (an `Or` of `AbiEncoded` branches, type
+`dynamic` with $`s = \mathsf{true}`$) is not covered by them.
 
 ### Findings
 
@@ -434,6 +457,12 @@ decoding.
 - `Run` (`Slots.lean`) matches `evaluate`'s control flow, and `_pluck` is the
   only writer of the slots.
 - `comparePasses` matches `__compare`/`__compareSigned`.
+- The SDK's `checkStored.ts` equals the Lean `checkStored` (tested, not
+  proven: differential tests in `test/formal/sdk-check.spec.ts`, driver
+  query `ck`).
+- The SDK's `packConditions.ts` equals the Lean `packSpec` (tested, not
+  proven: `sdk-check.spec.ts` and `sdk-packed-roles.spec.ts`, driver query
+  `pk`).
 - The fuzzer (`GAP_CHECK=1`) also evaluates every accepted tree without
   Integrity and compares with a reference evaluator.
 
@@ -466,21 +495,24 @@ written, consumptions start over in every branch. Every other operator is
 opaque. For every fuel $`n`$:
 
 ```math
+\mathsf{Ok}(W) \;\wedge\; \mathsf{NormOk}_{\mathsf{inv}}(W) \;\wedge\; \mathsf{inv}(c)
+\;\Longrightarrow\;
 \forall v\, \sigma\, \kappa.\quad [\![\mathsf{normalize}_n(c)]\!](v, \sigma, \kappa) = [\![c]\!](v, \sigma, \kappa)
 ```
 
-The opaque operators are assumed to (`World.Ok`): see their children only
-through their meanings; write slots only if `Pluck`; charge only if
-`Custom`, `WithinAllowance` or `CallWithinAllowance`; and choose between
-charges depending on earlier ones only if `ArraySome` or `ZipSome`. Charges
-commute, which `consume_comm` proves of `AllowanceConsumer.consume`.
+An opaque operator gets its node and its children's meanings. The opaque
+operators are assumed to (`World.Ok`): write slots only if
+`Pluck`; charge only if `Custom`, `WithinAllowance` or
+`CallWithinAllowance`; and choose between charges depending on earlier ones
+only if `ArraySome` or `ZipSome`. Charges commute, which `consume_comm`
+proves of `AllowanceConsumer.consume`.
 
-A world that reads a value through the tree's own types (where a field of a
-`Matches` is depends on its children's sizes) also needs `World.NormOk`: an
-invariant `inv` of the trees, kept by every rewrite, under which a
-normalized child is read where the child was, and the `Or` a merge puts at
-the hinge is read where each branch's hinge child was. For worlds that ignore
-the tree's types it holds with `inv = True`.
+`World.NormOk`: an invariant `inv` of the trees, kept by every rewrite,
+under which rewriting a node's children does not change what an opaque
+operator does (`NormOk.ext`), a normalized child is read where the child
+was, and the `Or` a merge puts at the hinge is read where each branch's
+hinge child was. The reading on calldata meets it on well-typed trees
+(`readWorld_normOk`, below).
 
 ### Findings
 
@@ -670,20 +702,30 @@ The SDK normalizes the user's tree $`c_0`$, flattens it to $`\mathit{fs}`$ and
 stores `pack(fs)`; the contract unpacks and evaluates. If $`c_0`$ is
 well-typed, $`\mathit{fs}`$ is `Packable` (which `checkStored` proves) and
 reads back as $`\mathsf{normalize}_k(c_0)`$ (`nest`: node $`i`$'s children
-are the later nodes whose parent is $`i`$), then on every calldata:
+are the later nodes whose parent is $`i`$), then on every calldata and every
+starting consumptions $`\kappa`$, with
+$`(t, \mathit{mp}) = \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))`$:
 
 ```math
-\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \neq \mathsf{revert}
+\mathsf{run}(\mathit{cd}, t, \mathit{mp}, \kappa) \neq \mathsf{revert}
 \;\Longrightarrow\;
-\mathsf{run}(\mathit{cd}, \mathsf{unpack}(\mathsf{pack}(\mathit{fs}))) \sim [\![c_0]\!]_{\mathsf{read}}(0, \emptyset, \emptyset)
+\mathsf{run}(\mathit{cd}, t, \mathit{mp}, \kappa) \sim [\![c_0]\!]_{\mathsf{read},\mathit{mp}}(0, \emptyset, \kappa)
 ```
+
+$`\mathit{mp}`$ is the number of Pluck slots read from the stored buffer;
+normalization keeps every Pluck, so it is the same for $`c_0`$. $`\kappa`$ is
+empty for a single call; in a MultiSend batch it holds the consumptions of
+the earlier transactions. (Before, the theorems fixed $`\kappa = \emptyset`$
+and did not cover later transactions of a batch.)
 
 The contract enforces what the contract's reading of the tree as written
 says, whenever the stored tree does not revert. Chains
 `pack_roundtrip`, `unpacked_eq` (the unpacked tree is $`D`$ of the tree read
 back) and `normalize_meaning`. `sdk_pipeline_agree`: the contract's
 evaluations of the stored tree and of $`D(c_0)`$ agree whenever neither
-reverts.
+reverts, from the same starting consumptions. `Bridge/NonVacuity.lean`
+gives a tree that normalization rewrites on which every hypothesis holds, and
+whose reading passes on one calldata and fails on another.
 
 Trusted (tested, not proven):
 
@@ -719,12 +761,19 @@ hand-written one with `Slice`, `Pluck` and Zip conditions:
 
 - `hashField_spec`: on any bytes, the encoder returns the EIP-712 spec hash of
   the value it reads (or reverts).
-- `readV_enc`, `hashTypedMessage_spec`: on the SDK's ABI encoding of a typed
-  message it reads that message, so it returns its EIP-712 digest.
+- `readV_enc`, `hashTypedMessage_spec`: on the spec ABI encoding (`enc`) of
+  a typed message it reads that message, so it returns its EIP-712 digest.
+  That the SDK's encoder produces `enc` is tested (digest agreement with
+  ethers and the contract), not proven.
 - `visit_agree`, `message_agree`, `sign_agree`: on any calldata, every member
   Roles' condition checks is the member the encoder hashes, at the same bytes
   (the fallback's hand-set offsets included), or a window inside it (below a
-  `Slice`); Zip fields read elements of the arrays the encoder hashes.
+  `Slice`); Zip fields read elements of the arrays the encoder hashes. The
+  member is the one the encoder's walk of the argument's type tree reads, by
+  its path from the argument root (`Reach`). `sign_agree` takes the type
+  trees as given: they are what the library builds only when the `types`
+  argument is pinned, as `allowSignTypedMessage` does (`permissionHazards`
+  flags `sign-typed-message-types` otherwise).
 
 The hypotheses on the SDK's output (its type trees, and that the permission's
 conditions follow them) are decided in Lean and checked on every generated
@@ -740,7 +789,9 @@ against it both `MultiSendUnwrapper.unwrap` (the entries Roles checks, with
 their calldata slices) and the assembly loop of `MultiSend.multiSend` (the
 calls it makes): when the unwrapper accepts, MultiSend executes exactly the
 transactions Roles checked, in order (`unwrap_exec`). Tested against both
-contracts on chain. Details: [MultiSend/README.md](MultiSend/README.md).
+contracts on chain. That the Safe then delegatecalls MultiSend with the
+same `data` Roles unwrapped is checked by reading the code. Details:
+[MultiSend/README.md](MultiSend/README.md).
 
 ## Hash collisions
 
@@ -759,7 +810,8 @@ has more inputs than outputs, so collisions exist.
 make exactly their hash valid in the Safe's `isValidSignature` (unless
 keccak256 collides on the inputs involved), and that `signMessage` with a 32-byte message signs that
 raw hash, so it subsumes every other signing permission. Tested against a
-real Safe and its fallback handler. Details:
+real Safe and its fallback handler; the key `signTypedMessage` stores is
+checked by reading the code. Details:
 [SafeSigning/README.md](SafeSigning/README.md).
 
 
@@ -858,6 +910,7 @@ compared with the shape).
 | `Allowance/`           | Refill, charging with decimals and prices, the spending limit, README                |
 | `EndToEnd/`            | Signing routes, batches, the spending limit over executions, README                  |
 | `TargetDecode/`        | Values read by following offsets, solc's decoder, Roles' walker on any layout, README |
+| `<Lib>/NonVacuity.lean` | Concrete instances where the main theorems' hypotheses hold (`DecoderFaithfulness/Example.lean` for the decoder) |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
 | `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
 
@@ -871,33 +924,49 @@ theorems here.
 Safe that is a member of a Roles Modifier `R` answers `R`'s
 `execTransactionWithSignature` through EIP-1271, and roles on the Safe's
 own Roles Modifier can make it sign. `only_flagged` proves which signing
-permissions can make it sign a `RoleTx` for `R`:
-- `signMessage` without a pin;
+permissions can make it sign a `RoleTx` for `R` through
+`SignTypedMessageLib` (the empty-signature route to `signedMessages`):
+- `signMessage` without a pin (`pinsArg` fails), or with the digest itself
+  pinned;
 - typed messages without pinned types, or with `RoleTx` types;
 - never `personalSign`.
 
-These are exactly the permissions the SDK's `permissionHazards` flags. The
-proof goes through Roles' reader against Solidity's ABI decoder
+The SDK's `permissionHazards` flags these permissions. That it flags
+whatever `pinsArg` rejects is tested (`hazards-pins.spec.ts`, below), not
+proven. The other routes (the Safe's owners, delegatecall into other code,
+calls to the Safe itself, `approveHash`) are flagged by the SDK but not
+proven. The proof goes through Roles' reader against Solidity's ABI decoder
 (`route_bytes`) and against the signing library's hand-written fallback
 (`route_types`), on any calldata. Two of the check's rules came from it: the
 `types` element shape, and the head position of a pin.
 
 For batches, `executed_authorized` proves that every transaction the avatar
-executes passed its own permission: the call itself, or each transaction
-`MultiSend` runs (through `MultiSend.unwrap_exec`). `evalC_steps` and
+executes passed its own permission, with the consumptions threaded from one
+transaction to the next: the call itself, or each transaction `MultiSend`
+runs (through `MultiSend.unwrap_exec`). The theorems hold for every `envOf`
+(what an evaluation reads besides calldata); "its ether-value checks saw
+`e.value`" holds when `envOf` is chosen that way, as `Diff.lean` does. The
+glue from each execution entry point to `_authorize`, the avatar call with
+the same `to, value, data, operation`, and `_persist` only on success is
+checked by reading the code. `evalC_steps` and
 `steps_spec` prove that a passing evaluation charges only along the path
 that passed, and that the consumption list never holds a key twice.
 `_persist` writes every entry, so a second entry for a key would overwrite
 the first. Together, a batch settles as one `Allowance.tx` per allowance
 (`authorize_persist`), and the spending limit holds over any executions
-(`executions_limit`). The hypotheses:
+(`executions_limit`), for raw charged amounts. The conversion of priced
+spends (`Env.scale`) is abstract in the evaluator model and not tied to
+`Allowance.charge`; the value-level results (`value_limit`,
+`charged_covers`) are for the `Allowance` model, tested through Roles on
+single calls (`allowance.spec.ts`), not in batches. The hypotheses:
 - unwrappers are registered only for `MultiSend`;
 - conditions that read outside state see it as it was before the batch;
 - nothing else writes the allowances in between.
 
 Attribution and reentrancy are tested on chain, not proven: executions of
-one Roles Modifier never interleave (every external call before the
-avatar's is a staticcall, a nested execution reverts, and only owner and
+one Roles Modifier never interleave (every external call to other code
+before the avatar's is a staticcall, a nested execution reverts, and only
+owner and
 caller-keyed functions succeed during one), which is the sequential history
 the spending limit assumes. A stateful fuzz with hostile targets and
 ERC-1271 signers predicts every outcome. It found that with `shouldRevert`

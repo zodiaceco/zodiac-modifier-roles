@@ -14,7 +14,7 @@ a compValue the evaluator cannot read) denies the call anyway.
 namespace Bridge
 open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 
-/-- What adequacy needs of a node (the SDK check enforces each): a known
+/-- What adequacy needs of a node (each a rule of the SDK check): a known
     operator; the children of a `Matches` on a tuple or calldata all read a
     parameter (`AbiLocation` gives every child a field); a `Slice`'s child
     is a leaf; a Zip's first child is a `Matches` on a tuple whose children

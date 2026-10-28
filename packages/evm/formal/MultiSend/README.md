@@ -66,6 +66,9 @@ batches, random byte flips).
 4 seeds, 6,400 batches: 0 differences; about 1,750 accepted batches, about
 4,400 executions compared on chain.
 
+`NonVacuity.lean` (built with the library): a two-entry batch the unwrapper
+accepts, so the hypothesis of `unwrap_exec` holds on a non-trivial input.
+
 ## Not covered
 
 - That the unwrapper is registered only for the real `MultiSend` /
@@ -73,3 +76,7 @@ batches, random byte flips).
   configuration).
 - The Solidity ABI decoder handing `multiSend` the bytes at the offset in
   the head: standard, and exercised by the differential test.
+- That the Safe delegatecalls MultiSend with the same `data` Roles
+  unwrapped. `unwrap_exec` assumes it; the forwarding (Roles passes `to,
+  value, data, operation` on to the avatar unchanged) is checked by reading
+  the code.

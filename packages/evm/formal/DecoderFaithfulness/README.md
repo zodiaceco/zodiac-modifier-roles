@@ -45,22 +45,30 @@ four cases (`Reached`):
    sits exactly at `u`'s spec encoding.
 2. **Window:** `d` is below a `Slice` and sits exactly at a window of `u`'s
    content (the static word, or the bytes without length word and padding).
+   The theorems say it is *some* contiguous window (`IsWindow`), not which
+   one; that it is `[shift, shift + size)` is tested (the Slice end-to-end
+   tests below).
 3. **Non-structural:** e.g. an `EtherValue` comparison; never reads calldata.
-4. **Interpretation that need not hold** (only if `s = true`): `d` is inside a
-   bytes-like child, such as the `approve(...)` branch of
-   `Or[transfer(...), approve(...)]` on a `transfer` call. That child itself
-   sits exactly at the right `bytes` value. Inside it, nothing is promised,
-   because the data was not encoded that way (see "Not covered").
+4. **Variant branch that does not fit** (only if `s = true`, `InStray`): `d`
+   is inside a bytes-like branch `ch`, such as the `approve(...)` branch of
+   `Or[transfer(...), approve(...)]` on a `transfer` call. `ch` is a node of
+   the tree, it does not describe the bytes value `us` it is evaluated on,
+   and the walk from the root reaches `ch` exactly where `us` sits, by the
+   same index path. `d` is reached from `ch`. Below `ch`, nothing is
+   promised, because the data was not encoded that way (see "Not covered").
 
 With `s = false`, every interpretation in the tree must hold and case 4 is
-impossible (`InStray.strict`).
+impossible (`InStray.strict`). So the full guarantee is for trees without
+variants, or checked with `s = false`. The SDK's `checkStored` and
+`checkAndPack` default to `s = true`, which allows variants; for a variant
+tree the theorems give case 4 for nodes inside a branch that does not fit.
 
 | Theorem                  | Statement                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `decoder_locations`      | The four cases above, for every visited node.                                                                                                                                                                                                                                                                                                                                                                   |
-| `decoder_input`          | For every visited `EqualTo`, `GreaterThan`, `LessThan`, signed comparison, `WithinAllowance` or `Pluck` node, `__input` returns exactly the spec encoding of the component (the word itself when it is 32 bytes, otherwise exactly the bytes that get keccak-hashed). Below a `Slice` it returns exactly a window of the component's content, right-aligned. For `EtherValue` it returns the transaction value. |
+| `decoder_input`          | For every visited `EqualTo`, `GreaterThan`, `LessThan`, signed comparison, `WithinAllowance` or `Pluck` node, `__input` returns exactly the spec encoding of the component (the word itself when it is 32 bytes, otherwise exactly the bytes that get keccak-hashed). Below a `Slice` it returns a window of the component's content, right-aligned. For `EtherValue` it returns the transaction value. |
 | `decoder_custom_operand` | `Custom` conditions receive exactly the spec position and length (of the component, or of the window).                                                                                                                                                                                                                                                                                                          |
-| `decoder_children`       | No false rejections: every visited container decodes its children without `CalldataOverflow`, one per component.                                                                                                                                                                                                                                                                                                |
+| `decoder_children`       | No false rejections: every visited container decodes its children without `CalldataOverflow`: an array one location per element, a tuple or call one per child of the node (a `Matches` may leave out trailing fields), never more than the value has components.                                                                                                                                              |
 | `decoder_slice`          | No false rejections for `Slice`: the length `_slice` checks `shift + size` against is exactly the length of the bytes the spec window comes from. So a slice is rejected exactly when the spec window does not exist.                                                                                                                                                                                           |
 | `decoder_bitmask`        | For every visited `Bitmask` node (on a `Static` or `Dynamic` parameter), `BitmaskChecker.check` returns exactly `bitmaskSpec` of the component's content (or, below a `Slice`, of the window): `BitmaskOverflow` if `shift + n` exceeds it, else `Ok` iff `bytes[shift + j] & mask[j] = expected[j]` for all `j < n`. Holds for any memory after the compValue.                                                 |
 | `decoder_zip`            | No false rejections for Zip: the array at a referenced Pluck's location decodes into exactly one location per spec element. So `ZippedArrayLengthMismatch` happens exactly when the spec arrays differ in length; with `decoder_locations`, each field is evaluated where the spec put its element.                                                                                                             |
@@ -165,6 +173,17 @@ by hand; `MockLocator` does not expose them.
   arithmetic reverts on overflow, and a revert denies. `calldata.length < 2^255`
   is a hypothesis.
 - **Lean 4.35** kernel and core library.
+
+## Findings
+
+- **Variant mode was vacuous.** A review of the theorem statements found
+  that case 4 used to require only *some* bytes-like condition and *some*
+  bytes value. So with `s = true` every theorem held without its hypotheses,
+  and a node read at a wrong location also satisfied it. Case 4 (`InStray`)
+  now requires that the branch is a node of the tree, that it does not
+  describe the bytes value, that the walk from the root reaches it exactly
+  where that value sits, and that `d` is reached from it. `Reached` takes the
+  top node's location for this (`root 0` in the theorems).
 
 ## Not covered
 

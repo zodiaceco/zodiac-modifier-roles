@@ -23,7 +23,7 @@ arrays by a non-zero `typeHash`).
 | `hashField_spec` (`Hash.lean`)         | **On any bytes**, `_hashField` is the EIP-712 spec applied to what it reads: it reverts exactly when its walk (`readV`) fails, and otherwise returns `encV` (EIP-712 `enc`; `hashStruct` for a struct) of the value read.                                                                                                                                                  |
 | `readV_enc` (`Decode.lean`)            | On the Solidity ABI spec encoding (`DecoderFaithfulness.enc`) of a typed value, the walk reads exactly that value. With `inlineSize_lay`: `_inlineSize` on the type tree agrees with the ABI's static / dynamic and head sizes.                                                                                                                                          |
 | `hashTypedMessage_spec` (`Digest.lean`) | When `types` rebuilds (`_toTree`) into the type trees of `EIP712Domain` (node 0) and the primary type (node 1), and `domain` / `message` are the ABI encodings of typed values, the contract returns the EIP-712 digest of those values.                                                                                                                                |
-| `visit_agree` (`Agree.lean`)           | **On any calldata**, every node `evaluate` visits from a node that follows the type tree (`FitT`) is a `Site`: it sits exactly where the encoder reads the corresponding member, and that member was read (`Member`), or, below a `Slice`, it reads `size` bytes inside the member's word or inside the content of its `bytes` / `string` (`Window`). `loop_agree` / `children_agree_*`: Roles' `AbiLocation.children` and the encoder's block loop find every child at the same place; Roles only adds bound checks against `msg.data`. |
+| `visit_agree` (`Agree.lean`)           | **On any calldata**, every node `evaluate` visits from a node that follows the type tree (`FitT`) is a `Site`: it sits exactly where the encoder reads the corresponding member, and that member was read (`Member`); the member is one the encoder's walk of the argument's type tree `t0` reaches from offset 0 of the view, by its path from the argument root (`Reach`, with `childLocs`). Or, below a `Slice`, it reads `size` bytes inside the member's word or inside the content of its `bytes` / `string` (`Window`). `loop_agree` / `children_agree_*`: Roles' `AbiLocation.children` and the encoder's block loop find every child at the same place; Roles only adds bound checks against `msg.data`. |
 | `static_input`, `dynamic_input`        | At a member, the operand Roles compares is the word the encoder hashes, or (for `bytes` / `string`) `__input` of exactly the length word and the bytes the encoder hashes.                                                                                                                                                                                              |
 | `window_input`                         | In a window, the operand Roles compares is bytes `[sh, sh + size)` of the word, or of the `bytes` / `string` content, the encoder hashes.                                                                                                                                                                                                                                |
 | `fallback_offset`, `message_agree`     | `SignTypedMessageLib`'s fallback, which sets the offsets of `domain`, `message` and `types` by hand, reads each argument where Roles' root `Matches` finds it; below the `message` (or `domain`) condition, every visited node is a `Site` in the library's view of the argument.                                                                                      |
@@ -38,11 +38,24 @@ checks is the member the library hashes, or a window of it, and the library
 returns the EIP-712 digest of what it read. For the SDK's own encoding (`encodeSignTypedMessage`) that is
 the digest of the typed message.
 
+`fit` (`rootB`) does not require the `types` argument to be pinned.
+`sign_agree` takes the type trees `tys` as given; they are the trees the
+library builds only when the permission pins `types`. `allowSignTypedMessage`
+pins it, and `permissionHazards` flags `sign-typed-message-types` when it is
+not. So for a hand-written permission that passes `fit`, the result holds
+only if it pins `types` too (`NonVacuity.lean` shows `fit` accepting an
+unpinned one).
+
+`readV_enc` and `hashTypedMessage_spec` take the spec ABI encoding `enc`.
+That the SDK's `encodeTypedDomain` / `encodeTypedMessage` produce it is
+tested (digest agreement, below), not proven.
+
 On non-canonical calldata the library may read a word that is not the
 encoding of any value of its type (an address with high bits set, say). The
-digest is then `encV` of that word, which, unless keccak256 collides, is the
-digest of no well-typed message: no verifier that hashes typed values
-accepts the signature. `Atom.Canon` defines the canonical words.
+digest is then `encV` of that word. Argument (not a theorem): unless
+keccak256 collides, that is the digest of no well-typed message, so no
+verifier that hashes typed values accepts the signature. `Atom.Canon`
+defines the canonical words.
 
 ## The view of an argument
 
@@ -93,6 +106,11 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
    about 125 Slices and 85 Zips each, all fit, about 620 changed calls and
    250 broken variants each, all rejected.
 
+`NonVacuity.lean` (built with the library) checks that the hypotheses of
+`hashTypedMessage_spec` hold on a concrete message, that `Member` fails at an
+offset the encoder's walk does not read, and that `fit` accepts an unpinned
+`types` argument (see above).
+
 ## Findings (all fixed in the SDK)
 
 - `parseType` read the first array dimension instead of the last: `T[2][]`
@@ -113,6 +131,14 @@ inferred `EIP712Domain`, `chainId` as number or bigint.
   it. In the mainnet snapshot (`investigations/roles-pruning`), the three
   functions with a fixed-size array parameter that carry a condition store
   it correctly, as a tuple.
+
+A review of the theorem statements found one gap in the Lean, now fixed:
+`Member` (and so `Site`, `Window`) held at any in-range offset where a value
+of the member's type could be read, including unaligned ones, so
+`visit_agree`, `message_agree` and `sign_agree` did not say *which* member a
+node sits at. They now carry `Reach`: the node sits at the member the
+encoder's walk of the argument's type tree reads, by its path from the
+argument root.
 
 ## Not covered
 

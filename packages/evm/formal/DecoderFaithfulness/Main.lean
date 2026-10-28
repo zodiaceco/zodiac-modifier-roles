@@ -14,17 +14,23 @@ Main results, for every node `d` the evaluator visits at location `l`
 * `decoder_locations`: `d` sits exactly where the spec puts the encoding of
   the component it describes, reached by the same index path; or `d` is
   below a `Slice` and sits exactly at a window of that component's content;
-  or `d` is non-structural; or (only if `s = true`) `d` is inside a
-  bytes-like interpretation that need not hold, which itself sits exactly at
-  the right `bytes` value.
+  or `d` is non-structural; or (only if `s = true`, `InStray`) `d` is inside
+  a variant branch `ch` (a node of the tree, bytes-like) that does not fit
+  the bytes value it is evaluated on. The walk from the root reaches `ch`
+  exactly where that bytes value sits, by the same index path; nothing more
+  is promised below `ch`.
 * `decoder_input`: every comparison operand `__input` produces is exactly the
   spec encoding of that component (one word as is, otherwise the bytes that
-  are keccak-hashed), or the selected window (right-aligned) below a
-  `Slice`.
+  are keccak-hashed), or below a `Slice` a window of its content
+  (right-aligned). Which window (`shift`, `size`) is tested, not proven.
 * `decoder_custom_operand`: `Custom` conditions get exactly the spec region.
 * `decoder_children`, `decoder_slice`: no false rejections. Containers decode
-  without overflow, one location per component; `Slice` rejects exactly
-  when the window exceeds the value's content.
+  without overflow: an array one location per element, a tuple or call one
+  per child of the node; `Slice` rejects exactly when the window exceeds the
+  value's content.
+
+Without variants (or with `s = false`) the `InStray` case is impossible
+(`InStray.strict`). The SDK's check defaults to `s = true`.
 -/
 
 namespace DecoderFaithfulness
@@ -217,16 +223,65 @@ inductive Below (data : Bytes) (c : Condition) (loc : Nat) : List Nat → Condit
       children data L (zipStub field) = some locs →
       Visit data field locs[i] p d l → Below data c loc (pp ++ i :: p) d l
 
-/-- Reached inside a bytes-like interpretation `ch` of the bytes value `us`,
-    which sits correctly at `ls` (the interpretation itself need not hold). -/
-def InStray (s : Bool) (data : Bytes) (u : Val) (p : List Nat) (d : Condition) (l : Nat) : Prop :=
-  s = true ∧ ∃ p1 p2 ch us ls, p = p1 ++ p2 ∧ u.sub p1 = some us ∧ BytesLike ch ∧
-    IsBytesLike us ∧ Placed data ls us ∧ Below data (annotate ch) ls p2 d l
+theorem Visit.trans {data : Bytes} :
+    ∀ {c loc p d l}, Visit data c loc p d l → ∀ {q e m}, Visit data d l q e m →
+      Visit data c loc (p ++ q) e m := by
+  intro c loc p d l h1
+  induction h1 with
+  | here => exact fun h2 => h2
+  | logical ch hop hm _ ih => exact fun h2 => .logical ch hop hm (ih h2)
+  | matchesChild locs i hi hop hch hcount _ ih =>
+    exact fun h2 => .matchesChild locs i hi hop hch hcount (ih h2)
+  | arrayIter locs i hi hop hch _ ih => exact fun h2 => .arrayIter locs i hi hop hch (ih h2)
+  | arrayTail locs j hj hop hch hle hjc _ ih =>
+    exact fun h2 => .arrayTail locs j hj hop hch hle hjc (ih h2)
+  | slice hop hb hbound _ ih => exact fun h2 => .slice hop hb hbound (ih h2)
+
+theorem Below.trans_visit {data : Bytes} {c : Condition} {loc : Nat} :
+    ∀ {p d l}, Below data c loc p d l → ∀ {q e m}, Visit data d l q e m →
+      Below data c loc (p ++ q) e m := by
+  intro p d l h1
+  induction h1 with
+  | visit h => exact fun h2 => .visit (Visit.trans h h2)
+  | zip hi hb hpk hch hvis _ =>
+    intro q e m h2
+    have := Below.zip hi hb hpk hch (Visit.trans hvis h2)
+    simpa [List.append_assoc] using this
+
+/-- Walks compose. -/
+theorem Below.trans {data : Bytes} {c : Condition} {loc : Nat} {p : List Nat} {d : Condition}
+    {l : Nat} (h1 : Below data c loc p d l) :
+    ∀ {q e m}, Below data d l q e m → Below data c loc (p ++ q) e m := by
+  intro q e m h2
+  induction h2 with
+  | visit h => exact h1.trans_visit h
+  | zip hi _ hpk hch hvis ih =>
+    have := Below.zip hi ih hpk hch hvis
+    simpa [List.append_assoc] using this
+
+/-- Evaluation from the root is a walk from it. -/
+theorem Eval.toBelow {data : Bytes} {root : Condition} :
+    ∀ {p d l}, Eval data root p d l → Below data root 0 p d l := by
+  intro p d l he
+  induction he with
+  | visit hv => exact .visit hv
+  | zip _ _ _ hi _ _ _ _ hpkop _ hch hvis _ ihpk => exact .zip hi ihpk hpkop hch hvis
+
+/-- Reached inside a bytes-like interpretation `ch` that does not describe
+    the bytes value `us` it is evaluated on (a variant `And`/`Or` branch that
+    does not fit). `ch` is a node of `top`, the walk from `top` (at `loc`)
+    reaches it exactly where `us` sits correctly (`ls`, by the same index
+    path), and `d` is reached from there. Only with `s = true`. -/
+def InStray (s : Bool) (data : Bytes) (top : Condition) (loc : Nat) (u : Val) (p : List Nat)
+    (d : Condition) (l : Nat) : Prop :=
+  s = true ∧ ∃ p1 p2 ch us ls, p = p1 ++ p2 ∧ u.sub p1 = some us ∧ Sub ch top ∧ BytesLike ch ∧
+    IsBytesLike us ∧ ¬ Desc s ch us ∧ Placed data ls us ∧
+    Below data (annotate top) loc p1 (annotate ch) ls ∧ Below data (annotate ch) ls p2 d l
 
 /-- The four possible outcomes for a node `d` reached at `l` along path `p`
-    from the node `top`, which describes `u`. -/
-def Reached (s : Bool) (data : Bytes) (top : Condition) (u : Val) (p : List Nat) (d : Condition)
-    (l : Nat) : Prop :=
+    from the node `top` (at `loc`), which describes `u`. -/
+def Reached (s : Bool) (data : Bytes) (top : Condition) (loc : Nat) (u : Val) (p : List Nat)
+    (d : Condition) (l : Nat) : Prop :=
   -- a node of `top` that describes component `u'` and sits at its spec encoding
   (∃ d0 u', Sub d0 top ∧ d = annotate d0 ∧ u.sub p = some u' ∧ Desc s d0 u' ∧
       Placed data l u' ∧ (l = 0 → IsCall u' → RootOK d0)) ∨
@@ -235,45 +290,49 @@ def Reached (s : Bool) (data : Bytes) (top : Condition) (u : Val) (p : List Nat)
   -- below a `Slice`: sits at a window of component `u'`'s content
   (∃ d0 bs u', d = (annotate d0).withSize bs.length ∧ Win d0 ∧ At data l bs ∧
       1 ≤ bs.length ∧ bs.length ≤ 32 ∧ u.sub p = some u' ∧ IsWindow bs (content u')) ∨
-  -- inside an interpretation that need not hold (only with `s = true`)
-  InStray s data u p d l
+  -- inside an interpretation that does not fit (only with `s = true`)
+  InStray s data top loc u p d l
 
 /-- From a node `top` describing component `v` (at path `P` of `u`) to a node
     `top'` containing it. -/
 theorem Reached.lift {s : Bool} {data : Bytes} {u v : Val} {P : List Nat}
     (hsub : ∀ q, u.sub (P ++ q) = v.sub q) {top top' : Condition} (htop : Sub top top')
+    {loc' lc : Nat} (hent : Below data (annotate top') loc' P (annotate top) lc)
     {p : List Nat} {d : Condition} {l : Nat}
-    (h : Reached s data top v p d l) : Reached s data top' u (P ++ p) d l := by
+    (h : Reached s data top lc v p d l) : Reached s data top' loc' u (P ++ p) d l := by
   rcases h with ⟨d0, u', hst0, hd, hs, hD, hp, hr⟩ | hns |
     ⟨d0, bs, u', hd, hw, hat, h1, h32, hs, hiw⟩ |
-    ⟨hst, p1, p2, ch, us, ls, rfl, hs, hb, hu, hp, hv⟩
+    ⟨hst, p1, p2, ch, us, ls, rfl, hs, hsc, hb, hu, hnd, hp, hb1, hv⟩
   · exact Or.inl ⟨d0, u', hst0.trans htop, hd, by rw [hsub]; exact hs, hD, hp, hr⟩
   · exact Or.inr (Or.inl hns)
   · exact Or.inr (Or.inr (Or.inl ⟨d0, bs, u', hd, hw, hat, h1, h32, by rw [hsub]; exact hs, hiw⟩))
   · exact Or.inr (Or.inr (Or.inr ⟨hst, P ++ p1, p2, ch, us, ls, by rw [List.append_assoc],
-      by rw [hsub]; exact hs, hb, hu, hp, hv⟩))
+      by rw [hsub]; exact hs, hsc.trans htop, hb, hu, hnd, hp, hent.trans hb1, hv⟩))
 
 /-- One structural step into node `ch` of `top` (component `v`, at path `P`
     of `u`). -/
 theorem Reached.stepP {s : Bool} {data : Bytes} {u v : Val} {P : List Nat}
-    (hsub : ∀ q, u.sub (P ++ q) = v.sub q) {ch top : Condition} (htop : Sub ch top) {lc : Nat}
+    (hsub : ∀ q, u.sub (P ++ q) = v.sub q) {ch top : Condition} (htop : Sub ch top)
+    {ltop lc : Nat} (hent : Below data (annotate top) ltop P (annotate ch) lc)
     {p : List Nat} {d : Condition} {l : Nat} (hDS : DescS s ch v) (hp : Placed data lc v)
     (hvis : Visit data (annotate ch) lc p d l)
-    (ih : Desc s ch v → Reached s data ch v p d l) : Reached s data top u (P ++ p) d l := by
-  cases hDS with
-  | desc hd => exact Reached.lift hsub htop (ih hd)
-  | stray hst hb hu =>
-    exact Or.inr (Or.inr (Or.inr ⟨hst, P, p, ch, v, lc, rfl,
-      by rw [← List.append_nil P, hsub, Val.sub_nil], hb, hu, hp, .visit hvis⟩))
+    (ih : Desc s ch v → Reached s data ch lc v p d l) : Reached s data top ltop u (P ++ p) d l := by
+  by_cases hd : Desc s ch v
+  · exact Reached.lift hsub htop hent (ih hd)
+  · cases hDS with
+    | desc hd' => exact absurd hd' hd
+    | stray hst hb hu =>
+      exact Or.inr (Or.inr (Or.inr ⟨hst, P, p, ch, v, lc, rfl,
+        by rw [← List.append_nil P, hsub, Val.sub_nil], htop, hb, hu, hd, hp, hent, .visit hvis⟩))
 
 /-- One structural step into child `ch` of `top` (component `v` of `u`). -/
 theorem Reached.step {s : Bool} {data : Bytes} {u v : Val} {i : Nat}
     (hsub : ∀ q, u.sub (i :: q) = v.sub q) {ch top : Condition} (hmem : ch ∈ top.children)
-    {lc : Nat} {p : List Nat}
+    {ltop lc : Nat} (hent : Visit data (annotate top) ltop [i] (annotate ch) lc) {p : List Nat}
     {d : Condition} {l : Nat} (hDS : DescS s ch v) (hp : Placed data lc v)
     (hvis : Visit data (annotate ch) lc p d l)
-    (ih : Desc s ch v → Reached s data ch v p d l) : Reached s data top u (i :: p) d l :=
-  Reached.stepP (P := [i]) hsub (Sub.mem hmem) hDS hp hvis ih
+    (ih : Desc s ch v → Reached s data ch lc v p d l) : Reached s data top ltop u (i :: p) d l :=
+  Reached.stepP (P := [i]) hsub (Sub.mem hmem) (.visit hent) hDS hp hvis ih
 
 theorem child_placed {data : Bytes} {l : Nat} {v : Val} {c : Condition}
     (h : At data l (enc v) ∧ (v.isStatic = false → 0 < l)) :
@@ -360,7 +419,7 @@ theorem ZipNode.visit {data : Bytes} {c0 : Condition} (hz : ZipNode c0) :
 theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
     ∀ {c' loc p d l}, Visit data c' loc p d l →
     ∀ {c u}, c' = annotate c → Desc s c u → Placed data loc u →
-      (loc = 0 → IsCall u → RootOK c) → Reached s data c u p d l := by
+      (loc = 0 → IsCall u → RootOK c) → Reached s data c loc u p d l := by
   intro c' loc p d l hv
   induction hv with
   | here =>
@@ -369,6 +428,7 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
   | @logical _ loc p _ _ ch hop hmem hvis ih =>
     intro c u hc hD hp hr
     subst hc
+    have hent0 : Visit data (annotate c) loc [] ch loc := .logical ch hop hmem .here
     match hD with
     | .logical _ he _ _ _ hall _ =>
       rw [annotate_children] at hmem
@@ -384,11 +444,14 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
             | ok h => exact h
             | ns hns => exact (hns.not_descS hDS).elim
             | zip hz => exact (hz.not_descS hDS).elim
-        cases hDS with
-        | desc hd => exact Reached.lift (P := []) (fun _ => rfl) (Sub.mem hm0) (ih rfl hd hp hrch)
-        | stray hst hb hu =>
-          exact Or.inr (Or.inr (Or.inr ⟨hst, [], p, ch0, u, loc, rfl, Val.sub_nil u,
-            hb, hu, hp, .visit hvis⟩))
+        by_cases hd : Desc s ch0 u
+        · exact Reached.lift (P := []) (fun _ => rfl) (Sub.mem hm0) (.visit hent0)
+            (ih rfl hd hp hrch)
+        · cases hDS with
+          | desc hd' => exact absurd hd' hd
+          | stray hst hb hu =>
+            exact Or.inr (Or.inr (Or.inr ⟨hst, [], p, ch0, u, loc, rfl, Val.sub_nil u,
+              Sub.mem hm0, hb, hu, hd, hp, .visit hent0, .visit hvis⟩))
       | ns hns =>
         obtain ⟨rfl, d0, hd, hns'⟩ := NonStruct.visit hvis rfl hns
         exact Or.inr (Or.inl ⟨d0, hd, .inl hns'⟩)
@@ -406,6 +469,7 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
   | matchesChild locs i hi hop hch hcount hvis ih =>
     intro c u hc hD hp _
     subst hc
+    have hent0 := Visit.matchesChild (p := []) locs i hi hop hch hcount .here
     have hop0 := annotate_op_of hop (by decide)
     match hD with
     | .tuple (vs := vs) he hne hk hall _ _ =>
@@ -421,9 +485,9 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
         simpa [List.getElem_take] using this
       have hgetD : (annotate c).children.getD i default = annotate c.children[i] := by
         rw [annotate_children]; simp [hic]
-      rw [hgetD] at ih hvis
+      rw [hgetD] at ih hvis hent0
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
-      exact Reached.step (fun q => Val.sub_tuple vs i hiv q) (List.getElem_mem hic)
+      exact Reached.step (fun q => Val.sub_tuple vs i hiv q) (List.getElem_mem hic) hent0
         hall' hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .array (vs := vs) c0 cs he hcs h0 hpos _ _ =>
       rw [matchesLoc_plain (.inr he)] at hch
@@ -436,9 +500,9 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
         rw [annotate_children] at hcount; simp at hcount; omega
       have hgetD : (annotate c).children.getD i default = annotate c.children[i] := by
         rw [annotate_children]; simp [hic]
-      rw [hgetD] at ih hvis
+      rw [hgetD] at ih hvis hent0
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
-      exact Reached.step (fun q => Val.sub_array vs i hiv q) (List.getElem_mem hic)
+      exact Reached.step (fun q => Val.sub_array vs i hiv q) (List.getElem_mem hic) hent0
         (hpos i hic hiv) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .call (pre := pre) (args := vs) he hL hne hk hall _ =>
       have hat := call_args_At he hL hp
@@ -452,9 +516,9 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
         simpa [List.getElem_take] using this
       have hgetD : (annotate c).children.getD i default = annotate c.children[i] := by
         rw [annotate_children]; simp [hic]
-      rw [hgetD] at ih hvis
+      rw [hgetD] at ih hvis hent0
       have hpc := child_placed (c := c.children[i]) (hpl i hi hiv)
-      exact Reached.step (fun q => Val.sub_call pre vs i hiv q) (List.getElem_mem hic)
+      exact Reached.step (fun q => Val.sub_call pre vs i hiv q) (List.getElem_mem hic) hent0
         hall' hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ => rw [hop0] at hop'; cases hop'
@@ -462,6 +526,7 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
   | arrayIter locs i hi hop hch hvis ih =>
     intro c u hc hD hp _
     subst hc
+    have hent0 := Visit.arrayIter (p := []) locs i hi hop hch .here
     match hD with
     | .array (vs := vs) c0 cs he hcs h0 _ _ _ =>
       obtain ⟨locs', hl, hlen', hpl⟩ :=
@@ -471,9 +536,9 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       have hiv : i < vs.length := by omega
       have hhead : (annotate c).children.headD default = annotate c0 := by
         rw [annotate_children, hcs]; rfl
-      rw [hhead] at ih hvis
+      rw [hhead] at ih hvis hent0
       have hpc := child_placed (c := c0) (hpl i hi hiv)
-      exact Reached.step (fun q => Val.sub_array vs i hiv q) (by rw [hcs]; simp)
+      exact Reached.step (fun q => Val.sub_array vs i hiv q) (by rw [hcs]; simp) hent0
         (h0 _ (List.getElem_mem hiv)) hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .word _ _ hnav _ | .bytes _ _ hnav _ | .tuple _ _ _ _ _ hnav =>
       rcases hop with h | h <;> (rw [annotate_op_of h (by decide)] at hnav; simp [isNavOp] at hnav)
@@ -486,6 +551,7 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
   | arrayTail locs j hj hop hch hle hjc hvis ih =>
     intro c u hc hD hp _
     subst hc
+    have hent0 := Visit.arrayTail (p := []) locs j hj hop hch hle hjc .here
     have hop0 := annotate_op_of hop (by decide)
     match hD with
     | .array (vs := vs) c0 cs he hcs h0 _ htail _ =>
@@ -500,15 +566,15 @@ theorem visit_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} :
       have hk : c.children.length ≤ vs.length := by omega
       have hgetD : (annotate c).children.getD j default = annotate c.children[j] := by
         rw [annotate_children]; simp [hjc']
-      rw [hgetD] at ih hvis
+      rw [hgetD] at ih hvis hent0
       have hidx : vs.length - c.children.length + j = locs.length - (annotate c).children.length + j := by
         omega
       have hpc := child_placed (c := c.children[j]) (hpl _ hj hjv)
       have hDS := htail j hjc' hk
       have hDS' : DescS s c.children[j] vs[locs.length - (annotate c).children.length + j] := by
         simpa only [hidx] using hDS
-      exact Reached.step (fun q => Val.sub_array vs _ hjv q) (List.getElem_mem hjc') hDS' hpc.1
-        hvis (fun hd => ih rfl hd hpc.1 hpc.2)
+      exact Reached.step (fun q => Val.sub_array vs _ hjv q) (List.getElem_mem hjc') hent0 hDS'
+        hpc.1 hvis (fun hd => ih rfl hd hpc.1 hpc.2)
     | .word _ _ hnav _ | .bytes _ _ hnav _ => rw [hop0] at hnav; simp [isNavOp] at hnav
     | .sliceWord _ hop' _ _ _ _ _ | .sliceBytes _ hop' _ _ _ _ _ => rw [hop0] at hop'; cases hop'
     | .tuple _ _ _ _ _ hnav => rcases hnav with ⟨h, -⟩ | h <;> (rw [hop0] at h; simp [isNavOp] at h)
@@ -748,15 +814,15 @@ theorem annotate_zipStub (f : Condition) : annotate (zipStub f) = zipStub (annot
 
 /-- At a Zip jump, the Pluck node that field `f` of the Zip `z0` (a node of
     `root`) references sits at an array whose elements field `f` describes,
-    or lies inside an interpretation that need not hold. -/
+    or lies inside a variant branch that does not fit (`InStray`). -/
 theorem zip_pluck {s : Bool} {data : Bytes} {root : Condition} {V0 : Val} {pp : List Nat}
     {pk : Condition} {L : Nat} {z0 : Condition} {f : Nat} (hZ : ZipOK s root)
     (hz0 : Sub z0 root) (hzop : z0.operator = .ZipSome ∨ z0.operator = .ZipEvery)
     (hf : f < (zipFields z0).length) (hpkop : pk.operator = .Pluck)
     (hidx : cvByte pk.compValue 0 = cvByte z0.compValue f) (hraw : RawIn root pk)
-    (hR : Reached s data root V0 pp pk L) :
+    (hR : Reached s data root 0 V0 pp pk L) :
     (∃ vs, V0.sub pp = some (.array vs) ∧ At data L (enc (.array vs)) ∧
-      ∀ v, v ∈ vs → DescS s (zipFields z0)[f] v) ∨ InStray s data V0 pp pk L := by
+      ∀ v, v ∈ vs → DescS s (zipFields z0)[f] v) ∨ InStray s data root 0 V0 pp pk L := by
   -- The referenced Pluck node of `root` is an `Array` node.
   obtain ⟨pk1, hpk1, hr1⟩ := hraw
   have hop1 : (annotate pk1).operator = .Pluck := by rw [← hr1.operator]; exact hpkop
@@ -814,20 +880,21 @@ theorem Eval.zip_raw {data : Bytes} {root : Condition} {pz : List Nat} {z : Cond
 theorem eval_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {root : Condition}
     {V0 : Val} (hD : Desc s root V0) (hR : RootOK root) (hp0 : Placed data 0 V0)
     (hZ : ZipOK s root) :
-    ∀ {p d l}, Eval data (annotate root) p d l → Reached s data root V0 p d l := by
+    ∀ {p d l}, Eval data (annotate root) p d l → Reached s data root 0 V0 p d l := by
   intro p d l he
   induction he with
   | visit hv => exact visit_sound hlen hv rfl hD hp0 (fun _ _ => hR)
   | @zip pz z lz pp pk L p d l f locs i hi hzE hzop hf hpkE hpkop hidx hch hvis _ ihpk =>
+    have hent0 := Below.zip (p := []) hi (Eval.toBelow hpkE) hpkop hch .here
     obtain ⟨z0, hz0s, hzop0, hfields, hcv⟩ := Eval.zip_raw hzE hzop
     have hf0 : f < (zipFields z0).length := by rw [hfields] at hf; simpa using hf
     have hfield : (zipFields z).getD f default = annotate (zipFields z0)[f] := by
       rw [hfields]; simp [hf0]
     have hidx0 : cvByte pk.compValue 0 = cvByte z0.compValue f := by rw [hidx, hcv]
     rcases zip_pluck hZ hz0s hzop0 hf0 hpkop hidx0 (Eval.rawIn hpkE) ihpk with
-      ⟨vs, hsub, hat, hall⟩ | ⟨hs, p1, p2, ch, us, ls, rfl, hsub, hb, hu, hp, hbel⟩
+      ⟨vs, hsub, hat, hall⟩ | ⟨hs, p1, p2, ch, us, ls, rfl, hsub, hsc, hb, hu, hnd, hp, hb1, hbel⟩
     · rw [hfield, ← annotate_zipStub] at hch
-      rw [hfield] at hvis
+      rw [hfield] at hvis hent0
       obtain ⟨locs', hl, hlen', hpl⟩ := children_array hlen (c := zipStub (zipFields z0)[f])
         (by rw [annotate_encoding]; simp [zipStub]) rfl hall hat
       rw [hl] at hch; cases hch
@@ -837,11 +904,11 @@ theorem eval_sound {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool} {roo
         (Sub.zipField (List.getElem_mem hf0)).trans hz0s
       have key := Reached.stepP (P := pp ++ [i]) (u := V0) (v := vs[i])
         (fun q => by rw [List.append_assoc, Val.sub_append hsub]; exact Val.sub_array vs i hiv q)
-        hsubF (hall _ (List.getElem_mem hiv)) hpc.1 hvis
+        hsubF hent0 (hall _ (List.getElem_mem hiv)) hpc.1 hvis
         (fun hd => visit_sound hlen hvis rfl hd hpc.1 hpc.2)
       simpa [List.append_assoc] using key
-    · exact Or.inr (Or.inr (Or.inr ⟨hs, p1, p2 ++ i :: p, ch, us, ls, by simp, hsub, hb, hu, hp,
-        .zip hi hbel hpkop hch hvis⟩))
+    · exact Or.inr (Or.inr (Or.inr ⟨hs, p1, p2 ++ i :: p, ch, us, ls, by simp, hsub, hsc, hb, hu,
+        hnd, hp, hb1, .zip hi hbel hpkop hch hvis⟩))
 
 /-! ## Top-level statements -/
 
@@ -862,20 +929,22 @@ theorem root_placed : Placed (calldata pre args suffix) 0 (.call pre args) := by
 /-- **Locations.** Every node the evaluator visits is one of the four cases of
     `Reached`: at the spec encoding of the component it describes (same index
     path), at a window of that component's content (below `Slice`),
-    non-structural, or inside a bytes-like interpretation that need not hold
-    (only with `s = true`). -/
+    non-structural, or inside a variant branch that does not fit the bytes
+    value it is evaluated on; the branch itself is evaluated exactly where
+    that value sits (`InStray`, only with `s = true`). -/
 theorem decoder_locations {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
     {p : List Nat} {d : Condition} {l : Nat}
     (hv : Eval (calldata pre args suffix) (annotate root) p d l) :
-    Reached s (calldata pre args suffix) root (.call pre args) p d l :=
+    Reached s (calldata pre args suffix) root 0 (.call pre args) p d l :=
   eval_sound hlen hD hR (root_placed pre args suffix) hZ hv
 
 /-- With `s = false` (every interpretation holds) the fourth case is
     impossible. -/
-theorem InStray.strict {data : Bytes} {u : Val} {p : List Nat} {d : Condition} {l : Nat} :
-    ¬ InStray false data u p d l := fun h => Bool.false_ne_true h.1
+theorem InStray.strict {data : Bytes} {top : Condition} {loc : Nat} {u : Val} {p : List Nat}
+    {d : Condition} {l : Nat} : ¬ InStray false data top loc u p d l :=
+  fun h => Bool.false_ne_true h.1
 
 /-- **Comparison operands.** For every visited node whose operator calls
     `__input` (`EqualTo`, `GreaterThan`, `LessThan`, signed comparisons,
@@ -883,8 +952,9 @@ theorem InStray.strict {data : Bytes} {u : Val} {p : List Nat} {d : Condition} {
     the described component (one word as is, longer encodings as the bytes
     that are keccak-hashed); or below a `Slice`, exactly a window of the
     component's content, right-aligned; or the ether value
-    (`EtherValue` nodes); or the node is inside an interpretation that need
-    not hold (only with `s = true`). -/
+    (`EtherValue` nodes); or the node is inside a variant branch that does
+    not fit (`InStray`, only with `s = true`). Which window a `Slice`
+    selects is tested, not proven. -/
 theorem decoder_input {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
@@ -896,7 +966,7 @@ theorem decoder_input {s : Bool}
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
     input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   have hlen' := hlen
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
@@ -936,7 +1006,7 @@ theorem decoder_custom_operand {s : Bool}
       At (calldata pre args suffix) l bs ∧
       (if d.size ≠ 0 then d.size else Roles.size (calldata pre args suffix) l d) = bs.length) ∨
     (∃ d0, d = annotate d0 ∧ NonStruct d0) ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, hr⟩ | hns |
     ⟨d0, bs, u, rfl, hw, hat, h1, h32, hsub, hiw⟩ | hst
@@ -979,29 +1049,34 @@ theorem Desc.children_ok {data : Bytes} (hlen : data.length < 2 ^ 255) {s : Bool
     ∃ locs, children data
       ((if loc > 0 ∧ (annotate c).encoding = .AbiEncoded then loc + 32 else loc) +
         (annotate c).leadingBytes) (annotate c) = some locs ∧
+      locs.length = (if c.encoding = .Array then u.components.length else c.children.length) ∧
       locs.length ≤ u.components.length := by
   match hD with
   | .tuple he _ hk hall _ _ =>
     rw [matchesLoc_plain (.inl he)]
     obtain ⟨locs, hl, hlen', _⟩ := children_tuple hlen (by rw [annotate_encoding, he]; simp)
       hk hall (by simpa [Placed, enc_tuple] using hp)
-    exact ⟨locs, hl, by rw [hlen']; simpa [Val.components] using hk⟩
+    exact ⟨locs, hl, by rw [hlen', he]; simp,
+      by rw [hlen']; simpa [Val.components] using hk⟩
   | .array c0 _ he hcs h0 _ _ _ =>
     rw [matchesLoc_plain (.inr he)]
     obtain ⟨locs, hl, hlen', _⟩ := children_array hlen (by rw [annotate_encoding, he]; simp)
       hcs h0 (by simpa [Placed] using hp)
-    exact ⟨locs, hl, by rw [hlen']; simp [Val.components]⟩
+    exact ⟨locs, hl, by rw [hlen', he]; simp [Val.components],
+      by rw [hlen']; simp [Val.components]⟩
   | .call he hL _ hk hall _ =>
     obtain ⟨locs, hl, hlen', _⟩ := children_tuple hlen (by rw [annotate_encoding, he]; simp)
       hk hall (call_args_At he hL hp)
-    exact ⟨locs, hl, by rw [hlen']; simpa [Val.components] using hk⟩
+    exact ⟨locs, hl, by rw [hlen', he]; simp,
+      by rw [hlen']; simpa [Val.components] using hk⟩
   | .word he _ _ _ | .bytes he _ _ _ | .sliceWord he _ _ _ _ _ _ | .sliceBytes he _ _ _ _ _ _
   | .logical _ he _ _ _ _ _ =>
     rcases hcont with h | h | h <;> rw [he] at h <;> cases h
 
 /-- **No false rejections: containers.** Every visited container decodes its
-    children without overflow, one location per component it describes (a
-    `Matches` may leave out trailing fields). -/
+    children without overflow: an array into one location per element, a
+    tuple or call into one location per child (a `Matches` may leave out
+    trailing fields, never more than the value has). -/
 theorem decoder_children {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
@@ -1011,16 +1086,26 @@ theorem decoder_children {s : Bool}
     (∃ u, (Val.call pre args).sub p = some u ∧
       ∃ locs, children (calldata pre args suffix)
         ((if l > 0 ∧ d.encoding = .AbiEncoded then l + 32 else l) + d.leadingBytes) d =
-          some locs ∧ locs.length ≤ u.components.length) ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+          some locs ∧
+        locs.length = (if d.encoding = .Array then u.components.length else d.children.length) ∧
+        locs.length ≤ u.components.length) ∨
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, _⟩ | ⟨d0, rfl, hns⟩ | ⟨d0, bs, u, rfl, hw, _⟩ | hst
   · left
-    refine ⟨u, hsub, hD0.children_ok hlen hp ?_⟩
-    rw [annotate_encoding] at hcont
-    split at hcont
-    · rcases hcont with h | h | h <;> cases h
-    · exact hcont
+    have hcont0 : d0.encoding = .Tuple ∨ d0.encoding = .Array ∨ d0.encoding = .AbiEncoded := by
+      rw [annotate_encoding] at hcont
+      split at hcont
+      · rcases hcont with h | h | h <;> cases h
+      · exact hcont
+    have henc : (annotate d0).encoding = d0.encoding := by
+      rw [annotate_encoding]
+      split
+      · rename_i h; rcases hcont with h' | h' | h' <;> (rw [annotate_encoding, if_pos h] at h'; cases h')
+      · rfl
+    obtain ⟨locs, hl, heq, hle⟩ := hD0.children_ok hlen hp hcont0
+    refine ⟨u, hsub, locs, hl, ?_, hle⟩
+    rw [heq, henc, annotate_children, List.length_map]
   · exfalso
     rw [annotate_encoding] at hcont
     rcases hns with hns | ⟨_, he, _, _⟩
@@ -1051,7 +1136,7 @@ theorem decoder_zip {s : Bool}
     (∃ vs locs, (Val.call pre args).sub pp = some (.array vs) ∧
       children (calldata pre args suffix) L (zipStub ((zipFields z).getD f default)) =
         some locs ∧ locs.length = vs.length) ∨
-    InStray s (calldata pre args suffix) (.call pre args) pp pk L := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) pp pk L := by
   obtain ⟨z0, hz0s, hzop0, hfields, hcv⟩ := Eval.zip_raw hz hzop
   have hf0 : f < (zipFields z0).length := by rw [hfields] at hf; simpa using hf
   have hfield : (zipFields z).getD f default = annotate (zipFields z0)[f] := by
@@ -1122,7 +1207,7 @@ theorem decoder_slice {s : Bool}
       (if d.inlined then d.size else load (calldata pre args suffix) l) = (content u).length) ∨
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       At (calldata pre args suffix) l bs ∧ d.inlined = true ∧ d.size = bs.length) ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
     ⟨d0, u, _, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
     ⟨d0, bs, u, rfl, hw, hat, _, _, hsub, hiw⟩ | hst

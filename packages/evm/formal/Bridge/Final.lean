@@ -3,7 +3,8 @@ import Bridge.ReadNorm
 /-!
 # Normalization keeps the contract's verdict, on calldata
 
-For every well-typed tree `c` (`inv`, which the SDK check enforces) and
+For every well-typed tree `c` (`inv`, which the SDK check is tested to
+imply) and
 every calldata, the contract's evaluation of `normalize k c` computes the
 contract's own reading of `c` (`normalize_meaning`): whenever it does not
 revert, it passes exactly when that reading passes, with the same allowance

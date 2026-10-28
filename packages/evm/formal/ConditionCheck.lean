@@ -7,3 +7,4 @@ import ConditionCheck.EndToEnd
 import ConditionCheck.Stored
 import ConditionCheck.Compare
 import ConditionCheck.Examples
+import ConditionCheck.NonVacuity

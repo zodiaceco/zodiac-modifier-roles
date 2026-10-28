@@ -1251,8 +1251,10 @@ theorem checkCondition_call_all {s : Bool} {root : Condition} {lb : Nat} {ts : L
 /-- **End to end**, for the comparison operands (`decoder_input`): on a tree
     the check accepts, for every well-typed calldata, every visited node that
     reads `__input` reads the spec encoding of its value (or a window of it,
-    below a `Slice`, or the ether value), unless it sits in an interpretation
-    that does not hold (only with `s = true`). -/
+    below a `Slice`, or the ether value), unless it sits in a variant branch
+    that does not fit (`InStray`, only with `s = true`). Root type `.call`
+    only: a variant root (an `Or` of `AbiEncoded` branches, type `.dynamic`
+    with `s = true`) is not covered by this theorem. -/
 theorem checked_input {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o : Bool}
     (h : checkCondition s root = some (.call lb ts o)) {pre : Bytes} {args : List Val}
     (hpre : pre.length = lb) (hargs : if o then HasTPre s args ts else HasTAll s args ts)
@@ -1266,7 +1268,7 @@ theorem checked_input {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
       input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
     input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
   obtain ⟨hr, hz, hd⟩ := checkCondition_call h hpre hargs
   exact decoder_input root pre args suffix hd hr hz hlen hv hop
 

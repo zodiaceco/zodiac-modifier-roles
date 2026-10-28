@@ -33,10 +33,15 @@ lake build Normalize
 - `Matches` on a tuple or calldata: structural children read the fields in
   order, non-structural children (encoding `None`/`EtherValue`, or `And`/`Or`
   with no structural child) read no field.
-- Everything else is the world's `ext`, which sees its children only through
-  their meanings.
+- Everything else is the world's `ext`, which gets the node itself (for what
+  it reads of its own encoding and children) and its children's meanings.
 
-`World.Ok` collects what is assumed of `ext` and of charging. `comm` (charges
+`World.NormOk` assumes, among other things, that rewriting a node's children
+does not change what `ext` does (`ext`). It also takes an invariant `inv` of
+the trees, which `normalize_sound` requires of its input. For the contract's
+reading both are proven on well-typed trees (`Bridge.readWorld_normOk`).
+
+`World.Ok` collects what is assumed of the effects of `ext` and of charging. `comm` (charges
 commute) holds for the contract's `consume` (`consume_comm`). The rest are
 statements about operators normalization doesn't rewrite: only `Pluck` writes
 slots; only `Custom`, `WithinAllowance`, `CallWithinAllowance` charge; and

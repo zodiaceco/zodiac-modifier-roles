@@ -101,6 +101,10 @@ checks the SDK's `accrueAllowance` against the contract's
 - With them: three seeds, 6,000 steps including 810 updates, and 6,000
   accrual checks, 0 differences.
 
+These tests run single calls through `Roles`, not batches. `NonVacuity.lean`
+(built with the library) shows the hypotheses of the main theorems hold on
+concrete spends and histories, and that `spending_limit` is tight.
+
 ## Not covered
 
 - Within one transaction, which spends count: proven in
@@ -112,7 +116,10 @@ checks the SDK's `accrueAllowance` against the contract's
   interleave (tested, see
   [attribution and reentrancy](../EndToEnd/README.md#attribution-and-reentrancy)),
   so it covers on-chain histories in which the owner does not change
-  allowances during an execution.
+  allowances during an execution. `executions_limit` bounds raw charged
+  amounts; the evaluator model's conversion (`Env.scale`) is abstract and no
+  theorem ties it to `charge`, so `value_limit` and `charged_covers` are
+  about this model, tested through Roles on single calls.
 - Price adapters themselves. A price is whatever the adapter returns, and a
   manipulable or stale price makes the value wrong. Adapters are chosen by
   the owner.

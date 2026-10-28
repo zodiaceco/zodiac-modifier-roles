@@ -2,7 +2,9 @@
 
 Machine-checked proof that `ConditionPacker.pack` followed by
 `ConditionUnpacker.unpack` returns the condition tree it was given, for every
-flat condition array that passes the checks Integrity runs. The proof works on
+`Packable` flat condition array (the width, order and compValue checks we read
+Integrity as enforcing; that Integrity implies `Packable` is not proven). The
+proof works on
 the byte buffer and on a byte-level model of EVM memory, including the assembly
 in both libraries.
 
@@ -121,6 +123,10 @@ compValues of every shape Integrity accepts, it requires:
   `ConditionUnpacker.unpack` (via `MockPackerUnpacker.roundtrip`).
 
 Driver: `lake build roles-model`, queries `pk` and `up` (see `Diff.lean`).
+
+`NonVacuity.lean` (built with the library) shows `Packable` holds on
+non-trivial arrays (several levels, a non-inlined `EqualTo`, Plucks, a Zip)
+and that `rawTree` is the expected tree for them.
 
 ## Trusted base
 

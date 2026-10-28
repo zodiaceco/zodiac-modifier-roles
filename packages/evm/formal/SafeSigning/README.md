@@ -35,6 +35,17 @@ EIP-712 message (permits, orders, …), whatever `allowPersonalSign` /
 `allowSignTypedMessage` permissions say. The SDK has no helper that allows
 `signMessage`, and none should.
 
+`signMessage_typed` is `rfl` and `signTyped_valid` nearly so: their content
+is the transcription `signTypedKey` (the key `signTypedMessage` stores). The
+Lean differential test below compares only the `personalSign` and
+`signMessage` keys, so `signTypedKey` is checked by reading the code.
+
+The model uses one domain separator `ds` for the library and the handler.
+In the contracts the library reads `ISafe(address(this)).domainSeparator()`
+and the handler `Safe(msg.sender).domainSeparator()`; they are equal for the
+same Safe (the library runs in the Safe by delegatecall, and the Safe calls
+its handler).
+
 The handler's constant `SAFE_MSG_TYPEHASH` is a hypothesis of the theorems
 (`hTH`: it is `keccak256("SafeMessage(bytes message)")`); the test checks it
 with the executable keccak256.
@@ -57,5 +68,7 @@ with the executable keccak256.
 - The storage write: `SafeStorage` matches the Safe 1.3 / 1.4.1 layout by
   inspection (the integration test reads the result through the handler).
 - `isValidSignature` with a non-empty signature (owners' signatures).
+- The key `signTypedMessage` stores (`signTypedKey`): checked by reading
+  the code, not by the differential test.
 - What the Roles permission on `personalSign` admits: `allowPersonalSign` is
   a `Bitmask` on the message prefix, which decoder faithfulness covers.

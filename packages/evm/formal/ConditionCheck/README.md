@@ -23,7 +23,7 @@ these hold. It returns `typed t` (the root describes calldata of type `t`) or
 
 | Part             | File         | What it requires                                                                                          | Proven                                                   |
 | ---------------- | ------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `packableB`      | `Flat.lean`  | `Packable`: BFS order, field widths, Pluck index ≤ 254, compValue shapes the packer relies on             | decides `Packable` (`packableB_sound`)                   |
+| `packableB`      | `Flat.lean`  | `Packable`: BFS order, field widths, Pluck index ≤ 254, compValue shapes the packer relies on             | implies `Packable` (`packableB_sound`)                   |
 | `opsOk`          | `Ops.lean`   | Integrity's per-operator rules: encodings, compValue lengths and fields, child counts, unique Pluck slots | nothing (a transcription; tested against Integrity)      |
 | `assigned`       | `Slots.lean` | `_validatePluckAssignments`: every slot a Zip or `WithinRatio` reads is written first, on every path      | no execution reads an unwritten slot (`assigned_no_bad`) |
 | `checkCondition` | `Check.lean` | the tree describes an ABI type (below)                                                                    | the decoder hypotheses (`checkCondition_sound`)          |
@@ -73,8 +73,11 @@ On the whole tree:
 
 `s` is the strictness flag of the decoder theorems. With `s = false`,
 variants are rejected and the theorems give the full guarantee. With
-`s = true`, variants are accepted and the theorems allow "an interpretation
-that does not fit" (case (iv)).
+`s = true`, variants are accepted and the theorems allow case (iv): a node
+inside a variant branch that does not fit the `bytes` value it is evaluated
+on, where the branch itself sits exactly at that value (`InStray`). The SDK's
+`checkStored` and `checkAndPack` default to `s = true`, so they accept
+variants; for trees without variants the full guarantee holds either way.
 
 ## What is proven
 
@@ -153,7 +156,12 @@ compValue passed on the word `keccak256(compValue)`).
   exactly when `enc(u) = enc(v)`, or the two collide.
 - `compare_word`: `GreaterThan`/`LessThan` compare the 32-byte word as an
   unsigned integer, the signed variants as two's complement (`toInt`).
-- `checked_equalTo`: end to end on a stored array the check accepts.
+- `checked_equalTo`: end to end on a stored array the check accepts, for
+  `EqualTo` nodes whose operand and compValue are of one length class
+  (`SameClass`) and whose compValue has at least 32 bytes. Both are
+  hypotheses: no theorem derives them from `checkStored` (that the check
+  keeps a static operand's compValue at exactly its size is from reading
+  the check).
 
 Not covered: `Bitmask` (proven in the decoder proof), `Custom` (an external
 contract), `WithinAllowance`/`CallWithinAllowance` (allowance storage),
@@ -309,10 +317,11 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
 | `Flat.lean`     | `packableB`, avatar independence (`skel`), non-structural roots                                 |
 | `Ops.lean`      | `opsOk`: Integrity's per-operator rules                                                         |
 | `Slots.lean`    | `assigned`, the execution model `Run`, `run_sound`                                              |
-| `EndToEnd.lean` | `stored_input`: packing + check + `decoder_input`                                               |
+| `EndToEnd.lean` | `stored_input`: packing + check + `decoder_input` (root type `.call` only; a variant root, an `Or` of `AbiEncoded` branches typed `.dynamic`, is not covered) |
 | `Stored.lean`   | `checkStored`, `checkStored_sound`                                                              |
 | `Compare.lean`  | comparison operators: `equalTo_iff`, `equalTo_intended`, `compare_word`, `checked_equalTo`      |
 | `Examples.lean` | accepted and rejected trees                                                                     |
+| `NonVacuity.lean` | arrays `checkStored` accepts, calldata meeting the typed hypotheses, a `Run` that ends in `bad` |
 
 ## Trusted base
 
@@ -327,3 +336,11 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
   32-byte encoding is an empty value (fixed bytes), so matching a longer
   compValue needs a preimage of it.
 - `opsOk` is not proven; it only makes the check stricter.
+- The SDK code is tied to the Lean definitions by tests only: `checkStored.ts`
+  equals the Lean `checkStored` by differential testing
+  (`test/formal/sdk-check.spec.ts`, `ck` query), and `packConditions.ts`
+  equals `packSpec` by testing (`sdk-check.spec.ts` and
+  `sdk-packed-roles.spec.ts`, `pk` query).
+
+`NonVacuity.lean` (built with the library) shows the hypotheses of
+`checkStored_sound` hold on concrete arrays and calldata.
