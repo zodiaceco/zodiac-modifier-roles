@@ -121,7 +121,8 @@ Not covered yet:
 - **Non-canonical calldata, on the target.** For targets compiled by solc,
   [target decoding](TargetDecode/README.md) proves that each check Roles
   makes is a check on what the target decodes. That the checks then combine
-  to the same verdict is tested, not proven; crafted encodings can choose
+  to the same verdict is tested (Plucks, Zips, `WithinRatio` and nested
+  calldata included), not proven; crafted encodings can choose
   among `Or` branches (documented). Targets with other decoders (Vyper,
   hand-written) and custom checkers are not covered.
 - **Memberships, signatures and reentrancy** are tested on chain, not

@@ -33,14 +33,23 @@ All on Lean's standard axioms.
 `test/formal/integrity-gaps.spec.ts`, `GAP_TARGET=<n>` (needs the Lean
 driver and the solc binary Hardhat caches; `GAP_SOLC` overrides its path):
 
-- Random signatures (words of every width, `bytes`, tuples, arrays) and
-  values, encoded in random valid but non-canonical layouts: tails
-  reordered, gapped, shared; dirty padding; trailing words; offsets into
-  the head; sometimes dirty narrow words; a quarter of the inputs
-  malformed (large or off-by-one words, cuts, bit flips).
+- Random signatures (words of every width, `bytes`, tuples, arrays,
+  nested calldata) and values, encoded in random valid but non-canonical
+  layouts: tails reordered, gapped, shared; dirty padding; trailing words;
+  offsets into the head; sometimes dirty narrow words; nested calldata
+  laid out loosely as well; a quarter of the inputs malformed (large or
+  off-by-one words, cuts, bit flips).
+- Random conditions, a third of them with state that crosses nodes:
+  Plucks of 2-3 arrays and a `ZipSome`/`ZipEvery` over them, or Plucks of
+  two amounts (parameters or the ether value) and a `WithinRatio` whose
+  bounds sit at their actual ratio.
+- Trees take the SDK path: `checkAndPack` gates them (about a sixth are
+  rejected), Roles evaluates the packed buffer. Integrity is not involved.
 - A generated contract with two functions per signature (`calldata` and
   `memory` parameters) returns `abi.encode` of what it decoded, compiled
-  with the legacy and the via-IR pipeline.
+  with the legacy and the via-IR pipeline. Nested calldata goes to a
+  second function of the same contract (its receiver), which decodes it
+  the same way; its result replaces the nested calldata.
 - **The decoder model is solc's.** The driver's `sd` query runs `decode`
   on the same calldata. It must give the same result as both `memory`
   builds, accept or reject. `calldata` parameters accept more: solc
@@ -53,20 +62,25 @@ driver and the solc binary Hardhat caches; `GAP_SOLC` overrides its path):
   calldata the target re-encoded. Whenever Roles passes the crafted
   calldata and the target accepts it, the canonical calldata must pass
   too, with the same allowance consumptions, or with consumptions some
-  choice of `Or` branches gives (see below). Otherwise the case is a
-  bypass: Roles let through values it rejects when they are encoded
-  plainly.
+  choice of `Or` branches gives (see below; tried by moving each branch
+  of each `Or` to the front). Otherwise the case is a bypass: Roles let
+  through values it rejects when they are encoded plainly.
 
 Results: 10 seeds of 1,500 cases, four target builds each: no bypass.
-Per seed, 340 to 430 calls pass Roles and are accepted by the target; in
-all of them the target decoded values Roles accepts canonically, with the
-same consumptions except twice (seeds 3 and 9), where the crafted calldata
-took another `Or` branch (below). 20 to 40 per seed are refused by Roles
-but accepted canonically (Roles is stricter: a tail at or before its head
-slot, a dynamic value with dirty padding compared by `EqualTo`). The Lean
-decoder agrees with both `memory` builds on every case (about 250
-rejections per seed); `calldata` builds accepted 1 to 4 more per seed, all
-with backward offsets.
+Per seed, 190 to 215 calls pass Roles and are accepted by the target, among
+them 23 to 49 with a Zip, 39 to 59 with a `WithinRatio` and 55 to 68 with
+nested calldata. In all of them the target decoded values Roles accepts
+canonically, with the same consumptions except once each in seeds 2, 4, 6
+and 10, where the crafted calldata took another `Or` branch (below). 7 to
+15 per seed are refused by Roles but accepted canonically (Roles is
+stricter: a tail at or before its head slot, a dynamic value with dirty
+padding compared by `EqualTo`). The Lean decoder agrees with both `memory`
+builds on every case; `calldata` builds accept a few more, all with
+backward offsets.
+
+An earlier version (10 seeds, Integrity instead of the SDK check, no
+Plucks, Zips or nested calldata) found the same: no bypass, two `Or`
+branch choices.
 
 ## Finding: the caller can choose the `Or` branch
 
@@ -93,8 +107,11 @@ don't rely on an earlier branch's allowance being charged.
   makes is a check on what the target decodes, and passes only if it
   passes for those values (operators never negate). That the evaluator as
   a whole then passes the canonical calldata too, with some choice of
-  `Or` branches, is the fuzz above, not a theorem. The branch choice is
-  the finding above.
+  `Or` branches, is the fuzz above (Plucks, Zips, `WithinRatio` and nested
+  calldata included), not a theorem: a proof would relate two whole
+  evaluations, with Pluck slots surviving failed branches and a
+  nondeterministic `Or`, for little beyond the per-node argument. The
+  branch choice is the finding above.
 - **Targets with `calldata` parameters following a "negative" offset.**
   `decode` models solc's `memory` decoder; the `calldata` decoder also
   follows offsets that wrap around (above). Roles never follows such an
@@ -103,9 +120,9 @@ don't rely on an earlier branch's allowance being charged.
 - **compValues that are not spec encodings.** `target_input` concludes
   from "the operand is the spec encoding of `v`". The SDK writes spec
   encodings; a hand-made compValue with, say, dirty padding pins nothing.
-- Nested calldata: proven (`LP` covers it), but the decoder model and the
-  fuzz do not decode nested calldata; the theorems assume whoever decodes
-  it follows offsets.
+- Nested calldata: proven (`LP` covers it) and fuzzed (decoded by a solc
+  receiver), but the Lean decoder model does not decode it; the theorems
+  assume whoever decodes it follows offsets.
 - Targets not compiled by solc (Vyper, hand-written decoders) and
   fallback functions that decode by hand.
 - Custom checkers: they receive `(location, size)` of the raw bytes, not
