@@ -32,7 +32,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
 | [End to end](#end-to-end): signing permissions reach a Roles Modifier's `RoleTx` only through the permissions `permissionHazards` flags; every transaction the avatar executes, batches included, passed its own permission, and the spending limit holds across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
 | [Attribution and reentrancy](#end-to-end): executions never interleave; each runs as an enabled, active member, each signature once | [`EndToEnd`](EndToEnd/README.md#attribution-and-reentrancy) | Tested |
-| [Target decoding](TargetDecode/README.md): a value is determined by its location and shape; solc's decoder accepts only loosely placed values; an `EqualTo` region equal to the pinned encoding means the target decoded the pinned value. The walker on non-canonical layouts is tested | [`TargetDecode`](TargetDecode/README.md) | In progress |
+| [Target decoding](TargetDecode/README.md): on every layout solc's decoder accepts (tails reordered, shared or gapped, dirty padding), each node Roles visits is where the target reads its component; static operands are exactly the decoded values, an `EqualTo` passes only if the target decoded the pinned value, `Bitmask` and `Slice` see the bytes the target decodes. That checks combine per `Or` branch is tested | [`TargetDecode`](TargetDecode/README.md) | Proven |
 
 Not covered yet:
 
