@@ -10,6 +10,7 @@ import SafeSigning
 import Allowance
 import EndToEnd.Batch
 import EndToEnd.Library
+import TargetDecode.Decoder
 
 /-!
 Differential-testing driver for the Roles transcription (`DecoderFaithfulness/Roles.lean`).
@@ -67,6 +68,12 @@ A line `pn <i> <b|t> <nodes>` packs and unpacks the tree as `ev` does and
 prints `1` if `EndToEnd.pinsArg` holds for argument `i` with the `bytes`
 leaf (`b`, `leafBytes`) or the EIP-712 `types` leaf (`t`, `leafTypes`),
 else `0` (`unpack-failed` if the model cannot unpack it).
+
+A line `sd <calldata hex> <type> ...` runs `TargetDecode.decodeCall` (solc's
+parameter decoder) on the calldata after its 4-byte selector, for the given
+Solidity parameter types (`uint256`, `address`, `bytes32`, `(uint256,bytes)`,
+`bytes[]`, `uint8[3]`, ...), and prints the spec encoding of the decoded
+arguments (what `abi.encode` of them returns) as hex, or `none`.
 
 A line `iv <nodes>` builds the SDK tree and runs `Bridge.invB` (the
 well-typedness `Bridge` assumes) and prints `ok`, or `bad <node> <clauses>`:
@@ -233,6 +240,54 @@ def runPins (iStr leaf nodesStr : String) : String :=
     | some (root, _) =>
       let lf := if leaf == "t" then EndToEnd.leafTypes else EndToEnd.leafBytes
       if EndToEnd.pinsArg lf iStr.toNat! (fs.length + 1) root then "1" else "0"
+
+/-- A Solidity type from its canonical string. -/
+partial def parseSTy (cs : List Char) : Option (TargetDecode.STy × List Char) :=
+  let base : Option (TargetDecode.STy × List Char) :=
+    match cs with
+    | '(' :: rest =>
+      let rec fields (acc : List TargetDecode.STy) (r : List Char) :
+          Option (List TargetDecode.STy × List Char) :=
+        match r with
+        | ')' :: r' => some (acc.reverse, r')
+        | _ =>
+          match parseSTy r with
+          | some (t, ',' :: r') => fields (t :: acc) r'
+          | some (t, ')' :: r') => some ((t :: acc).reverse, r')
+          | _ => none
+      (fields [] rest).map fun (ts, r) => (.tuple ts, r)
+    | _ =>
+      let name := cs.takeWhile fun c => c.isAlphanum
+      let rest := cs.drop name.length
+      let str := String.ofList name
+      let num (pre : String) : Option Nat := (str.drop pre.length).toString.toNat?
+      if str = "address" then some (.address, rest)
+      else if str = "bool" then some (.bool, rest)
+      else if str = "bytes" ∨ str = "string" then some (.bytes, rest)
+      else if str.startsWith "uint" then (num "uint").map fun n => (.uint n, rest)
+      else if str.startsWith "int" then (num "int").map fun n => (.int n, rest)
+      else if str.startsWith "bytes" then (num "bytes").map fun n => (.fixedBytes n, rest)
+      else none
+  let rec suffix (t : TargetDecode.STy) : List Char → TargetDecode.STy × List Char
+    | '[' :: ']' :: r => suffix (.array t) r
+    | '[' :: r =>
+      let ds := r.takeWhile Char.isDigit
+      match r.drop ds.length, (String.ofList ds).toNat? with
+      | ']' :: r', some k => suffix (.farray t k) r'
+      | _, _ => (t, '[' :: r)
+    | r => (t, r)
+  base.map fun (t, r) => suffix t r
+
+/-- The `sd` query (see the header). -/
+def runSolDecode (hex : String) (types : List String) : String :=
+  match types.mapM (fun t => match parseSTy t.toList with
+      | some (ty, []) => some ty
+      | _ => none) with
+  | none => "bad-input"
+  | some ts =>
+    match TargetDecode.decodeCall (parseHex hex) 4 ts with
+    | none => "none"
+    | some args => ((hexOf (DecoderFaithfulness.encTuple args)).drop 2).toString
 
 /-- `az`: the batch model `EndToEnd.authorize` (`_authorize`). -/
 def runAuthorize (value op toHex hex allowances unwrappers perms : String) : String :=
@@ -582,6 +637,7 @@ def runLine (line : String) : String :=
     hexOf (ConditionPacking.pack (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
   | ["pn", i, leaf, nodesStr] => runPins i leaf nodesStr
+  | "sd" :: hex :: types => runSolDecode hex types
   | ["iv", nodesStr] => runInv (buildCond (parseNodes nodesStr) 0)
   | ["nz", nodesStr] => showCond (Normalize.normalize 1000 (buildCond (parseNodes nodesStr) 0))
   | ["ck", sStr, nodesStr] =>

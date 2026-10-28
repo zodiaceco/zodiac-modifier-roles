@@ -1,5 +1,5 @@
 name = "roles_formal"
-defaultTargets = ["DecoderFaithfulness", "ConditionPacking", "ConditionCheck", "Normalize", "Evaluate", "Bridge", "EIP712", "MultiSend", "SafeSigning", "Allowance", "EndToEnd"]
+defaultTargets = ["DecoderFaithfulness", "ConditionPacking", "ConditionCheck", "Normalize", "Evaluate", "Bridge", "EIP712", "MultiSend", "SafeSigning", "Allowance", "EndToEnd", "TargetDecode"]
 
 [[lean_lib]]
 name = "DecoderFaithfulness"
@@ -38,3 +38,6 @@ name = "EndToEnd"
 [[lean_exe]]
 name = "roles-model"
 root = "Diff"
+
+[[lean_lib]]
+name = "TargetDecode"

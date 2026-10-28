@@ -64,7 +64,8 @@ import {
   zeroPadValue,
 } from "ethers";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -85,7 +86,8 @@ import { Encoding, Operator, flattenCondition } from "../utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
 const SEED = Number(process.env.GAP_SEED ?? 1);
-const CLEAN = process.env.GAP_CLEAN === "1";
+const TARGET = Number(process.env.GAP_TARGET ?? 0);
+const CLEAN = process.env.GAP_CLEAN === "1" || TARGET > 0;
 const REPORT = process.env.GAP_REPORT;
 const CHECK = process.env.GAP_CHECK === "1";
 const MUTATE = Number(process.env.GAP_MUTATE ?? 0);
@@ -267,7 +269,19 @@ const tag = (t: string) => {
 // Intended ABI types and values
 // ---------------------------------------------------------------------------
 
-type WordAbi = "uint256" | "int256" | "address" | "bytes32" | "bool";
+type WordAbi =
+  | "uint256"
+  | "int256"
+  | "address"
+  | "bytes32"
+  | "bool"
+  // narrow types (GAP_TARGET only)
+  | "uint8"
+  | "uint64"
+  | "int8"
+  | "int64"
+  | "bytes1"
+  | "bytes4";
 /** Leading bytes of nested calldata: `n` bytes, checked against `prefix`. */
 type Lead = { n: number; checked: boolean; prefix: Uint8Array };
 type Ty =
@@ -362,6 +376,13 @@ function randVal(t: Ty): any {
       if (t.abi === "address") return hexlify(bytes(20));
       if (t.abi === "bool") return chance(0.5);
       if (t.abi === "bytes32") return hexlify(bytes(32));
+      if (t.abi === "uint8") return BigInt(int(256));
+      if (t.abi === "uint64") return BigInt(hexlify(bytes(8)));
+      if (t.abi === "int8") return BigInt.asIntN(8, BigInt(int(256)));
+      if (t.abi === "int64")
+        return BigInt.asIntN(64, BigInt(hexlify(bytes(8))));
+      if (t.abi === "bytes1") return hexlify(bytes(1));
+      if (t.abi === "bytes4") return hexlify(bytes(4));
       if (t.abi === "int256")
         return BigInt.asIntN(256, BigInt(hexlify(bytes(32))));
       return chance(0.3) ? BigInt(int(1000)) : BigInt(hexlify(bytes(32)));
@@ -556,7 +577,7 @@ function sliceNode(paramType: Encoding, bs: Uint8Array): Node {
 /** A non-positional node: an EtherValue check, Empty, or a logical node of
  *  those. Never a Zip (Zips are placed by `withZip`). */
 function genNP(depth = 1): Node {
-  if (EVAL && chance(0.3))
+  if ((EVAL || TARGET) && chance(0.3))
     return chance(0.5)
       ? {
           paramType: Encoding.None,
@@ -649,7 +670,11 @@ function aliasWrap(n: Node): Node {
     operator: Operator.And,
     children: [
       charge(),
-      { paramType: Encoding.None, operator: Operator.Or, children: [failing, n] },
+      {
+        paramType: Encoding.None,
+        operator: Operator.Or,
+        children: [failing, n],
+      },
       ...(chance(0.5) ? [charge()] : []),
     ],
   };
@@ -658,7 +683,7 @@ function aliasWrap(n: Node): Node {
 /** A positional condition for a value `v` of type `t`. */
 function gen(t: Ty, v: any, depth = 0): Node {
   let n = genBase(t, v, depth);
-  if (EVAL && chance(0.12) && depth < 4) return aliasWrap(n);
+  if ((EVAL || TARGET) && chance(0.12) && depth < 4) return aliasWrap(n);
   if (chance(0.12) && depth < 4) {
     // And/Or of two conditions on the same value, maybe with EtherValue
     // checks beside them (legit: logical nodes evaluate every child in place).
@@ -673,7 +698,7 @@ function genBase(t: Ty, v: any, depth: number): Node {
   switch (t.k) {
     case "word": {
       const w = encodeAt(t, v);
-      if (EVAL && chance(0.15))
+      if ((EVAL || TARGET) && chance(0.15))
         return {
           paramType: Encoding.Static,
           operator: Operator.WithinAllowance,
@@ -1754,5 +1779,536 @@ describe("Integrity gaps (fuzz)", function () {
     );
     for (const d of diffs.slice(0, 8)) console.log(`      ${d}`);
     expect(diffs.length).to.equal(0);
+  });
+  /* -------------------------------------------------------------------------
+   * GAP_TARGET: does the target decode what Roles checked?
+   *
+   * Roles reads calldata with its own walker; the target with solc's ABI
+   * decoder. For random signatures (words, bytes, tuples, arrays), valid but
+   * non-canonical encodings (tails reordered, gapped or shared, dirty
+   * padding, trailing junk, offsets into the head, sometimes dirty narrow
+   * words) and random conditions, Roles evaluates the crafted calldata, a
+   * solc-compiled target decodes it (`calldata` and `memory` parameters)
+   * and returns `abi.encode` of what it decoded, and Roles evaluates that
+   * canonical calldata too. A call Roles passes and the target accepts must
+   * pass canonically with the same consumptions: otherwise Roles let
+   * through values it rejects when they are encoded plainly.
+   * ---------------------------------------------------------------------- */
+  it(`the target decodes what Roles checked (${TARGET} cases)`, async function () {
+    if (TARGET <= 0) this.skip();
+    const SOLC =
+      process.env.GAP_SOLC ??
+      path.join(
+        os.homedir(),
+        "Library/Caches/hardhat-nodejs/compilers-v3/macosx-amd64/solc-macosx-amd64-v0.8.37+commit.f401782d",
+      );
+    if (!existsSync(SOLC)) this.skip();
+    rand = mulberry32(SEED);
+
+    // types: words, bytes, tuples, arrays (no nested calldata)
+    const tTy = (depth: number): Ty => {
+      const r = int(depth <= 0 ? 2 : 4);
+      if (r === 0)
+        return {
+          k: "word",
+          abi: pick([
+            "uint256",
+            "int256",
+            "address",
+            "bytes32",
+            "bool",
+            "uint8",
+            "uint64",
+            "int8",
+            "int64",
+            "bytes1",
+            "bytes4",
+          ] as WordAbi[]),
+        };
+      if (r === 1) return { k: "bytes" };
+      if (r === 2)
+        return {
+          k: "tuple",
+          cs: Array.from({ length: 1 + int(3) }, () => tTy(depth - 1)),
+        };
+      return { k: "array", e: tTy(depth - 1) };
+    };
+
+    // ---------------------------------------------------- loose encoder
+    const DIRTY = 0.03;
+    const w32 = (n: bigint) => getBytes(toBeHex(BigInt.asUintN(256, n), 32));
+    const junk = (words: number) => bytes(32 * words);
+    const wordEnc = (t: Extract<Ty, { k: "word" }>, v: any): Uint8Array => {
+      switch (t.abi) {
+        case "uint256":
+          return w32(v);
+        case "int256":
+          return w32(v);
+        case "uint8":
+        case "uint64": {
+          const bits = t.abi === "uint8" ? 8 : 64;
+          return w32(
+            chance(DIRTY) ? v | (1n << BigInt(bits + int(256 - bits))) : v,
+          );
+        }
+        case "int8":
+        case "int64": {
+          const bits = t.abi === "int8" ? 8 : 64;
+          const x = BigInt.asUintN(256, v);
+          return w32(
+            chance(DIRTY) ? x ^ (1n << BigInt(bits + int(256 - bits))) : x,
+          );
+        }
+        case "bytes1":
+        case "bytes4": {
+          const n = t.abi === "bytes1" ? 1 : 4;
+          const b = new Uint8Array(32);
+          b.set(getBytes(v), 0);
+          if (chance(DIRTY)) b[n + int(32 - n)] = 1 + int(255);
+          return b;
+        }
+        case "bytes32":
+          return getBytes(v);
+        case "address": {
+          const b = getBytes(zeroPadValue(v, 32));
+          if (chance(DIRTY)) b[int(12)] = 1 + int(255);
+          return b;
+        }
+        case "bool":
+          return w32(chance(DIRTY) ? BigInt(2 + int(5)) : v ? 1n : 0n);
+      }
+    };
+    const staticEnc = (t: Ty, v: any): Uint8Array =>
+      t.k === "word"
+        ? wordEnc(t, v)
+        : cat(...(t as any).cs.map((c: Ty, i: number) => staticEnc(c, v[i])));
+    const tailEnc = (t: Ty, v: any): Uint8Array => {
+      if (t.k === "bytes") {
+        const c = getBytes(v);
+        const pad = (32 - (c.length % 32)) % 32;
+        const padding = chance(0.2) ? bytes(pad) : new Uint8Array(pad);
+        return cat(
+          w32(BigInt(c.length)),
+          c,
+          padding,
+          chance(0.15) ? junk(1) : new Uint8Array(0),
+        );
+      }
+      if (t.k === "array")
+        return cat(
+          w32(BigInt(v.length)),
+          block(
+            v.map(() => t.e),
+            v,
+          ),
+        );
+      if (t.k === "tuple") return block(t.cs, v);
+      throw new Error("not dynamic");
+    };
+    const headSize = (t: Ty): number =>
+      isStatic(t)
+        ? t.k === "word"
+          ? 32
+          : (t as any).cs.reduce((a: number, c: Ty) => a + headSize(c), 0)
+        : 32;
+    function block(ts: Ty[], vs: any[]): Uint8Array {
+      const headLen = ts.reduce((a, t) => a + headSize(t), 0);
+      const dyn = ts.map((t, i) => i).filter((i) => !isStatic(ts[i]));
+      if (chance(0.4)) dyn.sort(() => rand() - 0.5);
+      let cursor = headLen;
+      const tails: Uint8Array[] = [];
+      if (chance(0.2)) {
+        const g = junk(1 + int(2));
+        tails.push(g);
+        cursor += g.length;
+      }
+      const offsets = new Map<number, number>();
+      const placed: { enc: string; at: number }[] = [];
+      for (const i of dyn) {
+        const enc = tailEnc(ts[i], vs[i]);
+        const same = placed.find((p) => p.enc === hexlify(enc));
+        if (same && chance(0.5)) {
+          offsets.set(i, same.at);
+          continue;
+        }
+        if (chance(0.03) && headLen > 0) {
+          offsets.set(i, 32 * int(headLen / 32));
+          continue;
+        }
+        offsets.set(i, cursor);
+        placed.push({ enc: hexlify(enc), at: cursor });
+        tails.push(enc);
+        cursor += enc.length;
+        if (chance(0.2)) {
+          const g = junk(1 + int(2));
+          tails.push(g);
+          cursor += g.length;
+        }
+      }
+      const head = ts.map((t, i) =>
+        isStatic(t) ? staticEnc(t, vs[i]) : w32(BigInt(offsets.get(i)!)),
+      );
+      return cat(...head, ...tails);
+    }
+
+    // ---------------------------------------------------- echo targets
+    const structs = new Map<string, string>();
+    const solT = (t: Ty): string => {
+      if (t.k === "word") return t.abi;
+      if (t.k === "bytes") return "bytes";
+      if (t.k === "array") return solT(t.e) + "[]";
+      if (t.k === "tuple") {
+        const key = abiType(t);
+        if (!structs.has(key)) {
+          const name = `S${structs.size}`;
+          structs.set(key, name);
+          structs.set(
+            name,
+            `struct ${name} { ${t.cs.map((c, i) => `${solT(c)} f${i};`).join(" ")} }`,
+          );
+        }
+        return structs.get(key)!;
+      }
+      throw new Error("unsupported");
+    };
+    const needsLoc = (t: Ty) => t.k !== "word";
+
+    type TCase = {
+      t: Extract<Ty, { k: "call" }>;
+      v: CallVal;
+      root: Node;
+      flat: any[];
+      args: Uint8Array;
+      value: number;
+      bal: bigint[];
+    };
+    const cases: TCase[] = [];
+    for (let c = 0; c < TARGET; c++) {
+      tags = new Set();
+      const args = Array.from({ length: 1 + int(3) }, () =>
+        tTy(chance(0.6) ? 1 : 2),
+      );
+      const t = {
+        k: "call",
+        args,
+        lead: { n: 4, checked: false, prefix: bytes(4) },
+      } as Extract<Ty, { k: "call" }>;
+      const v = randVal(t) as CallVal;
+      let root = gen(t, v);
+      if (chance(0.15))
+        root = {
+          paramType: Encoding.None,
+          operator: chance(0.5) ? Operator.And : Operator.Or,
+          children: injectNP([root], "root", true),
+        };
+      const flat = flattenCondition(strip(root)).map((f) => ({ ...f }));
+      const encoded = chance(0.15)
+        ? getBytes(
+            abi.encode(
+              args.map(abiType),
+              args.map((a, i) => toEth(a, v.args[i])),
+            ),
+          )
+        : block(args, v.args);
+      let argBytes = chance(0.3) ? cat(encoded, junk(1 + int(2))) : encoded;
+      if (chance(0.25)) {
+        // malformed: a word set to a large or off-by-one value, a cut, a flip
+        const d = Uint8Array.from(argBytes);
+        const r = int(3);
+        if (r === 0 && d.length >= 32) {
+          const at = 32 * int(d.length / 32);
+          if (at + 32 <= d.length)
+            d.set(
+              w32(
+                pick([
+                  2n ** 64n,
+                  2n ** 64n - 1n,
+                  2n ** 255n,
+                  BigInt(d.length),
+                  BigInt(d.length - 31),
+                ]),
+              ),
+              at,
+            );
+          argBytes = d;
+        } else if (r === 1) argBytes = d.slice(0, int(d.length + 1));
+        else {
+          if (d.length) d[int(d.length)] ^= 1 << int(8);
+          argBytes = d;
+        }
+      }
+      cases.push({
+        t,
+        v,
+        root,
+        flat,
+        args: argBytes,
+        value: pick([0, 1, 2, 500]),
+        bal: KEYS.map(() => pick([0n, 1n, 2n, 1000n, 2n ** 128n - 1n])),
+      });
+    }
+    const fns = cases.map((k, i) => {
+      const ps = (loc: string) =>
+        k.t.args
+          .map((a, j) => `${solT(a)}${needsLoc(a) ? " " + loc : ""} a${j}`)
+          .join(", ");
+      const names = k.t.args.map((_, j) => `a${j}`).join(", ");
+      return (
+        `function c${i}(${ps("calldata")}) external pure returns (bytes memory) { return abi.encode(${names}); }\n` +
+        `function m${i}(${ps("memory")}) external pure returns (bytes memory) { return abi.encode(${names}); }`
+      );
+    });
+    const source =
+      `// SPDX-License-Identifier: UNLICENSED\npragma solidity ^0.8.0;\n` +
+      [...structs]
+        .filter(([k]) => /^S\d+$/.test(k))
+        .map(([, d]) => d)
+        .join("\n") +
+      Array.from(
+        { length: Math.ceil(fns.length / 100) },
+        (_, b) =>
+          `\ncontract Echo${b} {\n${fns.slice(100 * b, 100 * b + 100).join("\n")}\n}\n`,
+      ).join("");
+    const compile = (viaIR: boolean) => {
+      const input = {
+        language: "Solidity",
+        sources: { "Echo.sol": { content: source } },
+        settings: {
+          viaIR,
+          optimizer: { enabled: true, runs: 200 },
+          evmVersion: "cancun",
+          outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } },
+        },
+      };
+      const r = spawnSync(SOLC, ["--standard-json"], {
+        input: JSON.stringify(input),
+        maxBuffer: 1 << 28,
+      });
+      const out = JSON.parse(String(r.stdout));
+      const errors = (out.errors ?? []).filter(
+        (e: any) => e.severity === "error",
+      );
+      return errors.length ? { errors } : out.contracts["Echo.sol"];
+    };
+    const codegens: { name: string; art: any }[] = [];
+    for (const viaIR of [false, true]) {
+      const art = compile(viaIR);
+      if (art.errors) {
+        if (process.env.GAP_REPORT)
+          writeFileSync(process.env.GAP_REPORT + ".sol", source);
+        console.log(
+          `      ${viaIR ? "via-IR" : "legacy"} compile failed: ${art.errors[0].formattedMessage.slice(0, 300)}`,
+        );
+        continue;
+      }
+      codegens.push({ name: viaIR ? "via-IR" : "legacy", art });
+    }
+    expect(codegens.length, "the echo target compiles").to.be.greaterThan(0);
+
+    const connection = await network.create({
+      override: { blockGasLimit: GAS > 30_000_000n ? GAS : 30_000_000n },
+    } as any);
+    const { ethers } = connection;
+    const [signer] = await ethers.getSigners();
+    const lib = async (name: string) => {
+      const { bytecode } = await hre.artifacts.readArtifact(name);
+      const c = await new ContractFactory([], bytecode, signer).deploy();
+      return c.getAddress();
+    };
+    const evaluator: any = await (
+      await ethers.getContractFactory("MockEvaluator", {
+        libraries: {
+          CustomConditionChecker: await lib("CustomConditionChecker"),
+          WithinRatioChecker: await lib("WithinRatioChecker"),
+        },
+      })
+    ).deploy();
+    /** Per codegen, the contract holding case i's functions. */
+    const echos: {
+      name: string;
+      at: (i: number) => { address: string; iface: any };
+    }[] = [];
+    for (const g of codegens) {
+      const parts: { address: string; iface: any }[] = [];
+      for (let b = 0; b * 100 < cases.length; b++) {
+        const a = g.art[`Echo${b}`];
+        const c = await new ContractFactory(
+          a.abi,
+          "0x" + a.evm.bytecode.object,
+          signer,
+        ).deploy();
+        parts.push({ address: await c.getAddress(), iface: c.interface });
+      }
+      echos.push({ name: g.name, at: (i) => parts[Math.floor(i / 100)] });
+    }
+
+    /** Every tree with each `Or` replaced by one of its branches (up to
+     *  64): the runs Roles could take if any passing branch may apply. */
+    const branchChoices = (n: Node): Node[] => {
+      const kidSets = (n.children ?? []).map(branchChoices);
+      const combos: Node[][] = [[]];
+      for (const ks of kidSets) {
+        const next: Node[][] = [];
+        for (const c of combos)
+          for (const k of ks) if (next.length < 64) next.push([...c, k]);
+        combos.splice(0, combos.length, ...next);
+      }
+      const rebuilt = combos.map((children) =>
+        n.children ? { ...n, children } : n,
+      );
+      if (n.operator !== Operator.Or || n.paramType !== Encoding.None)
+        return rebuilt;
+      // an Or may also take any branch alone
+      return [...rebuilt, ...rebuilt.flatMap((r) => r.children!)].slice(0, 64);
+    };
+    const roles = async (data: Uint8Array, k: TCase, flat = k.flat) => {
+      try {
+        const [st, cons] = await evaluator.evaluateWith.staticCall(
+          data,
+          flat,
+          k.value,
+          KEYS,
+          k.bal,
+          { gasLimit: GAS },
+        );
+        return {
+          status: Number(st),
+          cons: cons.map((x: any) => `${x[0]}:${x[1]}:${x[2]}`).join(","),
+        };
+      } catch (e: any) {
+        return { error: errName(e, evaluator.interface) };
+      }
+    };
+
+    const tally: Record<string, number> = {};
+    const bump = (key: string) => (tally[key] = (tally[key] ?? 0) + 1);
+    const findings: string[] = [];
+    const branchCases: string[] = [];
+
+    // What each target build decodes (canonical re-encoding, or undefined
+    // for a revert), and what the Lean model of solc's decoder says.
+    const decodedBy: Record<string, string | undefined>[] = [];
+    for (const [i, k] of cases.entries()) {
+      const r: Record<string, string | undefined> = {};
+      for (const echo of echos)
+        for (const fn of ["c", "m"]) {
+          const part = echo.at(i);
+          const sel = part.iface.getFunction(`${fn}${i}`)!.selector;
+          let ret: string | undefined;
+          try {
+            ret = await ethers.provider.call({
+              to: part.address,
+              data: hexlify(cat(getBytes(sel), k.args)),
+            });
+          } catch {
+            ret = undefined;
+          }
+          r[`${echo.name} ${fn === "c" ? "calldata" : "memory"}`] =
+            ret === undefined
+              ? undefined
+              : hexlify(abi.decode(["bytes"], ret)[0]);
+        }
+      decodedBy.push(r);
+    }
+    if (existsSync(LEAN_BIN)) {
+      const res = spawnSync(LEAN_BIN, {
+        input:
+          cases
+            .map(
+              (k) =>
+                `sd ${hexlify(cat(bytes(4), k.args))} ${k.t.args.map(abiType).join(" ")}`,
+            )
+            .join("\n") + "\n",
+        maxBuffer: 1 << 28,
+      });
+      expect(res.status, String(res.stderr)).to.equal(0);
+      const lean = String(res.stdout).trim().split("\n");
+      expect(lean.length).to.equal(cases.length);
+      const modelDiffs: string[] = [];
+      cases.forEach((k, i) => {
+        const m = lean[i] === "none" ? undefined : "0x" + lean[i];
+        for (const [where, got] of Object.entries(decodedBy[i])) {
+          if (got === m) bump(`Lean decoder agrees with ${where}`);
+          else if (where.endsWith("calldata") && m === undefined) {
+            // calldata parameters: offsets are compared signed and added
+            // with wraparound, so solc also accepts backward offsets
+            bump(`${where} accepts more (backward offsets)`);
+          } else {
+            bump(`Lean decoder DIFFERS from ${where}`);
+            modelDiffs.push(
+              `${where}: solc ${got ?? "reverts"} | Lean ${m ?? "none"}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}`,
+            );
+          }
+        }
+      });
+      for (const d of modelDiffs.slice(0, 4)) console.log(`      ${d}`);
+      expect(modelDiffs, "the Lean decoder is solc's").to.deep.equal([]);
+    }
+
+    for (const [i, k] of cases.entries()) {
+      const r0 = await roles(cat(bytes(4), k.args), k);
+      if ("error" in r0) {
+        bump(
+          `roles ${/^[A-Z][A-Za-z]+$/.test(r0.error) && r0.error !== "Panic" ? "rejects tree" : "reverts: " + r0.error.slice(0, 40)}`,
+        );
+        continue;
+      }
+      bump(`roles ${r0.status === 0 ? "passes" : "fails"}`);
+      for (const [where, got] of Object.entries(decodedBy[i])) {
+        if (got === undefined) {
+          bump(`${where}: target rejects`);
+          continue;
+        }
+        const decoded = getBytes(got);
+        const r1 = await roles(cat(bytes(4), decoded), k);
+        const canon =
+          "error" in r1 ? `error ${r1.error}` : `${r1.status} ${r1.cons}`;
+        if (r0.status === 0) {
+          let chosen = false;
+          if (canon !== `0 ${r0.cons}`)
+            for (const alt of branchChoices(k.root)) {
+              const r2 = await roles(
+                cat(bytes(4), decoded),
+                k,
+                flattenCondition(strip(alt)).map((f) => ({ ...f })),
+              );
+              if (
+                !("error" in r2) &&
+                `${r2.status} ${r2.cons}` === `0 ${r0.cons}`
+              ) {
+                chosen = true;
+                break;
+              }
+            }
+          if (chosen) {
+            bump(`${where}: another Or branch`);
+            branchCases.push(
+              `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}`,
+            );
+          } else if (canon !== `0 ${r0.cons}`) {
+            bump(`${where}: BYPASS`);
+            findings.push(
+              `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}\n        nodes ${JSON.stringify(k.flat).slice(0, 1500)}`,
+            );
+          } else bump(`${where}: agrees (passes)`);
+        } else if (canon.startsWith("0 ")) bump(`${where}: Roles stricter`);
+        else bump(`${where}: agrees (fails)`);
+      }
+    }
+    await connection.close();
+    for (const [key, n] of Object.entries(tally).sort())
+      console.log(`      ${key}: ${n}`);
+    for (const f of findings.slice(0, 6)) console.log(`      ${f}`);
+    if (process.env.GAP_REPORT) {
+      writeFileSync(
+        process.env.GAP_REPORT + ".target",
+        findings.join("\n\n") + "\n",
+      );
+      writeFileSync(
+        process.env.GAP_REPORT + ".branch",
+        branchCases.join("\n\n") + "\n",
+      );
+    }
+    expect(findings, findings.slice(0, 2).join("\n")).to.deep.equal([]);
   });
 });
