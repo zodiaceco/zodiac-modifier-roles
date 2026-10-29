@@ -78,8 +78,6 @@ Scope signing permissions as tightly as execution permissions:
 
 Other ways to make the Safe's EIP-1271 check accept something are calls to the Safe itself (its owners, modules and fallback handler decide the check) and `approveHash` / `execTransaction` on Safes it owns.
 
-The SDK's `permissionHazards(targets)` flags all of these, along with delegatecall permissions and permissions on the Roles Modifier itself.
-
 ## SDK
 
 For code examples covering both flows — defining permissions and producing the signing transaction calldata — see the [SDK signing reference](/sdk/signing).
