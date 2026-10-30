@@ -1,3 +1,5 @@
+import { Callout } from "nextra/components";
+
 import { BalancerSwapExample } from "../../components/conditionsExamples";
 
 # Conditions
@@ -155,6 +157,15 @@ Checks that every child condition evaluates to `true`.
 #### `Or`
 
 Checks that at least one of the child conditions evaluates to `true`.
+
+Branches are evaluated in order, and the first one that passes determines which allowances are consumed.
+
+<Callout type="info">
+Branch order is not guaranteed for calls with non-standard ABI encoding.
+A role member who deliberately crafts such calldata can make an earlier branch fail and a later one apply, as long as the later branch's checks hold.
+Calls encoded the standard way, as wallets and libraries encode them, always take the first passing branch.
+So when branches overlap, don't rely on an earlier branch's allowance being consumed instead of a later one's: give overlapping branches the same allowance checks, or make them mutually exclusive.
+</Callout>
 
 ### Allowance Expressions
 

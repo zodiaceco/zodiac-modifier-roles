@@ -22,6 +22,8 @@ export enum Encoding {
   Tuple = 3,
   Array = 4,
   AbiEncoded = 5,
+  /** The transaction's ether value (`msg.value`); read as `None` on-chain. */
+  EtherValue = 6,
 }
 
 export enum Operator {
@@ -53,11 +55,22 @@ export enum Operator {
   ArrayEvery = 7,
   ArrayTailMatches = 8,
   // ------------------------------------------------------------
+  // 10-11: ZIP EXPRESSIONS
+  //          paramType: None
+  //          ✅ children (exactly one Tuple child, its children are the fields)
+  //          ✅ compValue (one byte per field: the Pluck slot of the array zipped into it)
+  ZipSome = 10,
+  ZipEvery = 11,
+  // ------------------------------------------------------------
   // 13-14: EXTRACTION EXPRESSIONS
   //          paramType: Dynamic
   //          ❓ children (at most one child, must resolve to Static)
   //          ✅ compValue (3 bytes: 2 bytes shift + 1 byte size, 1-32)
   Slice = 13,
+  //          paramType: Static / EtherValue / Array
+  //          ❓ children (Array: describe the element type)
+  //          ✅ compValue (1 byte: the slot, 0-254)
+  Pluck = 14,
   // ------------------------------------------------------------
   // 15:    SPECIAL COMPARISON (without compValue)
   //          paramType: Static
@@ -102,6 +115,13 @@ export enum Status {
   /** Bitmask not an allowed value */
   BitmaskNotAllowed,
   CustomConditionViolation,
+  CustomConditionNotAContract,
+  CustomConditionReverted,
+  CustomConditionInvalidResult,
+  PricingAdapterNotAContract,
+  PricingAdapterReverted,
+  PricingAdapterInvalidResult,
+  PricingAdapterZeroPrice,
   AllowanceExceeded,
   /** No longer emitted: full-precision comparison reports AllowanceExceeded instead. Kept to preserve status codes. */
   AllowanceValueOverflow,
@@ -113,6 +133,12 @@ export enum Status {
   CalldataNotEmpty,
   /** Leading bytes do not match expected value */
   LeadingBytesNotAMatch,
+  /** Zipped arrays have different lengths */
+  ZippedArrayLengthMismatch,
+  /** No zipped element pair passes */
+  NoZippedElementPasses,
+  /** Not every zipped element pair passes */
+  NotEveryZippedElementPasses,
 }
 
 export interface Role {

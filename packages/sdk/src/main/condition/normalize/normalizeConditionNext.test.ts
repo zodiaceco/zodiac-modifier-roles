@@ -50,75 +50,21 @@ const CALL_ALLOWANCE = (): Condition => ({
 
 describe("normalizeCondition", () => {
   describe("Core normalization steps", () => {
-    describe("pruneTrailingPass", () => {
-      it("prunes trailing Pass nodes from AbiEncoded MATCHES", () => {
-        const input = MATCHES(Encoding.AbiEncoded, COMP(1), PASS(), PASS())
-
-        const result = normalizeCondition(input)
-
-        expect(result).toEqual({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          children: [COMP(1)],
-        })
-      })
-
-      it("prunes trailing Pass nodes from dynamic tuples", () => {
-        const input = MATCHES(
-          Encoding.Tuple,
-          DYNAMIC(Operator.EqualToAvatar),
-          PASS(),
-          PASS()
-        )
-
-        const result = normalizeCondition(input)
-
-        expect(result).toEqual({
-          paramType: Encoding.Tuple,
-          operator: Operator.Matches,
-          children: [DYNAMIC(Operator.EqualToAvatar)],
-        })
-      })
-
-      it("does NOT prune trailing Pass nodes from static tuples", () => {
-        const input = MATCHES(Encoding.Tuple, COMP(1), PASS(), PASS())
-
-        const result = normalizeCondition(input)
-
-        expect(result).toEqual({
-          paramType: Encoding.Tuple,
-          operator: Operator.Matches,
-          children: [COMP(1), PASS(), PASS()],
-        })
-      })
-
-      it("keeps allowance conditions while pruning Pass nodes", () => {
-        const input = MATCHES(
-          Encoding.AbiEncoded,
-          CALL_ALLOWANCE(),
-          PASS(),
-          PASS()
-        )
-
-        const result = normalizeCondition(input)
-
-        expect(result).toEqual({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          children: [PASS(), CALL_ALLOWANCE()],
-        })
-      })
-
-      it("preserves first child even if it's Pass", () => {
-        const input = MATCHES(Encoding.AbiEncoded, PASS(), PASS(), PASS())
-
-        const result = normalizeCondition(input)
-
-        expect(result).toEqual({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          children: [PASS()],
-        })
+    describe("trailing Pass nodes", () => {
+      it("keeps them on AbiEncoded, dynamic and static tuples", () => {
+        for (const input of [
+          MATCHES(Encoding.AbiEncoded, COMP(1), PASS(), PASS()),
+          MATCHES(
+            Encoding.Tuple,
+            DYNAMIC(Operator.EqualToAvatar),
+            PASS(),
+            PASS()
+          ),
+          MATCHES(Encoding.Tuple, COMP(1), PASS(), PASS()),
+          MATCHES(Encoding.AbiEncoded, PASS(), PASS(), PASS()),
+        ]) {
+          expect(normalizeCondition(structuredClone(input))).toEqual(input)
+        }
       })
     })
 
@@ -304,61 +250,65 @@ describe("normalizeCondition", () => {
       const input = OR(
         AND(COMP(1), COMP(1)), // Duplicate -> single child -> unwrap
         AND(COMP(2), COMP(3)), // Normal case
-        MATCHES(Encoding.AbiEncoded, COMP(4), PASS(), PASS()) // Prune trailing Pass
+        MATCHES(Encoding.AbiEncoded, COMP(4), PASS(), PASS()) // trailing Pass kept
       )
 
       const result = normalizeCondition(input)
 
-      expect(result).toEqual(
-        OR(
-          MATCHES(Encoding.AbiEncoded, COMP(4)),
-          COMP(1),
-          AND(COMP(2), COMP(3))
-        )
+      expect(result.operator).toBe(Operator.Or)
+      expect(result.children).toHaveLength(3)
+      expect(result.children).toContainEqual(COMP(1))
+      expect(result.children).toContainEqual(AND(COMP(2), COMP(3)))
+      expect(result.children).toContainEqual(
+        MATCHES(Encoding.AbiEncoded, COMP(4), PASS(), PASS())
       )
     })
 
     it("handles deep nesting with multiple normalization steps", () => {
       const input = AND(
         OR(AND(COMP(1), COMP(1)), COMP(2)), // Nested logic with dedup/unwrap
-        MATCHES(Encoding.AbiEncoded, COMP(3), PASS()) // Prune Pass
+        MATCHES(Encoding.AbiEncoded, COMP(3), PASS()) // trailing Pass kept
       )
 
       const result = normalizeCondition(input)
 
-      expect(result).toEqual(
-        AND(MATCHES(Encoding.AbiEncoded, COMP(3)), OR(COMP(1), COMP(2)))
+      expect(result.operator).toBe(Operator.And)
+      expect(result.children).toHaveLength(2)
+      expect(result.children).toContainEqual(
+        MATCHES(Encoding.AbiEncoded, COMP(3), PASS())
       )
+      expect(result.children).toContainEqual(OR(COMP(1), COMP(2)))
     })
 
     it("preserves semantics through complex transformations", () => {
-      // Test case that should exercise branch type compatibility
+      // static tuples of different lengths are different types: padding
+      // would change what the shorter one reads
       const input = OR(
         MATCHES(Encoding.Tuple, COMP(1)),
         MATCHES(Encoding.Tuple, COMP(2), COMP(3), COMP(4))
       )
 
-      const result = normalizeCondition(input)
-
-      // Should pad the first branch to match the second
-      expect(result).toEqual(
-        OR(
-          MATCHES(Encoding.Tuple, COMP(1), PASS(), PASS()),
-          MATCHES(Encoding.Tuple, COMP(2), COMP(3), COMP(4))
-        )
-      )
+      expect(normalizeCondition(input)).toEqual(input)
     })
-    it("push down + pad", () => {
+    it("does not pad a prefix branch to push the Or down", () => {
+      // checks of a prefix of one dynamic struct need no padding (the SDK
+      // check accepts them as siblings); without it there is nothing to merge
+      const DYN: Condition = {
+        paramType: Encoding.Dynamic,
+        operator: Operator.EqualTo,
+        compValue: "0x12",
+      }
       const input = OR(
-        MATCHES(Encoding.AbiEncoded, COMP(1), COMP(2)),
-        MATCHES(Encoding.AbiEncoded, COMP(1))
+        MATCHES(Encoding.Tuple, DYN, COMP(2)),
+        MATCHES(Encoding.Tuple, DYN)
       )
 
       const result = normalizeCondition(input)
 
-      expect(result).toEqual(
-        MATCHES(Encoding.AbiEncoded, COMP(1), OR(PASS(), COMP(2)))
-      )
+      expect(result.operator).toBe(Operator.Or)
+      expect(result.children!.map((c) => c.children!.length).sort()).toEqual([
+        1, 2,
+      ])
     })
   })
 
@@ -376,11 +326,9 @@ describe("normalizeCondition", () => {
 
       const result = normalizeCondition(input)
 
-      expect(result).toEqual({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
-        children: [PASS(), CALL_ALLOWANCE()],
-      })
+      // left as written (v3 wants the allowance next to the Matches,
+      // which the authoring helpers produce)
+      expect(result).toEqual(input)
     })
 
     it("handles differences in children and compValue", () => {

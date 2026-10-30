@@ -27,3 +27,47 @@ describe("withinAllowance", () => {
     )
   })
 })
+
+describe("withinAllowance with a conversion", () => {
+  const key = encodeKey("test-allowance")
+  const adapter = "0x" + "ab".repeat(20)
+
+  it("packs key, balance decimals and input decimals", () => {
+    expect(
+      withinAllowance("test-allowance", {
+        balanceDecimals: 6,
+        inputDecimals: 18,
+      })(uint256).compValue
+    ).toBe(key + "0612")
+  })
+
+  it("appends the adapter and its params", () => {
+    expect(
+      withinAllowance("test-allowance", {
+        balanceDecimals: 18,
+        inputDecimals: 8,
+        priceAdapter: adapter as `0x${string}`,
+        adapterParams: "0xdeadbeef",
+      })(uint256).compValue
+    ).toBe(key + "1208" + "ab".repeat(20) + "deadbeef")
+  })
+
+  it("rejects decimals the contract rejects", () => {
+    expect(() =>
+      withinAllowance("x", { balanceDecimals: 28, inputDecimals: 0 })(uint256)
+    ).toThrow("from 0 to 27")
+    expect(() =>
+      withinAllowance("x", { balanceDecimals: 1.5, inputDecimals: 0 })(uint256)
+    ).toThrow("from 0 to 27")
+  })
+
+  it("rejects adapter params without an adapter", () => {
+    expect(() =>
+      withinAllowance("x", {
+        balanceDecimals: 0,
+        inputDecimals: 0,
+        adapterParams: "0x01",
+      })(uint256)
+    ).toThrow("require a `priceAdapter`")
+  })
+})

@@ -3,8 +3,8 @@ import { Condition, Operator, Encoding } from "../../../types"
 
 import { coercePermission } from "../../../permission/coercePermission"
 import {
-  checkParameterTypeCompatibility,
   checkRootConditionIntegrity,
+  scopedType,
 } from "../../../condition/conditionIntegrity"
 import { describeStructure } from "./helpers/describeStructure"
 import { isFixedArray, parameterType } from "./helpers/parameterType"
@@ -458,51 +458,20 @@ const assertCompatibleParamTypes = (
     }
 
     const expectedType = parameterType(type)
-    const scopedType = checkScopedType(condition)
+    const scoped = scopedType(condition)
 
-    if (scopedType === expectedType) return
+    if (scoped === expectedType) return
 
     // allow dynamic type values to be interpreted as abi encoded
-    if (
-      expectedType === Encoding.Dynamic &&
-      scopedType === Encoding.AbiEncoded
-    ) {
+    if (expectedType === Encoding.Dynamic && scoped === Encoding.AbiEncoded) {
       return
     }
 
     const fieldReference = type.name ? `'${type.name}'` : `at index ${index}`
     throw new Error(
-      `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scopedType]}\` (expected: \`${Encoding[expectedType]}\`)`
+      `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scoped]}\` (expected: \`${Encoding[expectedType]}\`)`
     )
   })
-}
-
-/**
- * Returns `condition.paramType` if it is not `Encoding.None`, otherwise returns the scoped param type of its children, if any.
- * Throws if the children have mixed scoped param types.
- * @param condition The condition to get the scoped param type of.
- * @returns the `Encoding` the condition is applied to.
- */
-const checkScopedType = (condition: Condition): Encoding => {
-  if (condition.paramType === Encoding.None) {
-    if (!condition.children || condition.children.length === 0) {
-      // e.g.: Operator.CallWithinAllowance
-      return Encoding.None
-    }
-
-    const [first, ...rest] = condition.children
-    const result = checkScopedType(first)
-
-    // assert that all following children have compatible types
-    rest.forEach((child) => {
-      const childType = checkScopedType(child)
-      checkParameterTypeCompatibility(result, childType)
-    })
-
-    return result
-  }
-
-  return condition.paramType
 }
 
 const arrayDiff = (a: string[], b: string[]) => {

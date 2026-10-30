@@ -24,13 +24,14 @@ If no timestamps are set, the membership is active indefinitely (until explicitl
 Memberships can optionally cap the number of times a member may execute transactions under a role:
 
 - By default, memberships allow unlimited uses.
-- When a use count is configured, each successful execution decrements the remaining count.
+- When a use count is configured, each successful execution decrements the remaining count. A batch (see [Transaction Unwrapping](./unwrapping)) is one execution and uses one.
 - Once the count reaches zero, the membership is effectively exhausted and the member can no longer execute transactions under that role.
 
 <Callout type="warning">
   The new count is written after the transaction ran. If the transaction
   itself changes this membership (for example, a call through the role that
-  revokes it via the avatar), the write overwrites that change. Do not mix
+  revokes it via the avatar, or the member renouncing the role during the
+  call), the write overwrites that change. Do not mix
   role configuration calls with calls that execute through a role in the
   same transaction.
 </Callout>
@@ -48,3 +49,16 @@ No explicit revocation transaction is needed — the Roles Modifier enforces the
 
 A member can revoke their own role at any time.
 This is useful in scenarios where a member's key may have been compromised: the member can immediately remove access without waiting for the owner to act.
+
+## Relayed Transactions
+
+A member can sign a transaction instead of sending it; anyone can then submit it with `execTransactionWithSignature`.
+The member signs an EIP-712 `RoleTx(address to, uint256 value, bytes data, uint8 operation, bytes32 roleKey, bool shouldRevert, bytes32 salt)` for this Roles Modifier and chain, as an EOA (ECDSA) or as a contract (EIP-1271: the signature is the contract's address followed by its signature data).
+The transaction then runs as if the member had sent it, with the same membership checks.
+
+- Each signed transaction runs at most once: when it is submitted, its digest is recorded for the signer.
+  A signature does not expire otherwise.
+  To cancel one that has not been submitted, the signer calls `invalidate(digest)`.
+- Sign with `shouldRevert: true` unless the transaction is allowed to fail.
+  With `false`, a call that fails does not revert the submission, and the submitter chooses the gas: they can give the call too little gas to succeed, which uses up the signature without running the transaction.
+- A contract signature of exactly 65 bytes in total is first read as an ECDSA signature. If that recovers an address, that address is taken as the signer and the contract is not asked, so the signature is rejected. Contract signers should use signature data of another length.

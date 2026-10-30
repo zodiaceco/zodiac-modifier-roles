@@ -35,6 +35,22 @@ contract MockPackerUnpacker {
         maxPluckValueCount = maxCount;
     }
 
+    /// @dev Integrity + pack, as `packConditions` does. Used by the Lean
+    ///      differential test (test/formal/lean-model.spec.ts).
+    function pack(
+        ConditionFlat[] memory conditions
+    ) public pure returns (bytes memory) {
+        Integrity.enforce(conditions);
+        return ConditionPacker.pack(conditions);
+    }
+
+    /// @dev Without Integrity, as the SDK packs for the `...Packed` setters.
+    function packUnchecked(
+        ConditionFlat[] memory conditions
+    ) public pure returns (bytes memory) {
+        return ConditionPacker.pack(conditions);
+    }
+
     function _flatten(
         Condition memory root
     ) internal pure returns (ConditionForTest[] memory) {
