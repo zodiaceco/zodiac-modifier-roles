@@ -3,7 +3,7 @@ import Evaluate.Model
 /-!
 # A pinned argument is pinned
 
-The Lean side of the SDK's `permissionHazards` pin check, on the condition
+The pin check a permission lint should make, on the condition
 the evaluator runs (`Evaluate`): an argument of the calldata counts as
 pinned when every way the condition passes reaches, through `Or` (every
 branch), `And` (some child) and the root calldata `Matches` (4 leading
@@ -45,8 +45,7 @@ def headOk (c : Condition) (i : Nat) : Bool :=
 def decodesCalldata (c : Condition) : Bool :=
   c.operator = .Matches ∧ c.encoding = .AbiEncoded ∧ c.leadingBytes = 4
 
-/-- Every way the root condition passes pins argument `i` (`onPath` at
-    depth 0 in `hazards.ts`). -/
+/-- Every way the root condition passes pins argument `i`. -/
 def pinsArg (leaf : Condition → Bool) (i : Nat) : Nat → Condition → Bool
   | 0, _ => false
   | f + 1, c =>

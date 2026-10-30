@@ -41,8 +41,7 @@ the digest of the typed message.
 `fit` (`rootB`) does not require the `types` argument to be pinned.
 `sign_agree` takes the type trees `tys` as given; they are the trees the
 library builds only when the permission pins `types`. `allowSignTypedMessage`
-pins it, and `permissionHazards` flags `sign-typed-message-types` when it is
-not. So for a hand-written permission that passes `fit`, the result holds
+pins it; a permission lint should flag a permission that does not. So for a hand-written permission that passes `fit`, the result holds
 only if it pins `types` too (`NonVacuity.lean` shows `fit` accepting an
 unpinned one).
 

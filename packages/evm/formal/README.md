@@ -30,7 +30,7 @@ A successful build means every theorem below is proven. There is no `sorry`,
 | [MultiSend](#multisend): the transactions Roles checks in a batch are exactly the transactions MultiSend executes                                                | [`MultiSend`](MultiSend/README.md)                     | Proven |
 | [Signing through the Safe](#signing-through-the-safe): each signing function makes exactly its hash valid in the Safe's `isValidSignature`; `signMessage` signs raw hashes | [`SafeSigning`](SafeSigning/README.md)                 | Proven |
 | [Allowances](#allowances): spending limit over any transactions; charges with decimals and prices round up once, so rounding never accumulates in the role's favour | [`Allowance`](Allowance/README.md)                     | Proven |
-| [End to end](#end-to-end): through `SignTypedMessageLib`, a signing permission reaches a Roles Modifier's `RoleTx` only if its argument is not pinned (`pinsArg`) or is pinned to that `RoleTx` (that `permissionHazards` flags these is tested); every transaction the avatar executes, batches included, passed its own permission with consumptions threaded through the batch, and the raw charges obey the spending limit across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
+| [End to end](#end-to-end): through `SignTypedMessageLib`, a signing permission reaches a Roles Modifier's `RoleTx` only if its argument is not pinned (`pinsArg`) or is pinned to that `RoleTx`; every transaction the avatar executes, batches included, passed its own permission with consumptions threaded through the batch, and the raw charges obey the spending limit across executions | [`EndToEnd`](EndToEnd/README.md) | Proven |
 | [Attribution and reentrancy](#end-to-end): executions never interleave; each runs as an enabled, active member, each signature once | [`EndToEnd`](EndToEnd/README.md#attribution-and-reentrancy) | Tested |
 | [Target decoding](TargetDecode/README.md): on every layout solc's decoder accepts (tails reordered, shared or gapped, dirty padding), each node Roles visits is where the target reads its component; static operands are exactly the decoded values, an `EqualTo` passes only if the target decoded the pinned value (up to a keccak256 collision), `Bitmask` sees the bytes the target decodes and `Slice` a window of them. Inside a variant branch that does not fit, only where the branch starts. That checks combine per `Or` branch is tested | [`TargetDecode`](TargetDecode/README.md) | Proven |
 
@@ -772,8 +772,7 @@ hand-written one with `Slice`, `Pluck` and Zip conditions:
   member is the one the encoder's walk of the argument's type tree reads, by
   its path from the argument root (`Reach`). `sign_agree` takes the type
   trees as given: they are what the library builds only when the `types`
-  argument is pinned, as `allowSignTypedMessage` does (`permissionHazards`
-  flags `sign-typed-message-types` otherwise).
+  argument is pinned, as `allowSignTypedMessage` does.
 
 The hypotheses on the SDK's output (its type trees, and that the permission's
 conditions follow them) are decided in Lean and checked on every generated
@@ -931,11 +930,9 @@ permissions can make it sign a `RoleTx` for `R` through
 - typed messages without pinned types, or with `RoleTx` types;
 - never `personalSign`.
 
-The SDK's `permissionHazards` flags these permissions. That it flags
-whatever `pinsArg` rejects is tested (`hazards-pins.spec.ts`, below), not
-proven. The other routes (the Safe's owners, delegatecall into other code,
-calls to the Safe itself, `approveHash`) are flagged by the SDK but not
-proven. The proof goes through Roles' reader against Solidity's ABI decoder
+A permission lint that flags whatever `pinsArg` rejects flags all of
+these. The other routes (the Safe's owners, delegatecall into other code,
+calls to the Safe itself, `approveHash`) are not covered. The proof goes through Roles' reader against Solidity's ABI decoder
 (`route_bytes`) and against the signing library's hand-written fallback
 (`route_types`), on any calldata. Two of the check's rules came from it: the
 `types` element shape, and the head position of a pin.
@@ -972,12 +969,6 @@ the spending limit assumes. A stateful fuzz with hostile targets and
 ERC-1271 signers predicts every outcome. It found that with `shouldRevert`
 false the submitter of a relayed transaction can make the call fail for lack
 of gas while using up the signature (documented).
-
-`permissionHazards` is tested against `pinsArg` itself
-(`test/formal/hazards-pins.spec.ts`): on random conditions over the signing
-library's arguments, packed and unpacked as the contract does, the SDK never
-reports a pin `pinsArg` rejects (three seeds of 3,000; it is stricter on
-about 1% of the `types` cases).
 
 See [`EndToEnd/README.md`](EndToEnd/README.md).
 

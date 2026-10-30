@@ -37,19 +37,16 @@ those permissions let a role act with `S`'s roles on `R`?
 | `only_flagged` (`Routes`)     | **Only flagged signing permissions reach a `RoleTx`.** If the key the library stored under a permission Roles passed makes the Safe accept a `RoleTx` digest `D`, then: `signMessage` without a pin, or with `D` itself pinned; or a typed message without pinned types, or with `RoleTx` types; never `personalSign`. Each unless keccak256 collides on inputs computed from the call and `D`. |
 
 `only_flagged` is about `pinsArg` (`FlaggedOrExact`), and covers the
-`SignTypedMessageLib` route only. The SDK's `permissionHazards` checks the
-same conditions (`sign-message`, `sign-typed-message-types`,
-`sign-typed-message-authority`); that it flags whatever `pinsArg` rejects is
-tested (`hazards-pins.spec.ts`, below), not proven. The SDK is stricter in
-about 1% of the `types` cases. Two of its rules came from the proof:
+`SignTypedMessageLib` route only. A permission lint that flags whatever
+`pinsArg` rejects flags every signing permission that can reach a `RoleTx`.
+Two of `pinsArg`'s rules matter for such a lint:
 - the `types` pin must read 96-byte elements, or Roles compares fewer bytes
   than the library hashes;
 - a pin must sit at its argument's head position (the arguments before it
   one word each), or Roles reads it elsewhere than the library does.
 
 The other ways to make a Safe's EIP-1271 check accept something sit outside
-the signing library. `permissionHazards` flags them as well; no theorem
-covers them:
+the signing library. No theorem covers them:
 - the Safe's owners;
 - delegatecall into other code;
 - calls to the Safe itself (fallback handler, owners, modules);
@@ -84,19 +81,6 @@ Three seeds of 1,000 calls each: 0 violations. `signMessage`: about 230
 signed, 770 refused by Roles, none refused by the library after Roles let
 them through. Typed: about 350 signed, 600 refused by Roles, 50 refused by
 the library.
-
-`packages/evm/test/formal/hazards-pins.spec.ts` tests the SDK's
-`permissionHazards` against `pinsArg` itself, the definition `only_flagged`
-is about. It generates random conditions on the signing library's arguments
-(pins of the right and wrong shapes, `And`/`Or` over them, other arguments
-that do or do not take one head word, other leading bytes) and runs
-`pinsArg` on the tree the packing model packs and unpacks (`pn` query).
-Wherever the SDK raises no `sign-message` or `sign-typed-message-types`
-hazard, `pinsArg` must hold. Three seeds of 3,000: no exception; about 500
-`bytes` and 290 `types` cases pinned. The SDK is stricter in about 30
-`types` cases per seed (about 1%), all with an argument before `types`
-described by an `And` over children of different types: the SDK cannot tell
-how many head words it takes, the unpacked tree can.
 
 `NonVacuity.lean` (built with the library): a concrete two-transaction batch
 with real charges that `authorize` lets through, so the hypotheses of
@@ -164,8 +148,8 @@ check:
 Not modelled:
 - A batch nested in a batch, a delegatecall to `MultiSend` as one
   transaction of a batch. It is not unwrapped: Roles checks it as a plain
-  delegatecall, against a permission on `MultiSend`, and
-  `permissionHazards` flags delegatecall permissions.
+  delegatecall, against a permission on `MultiSend`, which gives full
+  control.
 - Membership, which is checked once per execution (see
   [attribution and reentrancy](#attribution-and-reentrancy)).
 

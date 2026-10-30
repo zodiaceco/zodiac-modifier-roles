@@ -104,8 +104,8 @@ example (Γ : Plucks) (d : Condition) : ¬ Member Γ (zeros 64) 0 64 pair d 1 :=
 
 `sign_agree` takes the type trees `tys` as given. That they are what the
 library builds from the calldata's `types` holds when the permission pins
-`types` (the SDK's `allowSignTypedMessage` does; `permissionHazards` flags
-`sign-typed-message-types` otherwise). `rootB` itself does not require it: -/
+`types` (the SDK's `allowSignTypedMessage` does; a permission lint should
+flag it otherwise). `rootB` itself does not require it: -/
 
 def pass : Condition := ⟨.Dynamic, .Pass, [], false, 0, 0, []⟩
 def argD : Condition := ⟨.AbiEncoded, .Matches, [⟨.Static, .Pass, [], true, 32, 0, []⟩], false, 0, 0, []⟩

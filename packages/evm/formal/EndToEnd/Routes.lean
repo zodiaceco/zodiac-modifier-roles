@@ -18,10 +18,9 @@ Modifier made, this file says which permissions allow it:
 
 each unless keccak256 collides on two of the inputs hashed along the way
 (`CollisionIn K inputs`, with the inputs named from the call and the
-digest). These are the permissions the SDK's
-`permissionHazards` flags (`sign-message`, `sign-typed-message-types`,
-`sign-typed-message-authority`); the pins here are what it checks
-(`pinsArg leafBytes 0`, `pinsArg leafTypes 2`).
+digest). These are the permissions a permission lint should flag; the
+pins here are what it should check (`pinsArg leafBytes 0`,
+`pinsArg leafTypes 2`).
 -/
 
 namespace EndToEnd
@@ -50,7 +49,7 @@ def LibSign.inputs {K : Bytes → Bytes} {ds data k : Bytes} : LibSign K ds data
   | .typed (ts := ts) (domainArg := d) (messageArg := msg) (digest := dg) _ _ =>
       safeMessageInputs K (safeTypeHash K) ds dg ++ typedInputs K d msg ts
 
-/-- The permission (condition `root`) is one `permissionHazards` flags for
+/-- The permission (condition `root`) is one a lint flags (`pinsArg`) for
     the entry point the stored key comes from, or pins exactly the hash
     `D`. -/
 def FlaggedOrExact (root : Condition) (fuel : Nat) (roleTypeHash D : Bytes) :

@@ -42,7 +42,7 @@ def solDecodeBytes (data : Bytes) : Option Bytes :=
     the length word followed by the (padded) content. -/
 def pinnedBytes (cv : Bytes) : Bytes := (cv.drop 32).take (wordVal (key cv))
 
-/-- The pin `permissionHazards` accepts for a `bytes` argument: an `EqualTo`
+/-- The pin a lint should accept for a `bytes` argument: an `EqualTo`
     read as `Dynamic` (from its offset, size from its length word). -/
 def leafBytes (c : Condition) : Bool :=
   c.encoding = .Dynamic && c.size = 0
@@ -155,7 +155,7 @@ theorem route_bytes {env : Env} {data : Calldata} {n F f : Nat} {root : Conditio
 
 /-! ## The `types` argument -/
 
-/-- The pin `permissionHazards` must accept for `types`: an `EqualTo` read
+/-- The pin a lint should accept for `types`: an `EqualTo` read
     as an array of 96-byte elements (`(uint256, uint8, bytes32)`, three
     words). With another element shape Roles compares fewer bytes than the
     library reads. -/
