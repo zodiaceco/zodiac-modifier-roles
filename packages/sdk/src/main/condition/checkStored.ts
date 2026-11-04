@@ -771,33 +771,38 @@ const nodeOf = (c: ConditionInput): Node => {
   }
 }
 
+/** Unknown codes have no raw tree (`toCheck` is `none` in Lean). */
+const knownCodes = (c: ConditionInput): boolean =>
+  Number.isInteger(c.paramType) &&
+  0 <= c.paramType &&
+  c.paramType <= 6 &&
+  OP_CODES.has(c.operator) &&
+  (c.children ?? []).every(knownCodes)
+
+/**
+ * The type a condition describes, as a canonical key (`tyKey`), or
+ * `undefined` if it describes none (the SDK check rejects it, or it reads no
+ * parameter).
+ */
+export const typeKeyOf = (c: ConditionInput): string | undefined => {
+  if (!knownCodes(c)) return undefined
+  let k: K | undefined
+  try {
+    k = new Checker(true).classify(nodeOf(c))
+  } catch {
+    return undefined
+  }
+  return k?.k === "ty" ? tyKey(k.t) : undefined
+}
+
 /**
  * The children of a merged `Or` (`normalizeCondition`'s push-down): every
  * one describes a parameter of exactly the same type, so the merged node
  * reads the value as each branch did (`sameType` in Lean).
  */
 export const siblingsSameType = (cs: readonly ConditionInput[]): boolean => {
-  // unknown codes have no raw tree (`toCheck` is `none`)
-  const known = (c: ConditionInput): boolean =>
-    Number.isInteger(c.paramType) &&
-    0 <= c.paramType &&
-    c.paramType <= 6 &&
-    OP_CODES.has(c.operator) &&
-    (c.children ?? []).every(known)
-  if (!cs.every(known)) return false
-  const checker = new Checker(true)
-  const ts: Ty[] = []
-  for (const c of cs) {
-    let k: K | undefined
-    try {
-      k = checker.classify(nodeOf(c))
-    } catch {
-      return false
-    }
-    if (k === undefined || k.k !== "ty") return false
-    ts.push(k.t)
-  }
-  return ts.length > 0 && ts.every((t) => tyEq(t, ts[0]))
+  const ts = cs.map(typeKeyOf)
+  return ts.length > 0 && ts.every((t) => t !== undefined && t === ts[0])
 }
 
 class Checker {

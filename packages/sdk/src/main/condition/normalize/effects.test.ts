@@ -240,3 +240,172 @@ suite(
     })
   }
 )
+
+const permutations = <T>(xs: readonly T[]): T[][] =>
+  xs.length <= 1
+    ? [[...xs]]
+    : xs.flatMap((x, i) =>
+        permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [
+          x,
+          ...p,
+        ])
+      )
+
+/** The normalized ids of an Or over `branches`, in every order. */
+const idsInEveryOrder = (branches: Condition[]) =>
+  new Set(
+    permutations(branches).map((p) =>
+      conditionId(normalizeCondition(structuredClone(or(...p))))
+    )
+  )
+
+const avatar: Condition = {
+  paramType: Encoding.Static,
+  operator: Operator.EqualToAvatar,
+}
+
+suite("normalizeCondition() sorts Or branches that exclude each other", () => {
+  it("sorts capped branches that pin a parameter to different values", () => {
+    const branches = [
+      calldata(eq(3), allowance(0xaa)),
+      calldata(eq(1), allowance(0xbb)),
+      calldata(eq(2), allowance(0xaa)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(1)
+    const [a, b, c] = branches
+    expect(normalizeCondition(or(a, b, c))).toEqual(
+      normalizeCondition(or(b, c, a))
+    )
+  })
+
+  it("keeps the order of capped branches that can both pass", () => {
+    // Pass overlaps eq(1): calldata with 1 passes both, and the first is charged
+    const branches = [
+      calldata(eq(1), allowance(0xaa)),
+      calldata(pass(Encoding.Static), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(2)
+    const input = or(...branches)
+    expect(normalizeCondition(structuredClone(input))).toEqual(input)
+  })
+
+  it("treats an Or of EqualTo as a set of values", () => {
+    const disjointSets = [
+      calldata(or(eq(1), eq(2)), allowance(0xaa)),
+      calldata(eq(3), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(disjointSets).size).toBe(1)
+
+    const overlapping = [
+      calldata(or(eq(1), eq(2)), allowance(0xaa)),
+      calldata(eq(2), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(overlapping).size).toBe(2)
+  })
+
+  it("finds the exclusion in one child of an And", () => {
+    const branches = [
+      and(
+        calldata(eq(1), pass(Encoding.Static)),
+        calldata(pass(Encoding.Static), allowance(0xaa))
+      ),
+      calldata(eq(2), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(1)
+  })
+
+  it("does not sort branches with different type trees", () => {
+    // a third parameter: the branches describe different calls
+    const branches = [
+      calldata(eq(1), allowance(0xaa)),
+      calldata(eq(2), allowance(0xbb), pass(Encoding.Static)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(2)
+  })
+
+  it("does not sort branches whose calldata has different leading bytes", () => {
+    const selector = (sel: string, ...children: Condition[]): Condition => ({
+      ...calldata(...children),
+      compValue: `0x0004${sel}`,
+    })
+    const branches = [
+      selector("aaaaaaaa", eq(1), allowance(0xaa)),
+      selector("bbbbbbbb", eq(2), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(2)
+  })
+
+  it("does not compare words of an EqualTo on a dynamic value", () => {
+    const branches = [
+      calldata(bytesEq(word(1)), allowance(0xaa)),
+      calldata(bytesEq(word(2)), allowance(0xbb)),
+    ]
+    expect(idsInEveryOrder(branches).size).toBe(2)
+  })
+
+  it("normalizes CoW signOrder branches (Rise, Arbitrum) to one id", () => {
+    // signOrder(order, ...): sell and buy token pinned, receiver the avatar,
+    // the sell amount capped with one allowance per direction
+    const [WETH, USDC, USDT0, USDG] = [1, 2, 3, 4]
+    const stables = [USDC, USDT0, USDG]
+    const order = (sell: number, buy: number[], key: number) =>
+      calldata(
+        tuple(
+          eq(sell),
+          buy.length === 1 ? eq(buy[0]) : or(...buy.map(eq)),
+          avatar,
+          allowance(key),
+          pass(Encoding.Static),
+          pass(Encoding.Static),
+          eq(0)
+        ),
+        pass(Encoding.Static)
+      )
+    const branches = [
+      order(WETH, stables, 0xa),
+      ...stables.map((s) => order(s, [WETH], 0xb)),
+      ...stables.map((s) => order(s, stables, 0xc)),
+    ]
+    expect(branches).toHaveLength(7)
+    const ids = new Set(
+      [0, 1, 2, 3, 4, 5].map((k) => {
+        const p = [...branches.slice(k), ...branches.slice(0, k)].reverse()
+        return conditionId(normalizeCondition(structuredClone(or(...p))))
+      })
+    )
+    expect(ids.size).toBe(1)
+  })
+
+  it("normalizes Across deposit branches (Rise, Arbitrum) to one id", () => {
+    // deposit(depositor, recipient, inputToken, outputToken, inputAmount,
+    //   outputAmount, destinationChainId, ..., message)
+    const [USDC, WETH] = [0x10, 0x20]
+    const deposit = (token: number, chain: number, key: number) =>
+      calldata(
+        avatar,
+        eq(0x99),
+        eq(token),
+        eq(token + chain),
+        allowance(key),
+        pass(Encoding.Static),
+        eq(chain),
+        pass(Encoding.Static),
+        pass(Encoding.Static),
+        pass(Encoding.Static),
+        pass(Encoding.Static),
+        bytesEq("0x")
+      )
+    const branches = [1, 10, 8453].flatMap((chain) => [
+      deposit(USDC, chain, 0xa),
+      deposit(WETH, chain, 0xb),
+    ])
+    const ids = new Set(
+      [
+        branches,
+        [...branches].reverse(),
+        [...branches.slice(3), ...branches.slice(0, 3)],
+      ].map((p) => conditionId(normalizeCondition(structuredClone(or(...p)))))
+    )
+    expect(ids.size).toBe(1)
+  })
+})
