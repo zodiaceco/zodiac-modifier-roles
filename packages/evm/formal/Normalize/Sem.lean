@@ -184,6 +184,11 @@ structure World.Ok (W : World V S C) (step : C → Ch → Option C) : Prop where
   /-- Only choices (`ArraySome`, `ZipSome`) pick charges depending on earlier ones. -/
   charger : ∀ c ss, c.op ≠ 14 → c.op ≠ 2 → c.op ≠ 6 → c.op ≠ 10 →
     (∀ s ∈ ss, ∀ v, ChargerT step (s v)) → ∀ v, ChargerT step (W.ext c ss v)
+  /-- A static `EqualTo` on one word passes only on that word: two with
+      different words never both pass on one value, from any state
+      (`ConditionEvaluator` compares the word read with `bytes32(compValue)`). -/
+  eqWord : ∀ c c' ss ss' v w w', pinned c = some w → pinned c' = some w' → w ≠ w' →
+    ∀ sl cs sl' cs', (W.ext c ss v sl cs).1 = none ∨ (W.ext c' ss' v sl' cs').1 = none
 
 /-- What normalization needs of a world that reads a value through the tree's
     own types (where each field of a `Matches` is depends on its children):
@@ -203,6 +208,10 @@ structure World.NormOk (W : World V S C) (inv : Cond → Prop) : Prop where
   hinge : ∀ e cv (pre post hs : List Cond), sameType hs = true → hs ≠ [] → ∀ x ∈ hs, ∀ v,
     W.fields e cv (pre ++ x :: post) v = W.fields e cv (pre ++ orNode hs :: post) v ∧
     W.gate e cv (pre ++ x :: post) v = W.gate e cv (pre ++ orNode hs :: post) v
+  /-- Two `Matches` with the same encoding and compValue, over children of
+      the same types position by position, read the same fields. -/
+  twin : ∀ e cv (ch ch' : List Cond), twinCh ch ch' = true → ∀ v,
+    W.fields e cv ch v = W.fields e cv ch' v ∧ W.gate e cv ch v = W.gate e cv ch' v
 
 /-! ## Thunk algebra -/
 

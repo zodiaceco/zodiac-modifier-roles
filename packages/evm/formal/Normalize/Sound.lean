@@ -31,7 +31,7 @@ theorem normalize_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv
     have h1 : Same W { c with ch := c.ch.map (normalize n) } c :=
       same_congr c (Pw.of_map fun x hx => ih x (hsub x hx))
         (fun v => hN.fields n c.enc c.cv c.ch hsub v) (hN.ext n c hc hk')
-    exact (sortB_same hW _).trans <| (pushDownOr_same hW hN (fun x hx => ih x hx) _
+    exact (sortB_same hW hN _).trans <| (pushDownOr_same hW hN (fun x hx => ih x hx) _
       (hN.pre n c hc hk')).trans <| (unwrap_same _).trans <|
       (dedupe_same hW _).trans <| (flatten_same _).trans h1
 

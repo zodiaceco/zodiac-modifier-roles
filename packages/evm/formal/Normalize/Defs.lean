@@ -146,9 +146,6 @@ theorem chooses_eq (c : Cond) :
 def canReorderAnd (cs : List Cond) : Bool :=
   !cs.any writes && ((cs.filter charges).length ≤ 1 || !cs.any chooses)
 
-def canReorderOr (cs : List Cond) : Bool :=
-  !cs.any fun c => writes c || charges c
-
 mutual
   /-- `isInlined` (the contract's `Topology.isInlined`): no `Dynamic`,
       `Array` or `AbiEncoded` encoding in the subtree. -/
@@ -222,6 +219,66 @@ def sameType (hs : List Cond) : Bool :=
     | some (.ty t :: ks) => ks.all (· == .ty t)
     | _ => false
   | none => false
+
+/-! ## Exclusive `Or` branches (`canReorderOr`) -/
+
+/-- `pinnedWord`: a static `EqualTo` on one 32-byte word, with no children. -/
+def pinned (c : Cond) : Option (List Nat) :=
+  if c.op = 16 ∧ c.enc = 1 ∧ c.ch = [] ∧ c.cv.length = 32 ∧ c.cv.all (· < 256) = true then
+    some c.cv
+  else none
+
+/-- `sameTypeChildren`: equally many children, of the same type position by
+    position (so a `Matches` over either reads its fields at the same places). -/
+def twinCh (a b : List Cond) : Bool :=
+  a.length == b.length && (a.zip b).all fun p => sameType [p.1, p.2]
+
+theorem mem_zip_ch {a b : List Cond} {p : Cond × Cond} (h : p ∈ a.zip b) : p.1 ∈ a ∧ p.2 ∈ b :=
+  ⟨(List.of_mem_zip h).1, (List.of_mem_zip h).2⟩
+
+/-- `disjoint`: no value passes both `a` and `b` (checked at the same value).
+    `And`: one child is disjoint from the other side. `Or`: every child is.
+    `Matches` on tuples and calldata with the same compValue and children of
+    the same types: two structural children at the same position are
+    (they read the same field). Static `EqualTo`s: different words. -/
+def disjoint (a b : Cond) : Bool :=
+  if a.op = 1 then a.ch.attach.any fun x => disjoint x.1 b
+  else if b.op = 1 then b.ch.attach.any fun y => disjoint a y.1
+  else if a.op = 2 then a.ch.attach.all fun x => disjoint x.1 b
+  else if b.op = 2 then b.ch.attach.all fun y => disjoint a y.1
+  else if a.op = 5 ∧ b.op = 5 then
+    (a.enc == 3 || a.enc == 5) && a.enc == b.enc && a.cv == b.cv && twinCh a.ch b.ch &&
+      (a.ch.filter isStruct).length == (b.ch.filter isStruct).length &&
+      ((a.ch.filter isStruct).zip (b.ch.filter isStruct)).attach.any fun p => disjoint p.1.1 p.1.2
+  else
+    match pinned a, pinned b with
+    | some x, some y => x != y
+    | _, _ => false
+termination_by sizeOf a + sizeOf b
+decreasing_by
+  all_goals first
+    | (have := sizeOf_lt_of_mem x.2; omega)
+    | (have := sizeOf_lt_of_mem y.2; omega)
+    | (have h := mem_zip_ch p.2
+       have h1 := sizeOf_lt_of_mem (List.mem_filter.1 h.1).1
+       have h2 := sizeOf_lt_of_mem (List.mem_filter.1 h.2).1
+       omega)
+
+/-- `excludes`: same type, and disjoint. -/
+def excludes (a b : Cond) : Bool := sameType [a, b] && disjoint a b
+
+/-- Two children of an `Or` may change places: a charging one excludes the other. -/
+def pairOk (a b : Cond) : Bool := (!charges a || excludes a b) && (!charges b || excludes b a)
+
+/-- `pairOk` for every two children. -/
+def pairwiseOk : List Cond → Bool
+  | [] => true
+  | x :: xs => xs.all (pairOk x) && pairwiseOk xs
+
+/-- `canReorderOr`: no child writes slots, and no child charges, or every
+    charging child excludes every other child. -/
+def canReorderOr (cs : List Cond) : Bool :=
+  !cs.any writes && (!cs.any charges || pairwiseOk cs)
 
 /-- `findMatchesHingeIndex` (with the equal-length rule). -/
 def hingeM (first : Cond) (chs : List Cond) : Option Nat :=

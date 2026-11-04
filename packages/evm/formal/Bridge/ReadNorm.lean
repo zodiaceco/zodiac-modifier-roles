@@ -140,6 +140,7 @@ theorem trivW_ok : trivW.Ok (fun c (_ : Unit) => some c) where
   keeps := fun _ _ _ _ _ _ _ => rfl
   pure := fun _ _ _ _ _ _ _ _ => ⟨fun _ => false, fun _ _ => rfl⟩
   charger := fun _ _ _ _ _ _ _ _ => ⟨fun _ => none, fun _ _ => rfl⟩
+  eqWord := fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ => Or.inl rfl
 
 theorem trivW_norm : trivW.NormOk fun _ => True where
   sub := fun _ _ _ _ => trivial
@@ -148,6 +149,7 @@ theorem trivW_norm : trivW.NormOk fun _ => True where
   fields := fun _ _ _ _ _ _ => ⟨rfl, rfl⟩
   ext := fun _ _ _ _ => rfl
   hinge := fun _ _ _ _ _ _ _ _ _ _ => ⟨rfl, rfl⟩
+  twin := fun _ _ _ _ _ _ => ⟨rfl, rfl⟩
 
 theorem isStruct_normalize (n : Nat) (c : Cond) : isStruct (normalize n c) = isStruct c :=
   (normalize_same trivW_ok trivW_norm n c trivial).2
@@ -845,6 +847,24 @@ theorem append_lay {a b : Cond} (hab : LayR avatar a b) (pre post : List Cond) :
     · exact hab
     · exact LayR.refl avatar _
 
+theorem twinCh_len {a b : List Cond} (h : twinCh a b = true) : a.length = b.length := by
+  unfold twinCh at h; simp only [Bool.and_eq_true, beq_iff_eq] at h; exact h.1
+
+/-- Children of the same type position by position have the same layout. -/
+theorem twinCh_lay {a b : List Cond} (h : twinCh a b = true) :
+    ∀ i (h1 : i < a.length) (h2 : i < b.length), LayR avatar a[i] b[i] := by
+  intro i h1 h2
+  unfold twinCh at h
+  simp only [Bool.and_eq_true, List.all_eq_true] at h
+  have hz : (a[i], b[i]) ∈ a.zip b := by
+    rw [List.mem_iff_getElem]
+    exact ⟨i, by simp; omega, by simp⟩
+  obtain ⟨t, ht⟩ := sameType_lay avatar (h.2 _ hz)
+  have ha := ht a[i] (by simp)
+  have hb := ht b[i] (by simp)
+  exact ⟨ha.2.1.trans hb.2.1.symm, fun hi =>
+    ((ha.2.2 (ha.2.1 ▸ hi)).1).trans ((hb.2.2 (ha.2.1 ▸ hi)).1).symm⟩
+
 /-- **The contract's reading meets normalization's assumptions** on
     well-typed trees. -/
 theorem readWorld_normOk (env : Env) (data : Calldata) (n : Nat) :
@@ -879,6 +899,121 @@ theorem readWorld_normOk (env : Env) (data : Calldata) (n : Nat) :
       (by simp) (append_lay avatar ((orNode_lay avatar hst x hx).2.symm) pre post) v
     exact ⟨by show ((matchLocs avatar data e cv _ v).getD []).map RV.pos = _; rw [hm]; rfl,
       by show (matchLocs avatar data e cv _ v).isSome = _; rw [hm]; rfl⟩
+  twin := fun e cv ch ch' htw v => by
+    have hm := matchLocs_congr avatar data e cv (ch := ch') (ch' := ch) (twinCh_len htw)
+      (fun i h1 h2 => twinCh_lay avatar htw i h1 h2) v
+    exact ⟨by show ((matchLocs avatar data e cv _ v).getD []).map RV.pos = _; rw [hm]; rfl,
+      by show (matchLocs avatar data e cv _ v).isSome = _; rw [hm]; rfl⟩
+
+/-! ## Static `EqualTo` on one word -/
+
+theorem natBE_wordVal : ∀ (k : Nat) (bs : Bytes), bs.length = k → natBE k (wordVal bs) = bs
+  | 0, bs, h => by rw [List.length_eq_zero_iff.1 h]; rfl
+  | k + 1, bs, h => by
+    have hne : bs ≠ [] := by intro e; subst e; simp at h
+    obtain ⟨l, b, rfl⟩ : ∃ l b, bs = l ++ [b] :=
+      ⟨bs.dropLast, bs.getLast hne, (List.dropLast_concat_getLast hne).symm⟩
+    have hl : l.length = k := by simpa using h
+    have hb := b.isLt
+    rw [wordVal_append_single]
+    simp only [natBE]
+    have e1 : (wordVal l * 256 + b.val) / 256 = wordVal l := by omega
+    have e2 : (wordVal l * 256 + b.val) % 256 = b.val := by omega
+    rw [e1, natBE_wordVal k l hl]
+    congr 2
+    exact Fin.ext e2
+
+theorem wordVal_inj {a b : Bytes} (hl : a.length = b.length) (h : wordVal a = wordVal b) : a = b := by
+  rw [← natBE_wordVal a.length a rfl, ← natBE_wordVal b.length b rfl, hl, h]
+
+theorem toBytes_inj : ∀ {a b : List Nat}, a.all (· < 256) = true → b.all (· < 256) = true →
+    toBytes a = toBytes b → a = b
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by simp [toBytes] at h
+  | _ :: _, [], _, _, h => by simp [toBytes] at h
+  | x :: xs, y :: ys, ha, hb, h => by
+    simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at ha hb
+    simp only [toBytes, List.map_cons, List.cons.injEq, Fin.mk.injEq] at h
+    rw [Nat.mod_eq_of_lt ha.1, Nat.mod_eq_of_lt hb.1] at h
+    rw [h.1, toBytes_inj ha.2 hb.2 h.2]
+
+theorem pinned_eq {c : Cond} {w : List Nat} (h : pinned c = some w) :
+    c = ⟨1, 16, w, []⟩ ∧ w.length = 32 ∧ w.all (· < 256) = true := by
+  unfold pinned at h
+  split at h
+  · rename_i hc
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨h16, h1, hch, hl, ha⟩ := hc
+    rcases c with ⟨e, o, cv, ch⟩
+    simp only at h16 h1 hch hl ha
+    subst h16 h1 hch
+    exact ⟨rfl, hl, ha⟩
+  · simp at h
+
+/-- The word a static `EqualTo` with no children compares: a node of that
+    shape with an empty compValue, read at the same place. -/
+def wordAt (env : Env) (data : Calldata) (v : RV) : Evaluate.B32 :=
+  inputB env (input data v.loc (nodeAt avatar ⟨1, 16, [], []⟩ v))
+
+theorem rawSz_static (w : List Nat) : rawSz avatar ⟨1, 16, w, []⟩ = 32 := by
+  simp [rawSz, toRoles, inlinedSize, encN, ConditionPacking.encOf?]
+
+theorem isInl_static (w : List Nat) : isInl (⟨1, 16, w, []⟩ : Cond) = true := by
+  simp [isInl, isInlL]
+
+theorem tyEq_static (w w' : List Nat) :
+    TyEq (D avatar ⟨1, 16, w, []⟩) (D avatar ⟨1, 16, w', []⟩) := by
+  have hl : LayR avatar ⟨1, 16, w, []⟩ ⟨1, 16, w', []⟩ :=
+    ⟨by rw [isInl_static, isInl_static], fun _ => by rw [rawSz_static, rawSz_static]⟩
+  refine .mk (by rw [D_encoding, D_encoding]) (D_lay avatar hl) fun hs => ?_
+  exact absurd (by rw [D_encoding]; rfl) hs
+
+theorem cmpOk_static (env : Env) (data : Calldata) {w : List Nat} (hl : w.length = 32) (v : RV)
+    (h : cmpOk env data (nodeAt avatar ⟨1, 16, w, []⟩ v) v.loc = true) :
+    wordAt avatar env data v = .w (wordVal (toBytes w)) := by
+  have T := nodeAt_ty avatar (tyEq_static avatar [] w) v
+  have hop : (nodeAt avatar ⟨1, 16, w, []⟩ v).operator = .EqualTo := by
+    cases v <;> simp [nodeAt, D_operator, opN, ConditionPacking.opOf?]
+  have hcv : (nodeAt avatar ⟨1, 16, w, []⟩ v).compValue = toBytes w := by
+    cases v <;> simp [nodeAt, D_compValue, cvOf, isInl_static]
+  have hlen : (toBytes w).length = 32 := by simp [toBytes, hl]
+  have hcvB : cvB (toBytes w) = .w (wordVal (toBytes w)) := by
+    unfold cvB key
+    rw [if_neg (by omega), List.take_append_of_le_length (by omega), List.take_of_length_le (by omega)]
+  unfold wordAt
+  rw [input_tyEq data T]
+  unfold cmpOk at h
+  rw [hop, hcv] at h
+  generalize input data v.loc (nodeAt avatar ⟨1, 16, w, []⟩ v) = x at h ⊢
+  cases x <;> simp_all [Evaluate.compare, sOk, sParameterNotAllowed]
+
+/-- **A static `EqualTo` passes only on its own word** (`World.Ok.eqWord`). -/
+theorem readWorld_eqWord (env : Env) (data : Calldata) (n : Nat) (c c' : Cond) (ss ss' : List (RV → T))
+    (v : RV) (w w' : List Nat) (hc : pinned c = some w) (hc' : pinned c' = some w') (hne : w ≠ w')
+    (sl : Slots) (cs : CM) (sl' : Slots) (cs' : CM) :
+    ((readWorld avatar env data n).ext c ss v sl cs).1 = none ∨
+      ((readWorld avatar env data n).ext c' ss' v sl' cs').1 = none := by
+  obtain ⟨rfl, hl, ha⟩ := pinned_eq hc
+  obtain ⟨rfl, hl', ha'⟩ := pinned_eq hc'
+  show (readExt avatar env data n _ ss v sl cs).1 = none ∨ (readExt avatar env data n _ ss' v sl' cs').1 = none
+  simp only [readExt, checkT]
+  by_cases h1 : cmpOk env data (nodeAt avatar ⟨1, 16, w, []⟩ v) v.loc = true
+  · by_cases h2 : cmpOk env data (nodeAt avatar ⟨1, 16, w', []⟩ v) v.loc = true
+    · have e := (cmpOk_static avatar env data hl v h1).symm.trans (cmpOk_static avatar env data hl' v h2)
+      simp only [Evaluate.B32.w.injEq] at e
+      exact absurd (toBytes_inj ha ha' (wordVal_inj (by simp [toBytes, hl, hl']) e)) hne
+    · right; simp [h2]
+  · left; simp [h1]
+
+/-- **The contract's reading satisfies the normalization proof's assumptions.** -/
+theorem readWorld_ok (env : Env) (data : Calldata) (n : Nat) :
+    (readWorld avatar env data n).Ok (consumeM env.balance) where
+  comm := consumeM_comm env.balance
+  keeps := readWorld_keeps avatar env data n
+  pure := readWorld_pure avatar env data n
+  charger := readWorld_charger avatar env data n
+  eqWord := readWorld_eqWord avatar env data n
 
 end
 end Bridge

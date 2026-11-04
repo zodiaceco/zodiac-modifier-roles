@@ -1,4 +1,4 @@
-import Normalize.Effects
+import Normalize.Exclusive
 
 /-!
 # Each normalization step keeps the meaning
@@ -89,18 +89,6 @@ theorem same_congr (c : Cond) {l : List Cond} (h : Pw W l c.ch)
 
 theorem sem_pass {x : Cond} (h : isPass x = true) (w : V) : sem W x w = passT := by
   rw [sem_eq, ite_pos' (by simpa [isPass] using h)]
-
-theorem sem_and {c : Cond} (h : c.op = 1) (v : V) :
-    sem W c v = seqT (c.ch.map fun x => sem W x v) := by
-  rw [sem_eq]; simp [h]
-
-theorem sem_or {c : Cond} (h : c.op = 2) (v : V) :
-    sem W c v = orT (c.ch.map fun x => sem W x v) := by
-  rw [sem_eq]; simp [h]
-
-theorem sem_matches {c : Cond} (h : c.op = 5) (he : c.enc = 3 ∨ c.enc = 5) (v : V) :
-    sem W c v = matchesT W c.enc c.cv c.ch v := by
-  rw [sem_eq]; simp [h, he]
 
 theorem struct_log {c : Cond} (h : c.op = 1 ∨ c.op = 2) : isStruct c = c.ch.any isStruct := by
   rw [isStruct_eq]; rcases h with h | h <;> simp [h]
@@ -309,7 +297,8 @@ theorem sortCh_perm (l : List Cond) : (sortCh l).Perm l := by
   rw [e]
   exact this.trans (List.mergeSort_perm _ _)
 
-theorem sortB_same (hW : W.Ok step) (c : Cond) : Same W (sortB c) c := by
+theorem sortB_same (hW : W.Ok step) {inv : Cond → Prop} (hN : W.NormOk inv) (c : Cond) :
+    Same W (sortB c) c := by
   unfold sortB
   split
   · rename_i hc
@@ -329,7 +318,7 @@ theorem sortB_same (hW : W.Ok step) (c : Cond) : Same W (sortB c) c := by
         have hr : canReorderOr c.ch = true := by
           have h1 : ¬ c.op = 1 := by omega
           simp [canReorder, h, h1] at hc; exact hc.2.1
-        exact (orT_perm hW hperm.symm hr v).symm
+        exact (orT_perm hW hN hperm.symm hr v).symm
     · rw [struct_log (c := { c with ch := sortCh c.ch }) hl', struct_log hl']
       exact any_perm hperm
   · exact Same.refl _

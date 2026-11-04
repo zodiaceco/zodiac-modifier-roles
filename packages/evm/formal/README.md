@@ -504,15 +504,26 @@ An opaque operator gets its node and its children's meanings. The opaque
 operators are assumed to (`World.Ok`): write slots only if
 `Pluck`; charge only if `Custom`, `WithinAllowance` or
 `CallWithinAllowance`; and choose between charges depending on earlier ones
-only if `ArraySome` or `ZipSome`. Charges commute, which `consume_comm`
-proves of `AllowanceConsumer.consume`.
+only if `ArraySome` or `ZipSome`; and a static `EqualTo` on one word
+passes only on that word (`eqWord`, proven for the reading on calldata by
+`readWorld_eqWord`). Charges commute, which `consume_comm` proves of
+`AllowanceConsumer.consume`.
 
 `World.NormOk`: an invariant `inv` of the trees, kept by every rewrite,
 under which rewriting a node's children does not change what an opaque
 operator does (`NormOk.ext`), a normalized child is read where the child
-was, and the `Or` a merge puts at the hinge is read where each branch's
-hinge child was. The reading on calldata meets it on well-typed trees
-(`readWorld_normOk`, below).
+was, the `Or` a merge puts at the hinge is read where each branch's
+hinge child was, and two `Matches` with the same compValue over children of
+the same types read the same fields (`twin`). The reading on calldata meets
+it on well-typed trees (`readWorld_normOk`, below).
+
+An `Or` is sorted if no child writes slots and every charging child
+excludes every other one: same type, and `disjoint` (pins a field to
+different words, through `And`, `Or` and `Matches`). Disjoint branches never
+both pass, from any state (`disjoint_sound`), so the first passing branch,
+and with it the allowance charged, does not depend on the order
+(`orT_perm`). This holds for every value Roles reads, so crafted encodings
+cannot pick a branch either ([details](Normalize/README.md#exclusive-or-branches)).
 
 ### Findings
 
@@ -526,7 +537,8 @@ Normalization changed what conditions check in eight ways, all fixed in the SDK
 2. Merging `Or[sel A(…), sel B(…)]` kept only the first branch's leading bytes:
    one selector was lost and the other **widened**.
 3. `Or` branches that charge allowances were sorted: a different allowance was
-   charged.
+   charged. (They are sorted again now only when at most one can pass:
+   `canReorderOr`, proven in `Normalize/Exclusive.lean`.)
 4. `And` children were sorted past the `Pluck` that writes the slot a Zip reads
    (fails safe: the check rejects it).
 5. Duplicate allowance checks in an `And` were removed: each copy charges.
@@ -876,7 +888,12 @@ cover and reports the mutants the test does not notice. Last run: normalize
 and sort ties, or in the packed `conditionId` this test does not cover),
 check 389 of 425 (most survivors are equivalent rewrites or sit at
 Packable size limits the generators rarely reach), pack 7 of 9 (survivors in the `checkAndPack`
-wrapper).
+wrapper). `--file normalize/effects.ts` after the exclusive-`Or` rule: 68 of
+73 killed; the survivors are two equivalent changes (the early return when no
+child charges, the outer loop bound), the per-child type check of
+`disjoint` on `Matches` and the both-`Matches` test (both implied, on
+well-typed trees, by the branches having one type; the proof uses them),
+and one in `isStructural`.
 
 `node scripts/formal/mutate-consumer.mjs` targets what the Lean models cannot
 see: memory aliasing. The models treat the consumption list as an immutable

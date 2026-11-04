@@ -172,36 +172,5 @@ theorem seqT_perm (hW : W.Ok step) {l l' : List (Cond × V)} (hp : l.Perm l')
   | trans h1 h2 ih1 ih2 =>
     rw [ih1 h, ih2 (by rwa [← canReorderAnd_perm (h1.map Prod.fst)])]
 
-theorem orT_swap_pure {a b : Thunk S C} (ha : PureT a) (hb : PureT b) (l : List (Thunk S C)) :
-    orT (a :: b :: l) = orT (b :: a :: l) := by
-  obtain ⟨p, hp⟩ := ha
-  obtain ⟨q, hq⟩ := hb
-  funext sl cs
-  simp only [orT, hp, hq]
-  by_cases h1 : p sl <;> by_cases h2 : q sl <;> simp [h1, h2]
-
-/-- An `Or` over children that charge nothing and write no slots means the same in every order. -/
-theorem orT_perm (hW : W.Ok step) {l l' : List Cond} (hp : l.Perm l')
-    (h : canReorderOr l = true) (v : V) :
-    orT (l.map fun c => sem W c v) = orT (l'.map fun c => sem W c v) := by
-  have hpure : ∀ {l : List Cond}, canReorderOr l = true → ∀ x ∈ l, PureT (sem W x v) := by
-    intro l h x hx
-    simp only [canReorderOr, Bool.not_eq_true', List.any_eq_false, Bool.or_eq_true,
-      not_or, Bool.not_eq_true] at h
-    exact pure_sem hW x (h x hx).1 (h x hx).2 v
-  induction hp with
-  | nil => rfl
-  | cons x _ ih =>
-    funext sl cs
-    simp only [List.map_cons, orT]
-    rw [ih (by simp only [canReorderOr, List.any_cons, Bool.not_or] at h ⊢; exact (Bool.and_eq_true _ _ ▸ h).2)]
-  | swap x y l =>
-    simp only [List.map_cons]
-    exact orT_swap_pure (hpure h y (by simp)) (hpure h x (by simp)) _
-  | trans h1 h2 ih1 ih2 =>
-    rw [ih1 h, ih2 (by
-      simp only [canReorderOr] at h ⊢
-      rwa [← any_perm h1])]
-
 end
 end Normalize

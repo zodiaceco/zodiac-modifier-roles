@@ -9,10 +9,11 @@
  * killed). A surviving mutant is either equivalent (the change does not alter
  * behavior) or a gap in the test's inputs.
  *
- *   node scripts/formal/mutate.mjs <target> [--limit n] [--report file]
+ *   node scripts/formal/mutate.mjs <target> [--file f] [--limit n] [--report file]
  *
  * Targets: `normalize` (sdk-normalize.spec.ts), `check` (checkStored.ts,
  * sdk-check.spec.ts), `pack` (packConditions.ts, its byte-for-byte test).
+ * `--file` mutates one of the target's files only (e.g. `normalize/effects.ts`).
  * Needs the Lean driver (`cd formal && lake build roles-model`). The source
  * file is restored after every mutant, also on Ctrl-C.
  */
@@ -106,11 +107,16 @@ function mutants(src) {
 const args = process.argv.slice(2);
 const target = TARGETS[args[0]];
 if (!target) {
-  console.error(`usage: mutate.mjs <${Object.keys(TARGETS).join("|")}> [--limit n] [--report file]`);
+  console.error(`usage: mutate.mjs <${Object.keys(TARGETS).join("|")}> [--file f] [--limit n] [--report file]`);
   process.exit(2);
 }
 const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : Infinity;
 const reportFile = args.includes("--report") ? args[args.indexOf("--report") + 1] : undefined;
+const only = args.includes("--file") ? args[args.indexOf("--file") + 1] : undefined;
+if (only && !target.files.includes(only)) {
+  console.error(`--file must be one of ${target.files.join(", ")}`);
+  process.exit(2);
+}
 
 function run() {
   const r = spawnSync("npx", ["hardhat", "test", ...target.test], {
@@ -142,7 +148,7 @@ if (run() !== "survived") {
 }
 
 const results = [];
-for (const rel of target.files) {
+for (const rel of target.files.filter((f) => !only || f === only)) {
   const file = path.join(sdk, rel);
   const src = readFileSync(file, "utf8");
   current = { file, src };

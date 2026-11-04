@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
 import { flattenCondition } from "../../../sdk/src/main/condition/flattenCondition.js";
 import { checkStoredConditions } from "../../../sdk/src/main/condition/checkStored.js";
+import { canReorderOr, charges } from "../../../sdk/src/main/condition/normalize/effects.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LEAN_BIN = path.resolve(here, "../../formal/.lake/build/bin/roles-model");
@@ -203,8 +204,52 @@ function gen(s: Shape, depth: number): C {
   return genLeaf(s);
 }
 
+/**
+ * An Or of capped branches over a tuple or call: each pins one static field
+ * (a word, a set of words, or nothing) and charges an allowance (a field, or
+ * a non-structural child). Small pools make the pinned values sometimes
+ * disjoint, sometimes overlapping.
+ */
+function cappedOr(s: Shape & { fs: Shape[] }, depth: number): C | undefined {
+  const statics = s.fs.flatMap((f, i) => (f.k === "s" ? [i] : []));
+  if (statics.length === 0) return undefined;
+  const p = pick(statics);
+  const q = statics.length > 1 && chance(0.6) ? pick(statics.filter((i) => i !== p)) : undefined;
+  const base = s.fs.map((f) => (chance(0.5) ? passOf(f) : gen(f, Math.max(0, depth - 2))));
+  const cv = s.k === "c" && chance(0.4) ? pick(["0x0004aaaaaaaa", "0x0004bbbbbbbb"]) : undefined;
+  const pinnedField = (): C => {
+    const r = int(10);
+    if (r < 6) return node(E.Static, O.EqualTo, word(1 + int(8)));
+    if (r < 8) return node(E.None, O.Or, undefined, [
+      node(E.Static, O.EqualTo, word(1 + int(8))),
+      node(E.Static, O.EqualTo, word(1 + int(8))),
+    ]);
+    if (r < 9) return node(E.Static, O.LessThan, word(3));
+    return node(E.Static, O.Pass);
+  };
+  const branch = (): C => {
+    const children = base.map((c) => structuredClone(c));
+    children[p] = pinnedField();
+    const key = word(1 + int(3));
+    if (q !== undefined) children[q] = node(E.Static, O.WithinAllowance, key);
+    const m = node(encOf(s), O.Matches, chance(0.1) ? pick(["0x0004aaaaaaaa", "0x0004bbbbbbbb"]) : cv, children);
+    // a charge next to the value (Matches children all read a field), and
+    // the pin in one child of an And
+    const extra: C[] = [];
+    if (q === undefined || chance(0.2))
+      extra.push(node(pick([E.Ether, E.None]), q === undefined && chance(0.5) ? O.CallWithinAllowance : O.WithinAllowance, key));
+    if (chance(0.15)) extra.push(passOf(s));
+    return extra.length ? node(E.None, O.And, undefined, [m, ...extra]) : m;
+  };
+  return node(E.None, O.Or, undefined, Array.from({ length: 2 + int(3) }, branch));
+}
+
 /** And/Or over the shape, often variants of one tree differing in one position. */
 function genLogical(s: Shape, depth: number): C {
+  if ((s.k === "t" || s.k === "c") && chance(0.3)) {
+    const c = cappedOr(s, depth);
+    if (c) return c;
+  }
   const op = chance(0.6) ? O.Or : O.And;
   const n = 1 + int(3);
   let kids: C[];
@@ -252,6 +297,10 @@ function variant(base: C, s: Shape, depth: number): C {
 function genRoot(): C {
   const shape: Shape = { k: "c", fs: Array.from({ length: 1 + int(3) }, () => genShape(2)) };
   const depth = 1 + int(4);
+  if (chance(0.15)) {
+    const c = cappedOr(shape, depth);
+    if (c) return c;
+  }
   const root = gen(shape, depth);
   if (chance(0.15)) {
     const kids = root.children ?? [];
@@ -279,14 +328,21 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     const cases: { input: string; ts: string; inT: string; tsT: string }[] = [];
     let threw = 0;
     let changed = 0;
-    const stats = { grew: 0, fewerOr: 0, fewerAnd: 0, reordered: 0 };
+    const stats = { grew: 0, fewerOr: 0, fewerAnd: 0, reordered: 0, cappedOr: 0, cappedOrSorted: 0 };
+    // Ors with a charging child, in the normalized tree: how often the
+    // exclusivity rule decides
+    const capped = (c: C, f: (o: C) => void) => {
+      if (c.operator === O.Or && (c.children ?? []).some((x) => charges(x as any))) f(c);
+      for (const x of c.children ?? []) capped(x, f);
+    };
     for (let i = 0; i < CASES; i++) {
       const tree = genRoot();
       const input = flat(tree);
       let ts: string;
       let tsT: string;
+      let out: C;
       try {
-        const out = normalizeCondition(structuredClone(tree) as any) as any;
+        out = normalizeCondition(structuredClone(tree) as any) as any;
         ts = flat(out);
         tsT = ser(out);
       } catch (e) {
@@ -303,6 +359,14 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       if (count(ts, /^\d+:0:2:/) < count(input, /^\d+:0:2:/) && count(input, /^\d+:0:2:/) > 0) stats.fewerOr++;
       if (count(ts, /^\d+:0:1:/) < count(input, /^\d+:0:1:/)) stats.fewerAnd++;
       if (nOut === nIn && ts !== input) stats.reordered++;
+      let seen = false;
+      let sorted = false;
+      capped(out, (o) => {
+        seen = true;
+        if (canReorderOr(o.children as any)) sorted = true;
+      });
+      if (seen) stats.cappedOr++;
+      if (sorted) stats.cappedOrSorted++;
       cases.push({ input, ts, inT: ser(tree), tsT });
     }
     const res = spawnSync(LEAN_BIN, {

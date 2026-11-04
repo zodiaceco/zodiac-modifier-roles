@@ -211,12 +211,5 @@ theorem readWorld_charger (c : Cond) (ss : List (RV → T))
     | exact zipT_every_ok data n (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h)
         (fun h => charger_pick h) _ _ kid
 
-/-- **The contract's reading satisfies the normalization proof's assumptions.** -/
-theorem readWorld_ok : (readWorld avatar env data n).Ok (consumeM env.balance) where
-  comm := consumeM_comm env.balance
-  keeps := readWorld_keeps avatar env data n
-  pure := readWorld_pure avatar env data n
-  charger := readWorld_charger avatar env data n
-
 end
 end Bridge
