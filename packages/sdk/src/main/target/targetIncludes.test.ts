@@ -536,10 +536,16 @@ describe("targetIncludes()", () => {
         ],
       }
 
+      // the same condition without the empty compValues (a trailing Pass is
+      // kept: it changes which calldata the contract accepts)
       const condition2: Condition = {
         paramType: Encoding.AbiEncoded,
         operator: Operator.Matches,
-        children: [COMP(2), COMP(1)],
+        children: [
+          COMP(2),
+          COMP(1),
+          { paramType: Encoding.Static, operator: Operator.Pass },
+        ],
       }
 
       expect(

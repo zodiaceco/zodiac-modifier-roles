@@ -48,6 +48,24 @@ export {
   type ConditionFlat,
 } from "./condition/flattenCondition"
 export { normalizeCondition } from "./condition/normalize"
+export {
+  checkStored,
+  checkStoredConditions,
+  toFlatNodes,
+  type Verdict,
+  type Ty as ConditionType,
+  type FlatNode,
+} from "./condition/checkStored"
+export {
+  packConditions,
+  checkAndPack,
+  checkAndPackCondition,
+} from "./condition/packConditions"
+export {
+  migrateConditionV2,
+  MigrateV2Error,
+  type ConditionV2,
+} from "./condition/migrateV2"
 
 /*
  *
@@ -63,6 +81,18 @@ export {
   allowSignTypedMessage,
 } from "./eip712-signer"
 export { encodeKey, decodeKey } from "./keys"
+export {
+  accrueAllowance,
+  accrueThenUpdate,
+  encodeSetAllowance,
+  checkAllowanceUnits,
+  type AllowanceRefill,
+} from "./allowance"
+export {
+  encodeAllowanceConversion,
+  MAX_ALLOWANCE_DECIMALS,
+  type AllowanceConversion,
+} from "./target/authoring/c/allowance"
 export { postRole } from "./postRole"
 export { fetchLicense, License, LicenseError } from "./licensing"
 

@@ -20,29 +20,35 @@ const ZERO_SALT =
 
 export function conditionHash(condition: Condition) {
   return (
-    "0x" + createHash("sha256").update(rawConditionId(condition)).digest("hex")
+    "0x" + createHash("sha256").update(conditionId(condition)).digest("hex")
   )
 }
 
-export const conditionId = (condition: Condition) => {
-  const conditions = flattenCondition(condition)
-  return concat(
-    conditions.flatMap((condition) => [
-      packCondition(condition),
-      condition.compValue || "0x",
-    ])
-  )
-}
+/**
+ * A canonical id: two conditions get the same id exactly when they are the
+ * same tree. Field order, extra fields, missing `children`/`compValue` and the
+ * hex case of `compValue` make no difference.
+ *
+ * Each node is written in pre-order as
+ * paramType (1 byte) | operator (1 byte) | number of children (4 bytes) |
+ * compValue length (4 bytes) | compValue
+ * Every field has a fixed width or a length in front of it, so the bytes can
+ * only be read back one way.
+ */
+export const conditionId = (condition: Condition): string =>
+  concat(encodeNode(condition))
 
-export function rawConditionId(condition: Condition) {
-  const normalize = (c: Condition): Condition => ({
-    paramType: c.paramType,
-    operator: c.operator,
-    compValue: c.compValue || "0x",
-    children: (c.children || []).map(normalize),
-  })
-
-  return JSON.stringify(normalize(condition))
+const encodeNode = (condition: Condition): BytesLike[] => {
+  const compValue = condition.compValue || "0x"
+  const children = condition.children || []
+  return [
+    toBeHex(condition.paramType, 1),
+    toBeHex(condition.operator, 1),
+    toBeHex(children.length, 4),
+    toBeHex(dataLength(compValue), 4),
+    compValue,
+    ...children.flatMap(encodeNode),
+  ]
 }
 
 /**

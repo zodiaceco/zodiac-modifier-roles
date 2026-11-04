@@ -4,6 +4,8 @@ import { Operator, Encoding } from "../../../types"
 import { abiEncodedMatches, calldataMatches } from "./matches"
 import { encodeKey } from "../../../keys"
 import { AbiCoder, ParamType } from "ethers"
+import { checkStoredConditions } from "../../../condition/checkStored"
+import { flattenCondition } from "../../../condition/flattenCondition"
 import { checkRootConditionIntegrity } from "../../../condition/conditionIntegrity"
 
 describe("calldataMatches", () => {
@@ -19,7 +21,7 @@ describe("calldataMatches", () => {
       compValue: encodeKey("test-allowance"),
     })
     expect(() => checkRootConditionIntegrity(result)).not.toThrow()
-    expect(() => checkRootConditionIntegrity(result)).not.toThrow()
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
   })
 
   it("scopes a bytes parameter with a nested allowance-only call", () => {
@@ -38,7 +40,7 @@ describe("calldataMatches", () => {
       ],
     })
     expect(() => checkRootConditionIntegrity(result)).not.toThrow()
-    expect(() => checkRootConditionIntegrity(result)).not.toThrow()
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
   })
 
   it("puts CallWithinAllowance next to the Matches, as v3 requires", () => {
@@ -68,7 +70,7 @@ describe("calldataMatches", () => {
         },
       ],
     })
-    expect(() => checkRootConditionIntegrity(result)).not.toThrow()
+    expect(checkStoredConditions(flattenCondition(result) as any)).toBeDefined()
   })
 
   it("adds the selector check next to the allowance", () => {
