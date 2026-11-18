@@ -1,11 +1,16 @@
-import dotenv from "dotenv";
+import { existsSync } from "node:fs";
 import { defineConfig } from "hardhat/config";
-import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
+import hardhatMocha from "@nomicfoundation/hardhat-mocha";
+import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
+import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
+import hardhatVerify from "@nomicfoundation/hardhat-verify";
 
 import deployMastercopy from "./tasks/deploy-mastercopy.js";
 import verifyMastercopy from "./tasks/verify-mastercopy.js";
 
-dotenv.config();
+if (existsSync(".env")) process.loadEnvFile();
 
 const { INFURA_KEY, PK, MNEMONIC, ETHERSCAN_API_KEY } = process.env;
 
@@ -18,14 +23,21 @@ const accounts = PK
     };
 
 export default defineConfig({
-  plugins: [hardhatToolboxMochaEthers],
+  plugins: [
+    hardhatEthers,
+    hardhatEthersChaiMatchers,
+    hardhatMocha,
+    hardhatNetworkHelpers,
+    hardhatTypechain,
+    hardhatVerify,
+  ],
   paths: {
     artifacts: "build/artifacts",
     cache: "build/cache",
     sources: "contracts",
   },
   solidity: {
-    version: "0.8.37",
+    version: "0.8.38",
     settings: {
       evmVersion: "cancun",
       viaIR: true,

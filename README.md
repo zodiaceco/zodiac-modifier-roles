@@ -23,7 +23,7 @@ Modules that have been granted a role are able to unilaterally make calls to any
 
 The interface mirrors the relevant parts of the Safe's interface, so this contract can be placed between Safe modules and the Safe itself to enforce role-based permissions.
 
-The contracts have been developed with [Solidity 0.8.37](https://github.com/ethereum/solidity/releases/tag/v0.8.37) targeting evm version cancun.
+The contracts have been developed with [Solidity 0.8.38](https://github.com/ethereum/solidity/releases/tag/v0.8.38) targeting evm version cancun.
 
 ### Features
 
