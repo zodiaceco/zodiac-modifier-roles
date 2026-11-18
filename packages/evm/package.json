@@ -3,9 +3,6 @@
   "version": "3.0.0",
   "type": "module",
   "description": "A Zodiac modifier that allows avatars to enforce granular, role-based, permissions for attached modules.",
-  "directories": {
-    "test": "test"
-  },
   "types": "./typechain-types/index.ts",
   "exports": {
     ".": {
@@ -23,29 +20,26 @@
     "coverage": "hardhat test --coverage",
     "fmt": "yarn fmt:sol && yarn fmt:ts",
     "fmt:sol": "prettier 'contracts/**/*.sol' -w",
-    "fmt:ts": "prettier '(test|src)/**/*.ts' -w",
+    "fmt:ts": "prettier '(tasks|test)/**/*.ts' -w",
     "prepack": "yarn build",
     "agent:launch": "bash scripts/launch-agent.sh",
     "agent:attach": "bash scripts/attach-agent.sh",
     "agent:stop": "bash scripts/stop-agent.sh"
   },
   "devDependencies": {
-    "@gnosis-guild/zodiac-core": "4.3.0",
+    "@gnosis-guild/zodiac-core": "4.3.1",
     "@nomicfoundation/hardhat-ethers": "^4.0.0",
     "@nomicfoundation/hardhat-ethers-chai-matchers": "^3.0.0",
     "@nomicfoundation/hardhat-mocha": "^4.0.1",
     "@nomicfoundation/hardhat-network-helpers": "^3.0.0",
     "@nomicfoundation/hardhat-typechain": "^3.0.0",
-    "@nomicfoundation/hardhat-verify": "^3.0.0",
     "@types/mocha": "10.0.10",
     "chai": "^6.3.0",
-    "eth-provider": "^0.13.7",
     "ethers": "6.16.0",
     "hardhat": "^3.22.0",
     "mocha": "^12.0.3",
     "prettier": "^3.7.4",
     "prettier-plugin-solidity": "^1.4.3",
-    "typechain": "8.3.2",
     "typescript": "7.0.2"
   },
   "installConfig": {

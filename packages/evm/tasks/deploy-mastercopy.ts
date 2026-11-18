@@ -17,11 +17,7 @@ export default task(
   .setInlineAction(async (_, hre) => {
     const connection = await hre.network.create();
     const [signer] = await connection.ethers.getSigners();
-    const provider = createEIP1193(
-      connection.networkConfig.chainId,
-      connection.provider,
-      signer,
-    );
+    const provider = createEIP1193(connection.provider, signer);
 
     await deployFactories({ provider });
 

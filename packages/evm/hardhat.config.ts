@@ -5,14 +5,14 @@ import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matc
 import hardhatMocha from "@nomicfoundation/hardhat-mocha";
 import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
 import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
-import hardhatVerify from "@nomicfoundation/hardhat-verify";
 
+import { compiler } from "./solidity.config.js";
 import deployMastercopy from "./tasks/deploy-mastercopy.js";
 import verifyMastercopy from "./tasks/verify-mastercopy.js";
 
 if (existsSync(".env")) process.loadEnvFile();
 
-const { INFURA_KEY, PK, MNEMONIC, ETHERSCAN_API_KEY } = process.env;
+const { INFURA_KEY, PK, MNEMONIC } = process.env;
 
 const accounts = PK
   ? [PK]
@@ -29,7 +29,6 @@ export default defineConfig({
     hardhatMocha,
     hardhatNetworkHelpers,
     hardhatTypechain,
-    hardhatVerify,
   ],
   paths: {
     artifacts: "build/artifacts",
@@ -37,15 +36,7 @@ export default defineConfig({
     sources: "contracts",
   },
   solidity: {
-    version: "0.8.38",
-    settings: {
-      evmVersion: "cancun",
-      viaIR: true,
-      optimizer: {
-        enabled: true,
-        runs: 10,
-      },
-    },
+    ...compiler,
     npmFilesToBuild: [
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
     ],
@@ -96,15 +87,6 @@ export default defineConfig({
       chainId: 11155111,
       accounts,
       url: `https://sepolia.infura.io/v3/${INFURA_KEY}`,
-    },
-  },
-  verify: {
-    etherscan: {
-      apiKey: ETHERSCAN_API_KEY ?? "",
-      enabled: true,
-    },
-    sourcify: {
-      enabled: false,
     },
   },
   tasks: [deployMastercopy, verifyMastercopy],

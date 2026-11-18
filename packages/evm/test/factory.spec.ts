@@ -6,7 +6,7 @@ import {
   deployProxy,
 } from "@gnosis-guild/zodiac-core/tooling";
 
-import { createEip1193 } from "./setup.js";
+import { createEIP1193 } from "../tasks/createEIP1193.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers, provider } = connection;
@@ -80,7 +80,7 @@ describe("Module works with factory", () => {
       AddressOne,
       AddressOne,
     );
-    const eip1193Provider = createEip1193(provider, deployer);
+    const eip1193Provider = createEIP1193(provider, deployer);
     return { factory, masterCopy, Modifier, eip1193Provider };
   }
 
