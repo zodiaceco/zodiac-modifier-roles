@@ -1,12 +1,10 @@
 import { hexlify, Interface, randomBytes, ZeroHash } from "ethers";
 
 import { ExecutionOptions } from "./utils.js";
+import { createEIP1193 } from "../tasks/createEIP1193.js";
 import type { ConditionFlatStruct } from "../typechain-types/contracts/Roles.js";
 import hre from "hardhat";
 import type { NetworkConnection } from "hardhat/types/network";
-import type { EthereumProvider } from "hardhat/types/providers";
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types";
-import type { EIP1193Provider } from "@gnosis-guild/zodiac-core";
 import {
   deployFactories,
   deployMastercopy as zodiacDeployMastercopy,
@@ -17,26 +15,10 @@ import {
 import "@nomicfoundation/hardhat-ethers";
 import "@nomicfoundation/hardhat-network-helpers";
 
-export function createEip1193(
-  provider: EthereumProvider,
-  signer: HardhatEthersSigner,
-): EIP1193Provider {
-  return {
-    request: async ({ method, params }) => {
-      if (method == "eth_sendTransaction") {
-        const { hash } = await signer.sendTransaction((params as any[])[0]);
-        return hash;
-      }
-
-      return provider.request({ method, params });
-    },
-  };
-}
-
 export function createSetup({ ethers, provider }: NetworkConnection) {
   async function deployRolesMod(owner: string, avatar: string, target: string) {
     const [signer] = await ethers.getSigners();
-    const eip1193 = createEip1193(provider, signer);
+    const eip1193 = createEIP1193(provider, signer);
 
     await deployFactories({ provider: eip1193 });
     const conditionStorer = await hre.artifacts.readArtifact("ConditionStorer");

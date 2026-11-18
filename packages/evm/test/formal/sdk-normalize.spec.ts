@@ -55,7 +55,15 @@ const int = (n: number) => Math.floor(rand() * n);
 const chance = (p: number) => rand() < p;
 const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
 
-const E = { None: 0, Static: 1, Dynamic: 2, Tuple: 3, Array: 4, Abi: 5, Ether: 6 };
+const E = {
+  None: 0,
+  Static: 1,
+  Dynamic: 2,
+  Tuple: 3,
+  Array: 4,
+  Abi: 5,
+  Ether: 6,
+};
 const O = {
   Pass: 0,
   And: 1,
@@ -84,7 +92,12 @@ type C = {
 };
 
 const word = (n: number) => "0x" + n.toString(16).padStart(64, "0");
-const node = (paramType: number, operator: number, compValue?: string, children?: C[]): C => ({
+const node = (
+  paramType: number,
+  operator: number,
+  compValue?: string,
+  children?: C[],
+): C => ({
   paramType,
   operator,
   ...(compValue !== undefined && { compValue }),
@@ -102,18 +115,28 @@ type Shape =
 function genShape(depth: number): Shape {
   if (depth <= 0 || chance(0.45)) return chance(0.75) ? { k: "s" } : { k: "d" };
   const r = int(3);
-  const fields = () => Array.from({ length: 1 + int(3) }, () => genShape(depth - 1));
+  const fields = () =>
+    Array.from({ length: 1 + int(3) }, () => genShape(depth - 1));
   if (r === 0) return { k: "t", fs: fields() };
   if (r === 1) return { k: "a", el: genShape(depth - 1) };
   return { k: "c", fs: fields() };
 }
 
 const encOf = (s: Shape) =>
-  s.k === "s" ? E.Static : s.k === "d" ? E.Dynamic : s.k === "t" ? E.Tuple : s.k === "a" ? E.Array : E.Abi;
+  s.k === "s"
+    ? E.Static
+    : s.k === "d"
+      ? E.Dynamic
+      : s.k === "t"
+        ? E.Tuple
+        : s.k === "a"
+          ? E.Array
+          : E.Abi;
 
 /** A Pass describing the shape. */
 function passOf(s: Shape): C {
-  if (s.k === "t" || s.k === "c") return node(encOf(s), O.Pass, undefined, s.fs.map(passOf));
+  if (s.k === "t" || s.k === "c")
+    return node(encOf(s), O.Pass, undefined, s.fs.map(passOf));
   if (s.k === "a") return node(E.Array, O.Pass, undefined, [passOf(s.el)]);
   return node(encOf(s), O.Pass);
 }
@@ -123,10 +146,14 @@ function genNonStruct(): C {
   const r = int(5);
   if (r === 0) return node(E.None, O.CallWithinAllowance, word(1 + int(2)));
   if (r === 1) return node(E.Ether, O.LessThan, word(pick([10, 20])));
-  if (r === 2) return node(E.None, O.WithinRatio, "0x0001" + "00".repeat(int(2)));
+  if (r === 2)
+    return node(E.None, O.WithinRatio, "0x0001" + "00".repeat(int(2)));
   if (r === 3) return node(E.Ether, O.WithinAllowance, word(1 + int(2)));
   return node(E.None, O.ZipEvery, "0x0001", [
-    node(E.Tuple, O.Matches, undefined, [node(E.Static, O.Pass), node(E.Static, O.EqualTo, word(1))]),
+    node(E.Tuple, O.Matches, undefined, [
+      node(E.Static, O.Pass),
+      node(E.Static, O.EqualTo, word(1)),
+    ]),
   ]);
 }
 
@@ -137,7 +164,12 @@ function genLeaf(s: Shape): C {
     if (r <= 4) return node(E.Static, O.EqualTo, word(1 + int(3)));
     if (r === 5) return node(E.Static, O.LessThan, word(pick([100, 200])));
     if (r === 6) return node(E.Static, O.WithinAllowance, word(1 + int(2)));
-    if (r === 7) return node(E.Static, O.Custom, "0x" + "cc".repeat(20) + pick(["", "01"]));
+    if (r === 7)
+      return node(
+        E.Static,
+        O.Custom,
+        "0x" + "cc".repeat(20) + pick(["", "01"]),
+      );
     if (chance(0.5)) return sliceOf(E.Static);
     return node(E.Static, O.Pluck, "0x0" + int(3));
   }
@@ -145,7 +177,11 @@ function genLeaf(s: Shape): C {
     const r = int(5);
     if (r === 0) return node(E.Dynamic, O.Pass);
     if (r === 4) return sliceOf(E.Dynamic);
-    return node(E.Dynamic, O.EqualTo, pick(["0xaa", "0xaa0050bb", "0xbb", "0x"]));
+    return node(
+      E.Dynamic,
+      O.EqualTo,
+      pick(["0xaa", "0xaa0050bb", "0xbb", "0x"]),
+    );
   }
   return passOf(s);
 }
@@ -180,13 +216,17 @@ function gen(s: Shape, depth: number): C {
     const children = s.fs.map((f) => gen(f, depth - 1));
     // trailing Pass nodes and non-structural children
     if (chance(0.3)) {
-      for (let j = int(children.length); j < children.length; j++) children[j] = passOf(s.fs[j]);
+      for (let j = int(children.length); j < children.length; j++)
+        children[j] = passOf(s.fs[j]);
     }
-    if (chance(0.25)) children.splice(int(children.length + 1), 0, genNonStruct());
+    if (chance(0.25))
+      children.splice(int(children.length + 1), 0, genNonStruct());
     // narrower than the shape: trailing fields left out
     const width = chance(0.2) ? 1 + int(children.length) : children.length;
     const cv =
-      s.k === "c" && chance(0.4) ? pick(["0x0004aaaaaaaa", "0x0004bbbbbbbb", "0x0000"]) : undefined;
+      s.k === "c" && chance(0.4)
+        ? pick(["0x0004aaaaaaaa", "0x0004bbbbbbbb", "0x0000"])
+        : undefined;
     return node(encOf(s), O.Matches, cv, children.slice(0, width));
   }
   if (s.k === "a") {
@@ -195,8 +235,14 @@ function gen(s: Shape, depth: number): C {
     if (op === O.Matches) {
       // element-wise, elements of slightly different shapes (variants)
       const k = 1 + int(3);
-      return node(E.Array, O.Matches, undefined,
-        Array.from({ length: k }, () => gen(chance(0.6) ? s.el : nearShape(s.el), depth - 1)));
+      return node(
+        E.Array,
+        O.Matches,
+        undefined,
+        Array.from({ length: k }, () =>
+          gen(chance(0.6) ? s.el : nearShape(s.el), depth - 1),
+        ),
+      );
     }
     return node(E.Array, op, undefined, [gen(s.el, depth - 1)]);
   }
@@ -214,7 +260,9 @@ function genLogical(s: Shape, depth: number): C {
     for (let i = 1; i < n; i++) kids.push(variant(base, s, depth - 1));
   } else if (chance(0.3)) {
     // branches for different types: call variants, or misfitting tuples
-    kids = Array.from({ length: n }, () => gen(chance(0.5) ? s : nearShape(s), depth - 1));
+    kids = Array.from({ length: n }, () =>
+      gen(chance(0.5) ? s : nearShape(s), depth - 1),
+    );
   } else {
     kids = Array.from({ length: n }, () => gen(s, depth - 1));
   }
@@ -223,20 +271,26 @@ function genLogical(s: Shape, depth: number): C {
     const i = int(kids.length);
     const k = kids[i];
     if (k.operator === O.Matches && k.children && k.children.length > 1) {
-      kids[i] = { ...k, children: k.children.slice(0, 1 + int(k.children.length - 1)) };
+      kids[i] = {
+        ...k,
+        children: k.children.slice(0, 1 + int(k.children.length - 1)),
+      };
     }
   }
   // a first child that reads no parameter (layout of the logical node)
-  if (chance(0.12)) kids.unshift(node(E.Ether, O.LessThan, word(pick([10, 20]))));
+  if (chance(0.12))
+    kids.unshift(node(E.Ether, O.LessThan, word(pick([10, 20]))));
   if (chance(0.15)) kids.push(kids[int(kids.length)]); // duplicate
-  if (chance(0.15)) kids = [node(E.None, op, undefined, kids.slice(0, 2)), ...kids.slice(2)]; // nested
+  if (chance(0.15))
+    kids = [node(E.None, op, undefined, kids.slice(0, 2)), ...kids.slice(2)]; // nested
   return node(E.None, op, undefined, kids);
 }
 
 /** `base` with one child regenerated (or the whole node, if it has none). */
 function variant(base: C, s: Shape, depth: number): C {
   const kids = base.children;
-  if (!kids || kids.length === 0 || base.operator === O.Pass) return gen(s, depth);
+  if (!kids || kids.length === 0 || base.operator === O.Pass)
+    return gen(s, depth);
   const i = int(kids.length);
   let fieldShape: Shape | undefined;
   if (base.operator === O.Matches && (s.k === "t" || s.k === "c")) {
@@ -245,17 +299,26 @@ function variant(base: C, s: Shape, depth: number): C {
   } else if (base.operator === O.And || base.operator === O.Or) {
     fieldShape = s;
   }
-  const replacement = fieldShape && chance(0.85) ? gen(fieldShape, depth) : genLeaf(fieldShape ?? { k: "s" });
+  const replacement =
+    fieldShape && chance(0.85)
+      ? gen(fieldShape, depth)
+      : genLeaf(fieldShape ?? { k: "s" });
   return { ...base, children: kids.map((k, j) => (j === i ? replacement : k)) };
 }
 
 function genRoot(): C {
-  const shape: Shape = { k: "c", fs: Array.from({ length: 1 + int(3) }, () => genShape(2)) };
+  const shape: Shape = {
+    k: "c",
+    fs: Array.from({ length: 1 + int(3) }, () => genShape(2)),
+  };
   const depth = 1 + int(4);
   const root = gen(shape, depth);
   if (chance(0.15)) {
     const kids = root.children ?? [];
-    return { ...root, children: [...kids, node(E.Static, O.Pass), node(E.Static, O.Pass)] };
+    return {
+      ...root,
+      children: [...kids, node(E.Static, O.Pass), node(E.Static, O.Pass)],
+    };
   }
   return root;
 }
@@ -291,16 +354,23 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
         tsT = ser(out);
       } catch (e) {
         if (process.env.SDK_NORMALIZE_SHOW_THROWS && threw < 2)
-          console.log(`      threw: ${(e as Error).message}\n      on ${input}`);
+          console.log(
+            `      threw: ${(e as Error).message}\n      on ${input}`,
+          );
         threw++;
         continue;
       }
       if (ts !== input) changed++;
-      const count = (f: string, re: RegExp) => f.split("|").filter((n) => re.test(n)).length;
+      const count = (f: string, re: RegExp) =>
+        f.split("|").filter((n) => re.test(n)).length;
       const nIn = input.split("|").length;
       const nOut = ts.split("|").length;
       if (nOut > nIn) stats.grew++;
-      if (count(ts, /^\d+:0:2:/) < count(input, /^\d+:0:2:/) && count(input, /^\d+:0:2:/) > 0) stats.fewerOr++;
+      if (
+        count(ts, /^\d+:0:2:/) < count(input, /^\d+:0:2:/) &&
+        count(input, /^\d+:0:2:/) > 0
+      )
+        stats.fewerOr++;
       if (count(ts, /^\d+:0:1:/) < count(input, /^\d+:0:1:/)) stats.fewerAnd++;
       if (nOut === nIn && ts !== input) stats.reordered++;
       cases.push({ input, ts, inT: ser(tree), tsT });
@@ -316,11 +386,13 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       .map((c, i) => ({ ...c, lean: out[i] }))
       .filter((c) => c.lean !== c.tsT);
     console.log(
-      `      ${cases.length} compared (${changed} changed by normalization), ${threw} skipped (TypeScript threw), ${diffs.length} differences`
+      `      ${cases.length} compared (${changed} changed by normalization), ${threw} skipped (TypeScript threw), ${diffs.length} differences`,
     );
     console.log(`      ${JSON.stringify(stats)}`);
     for (const d of diffs.slice(0, 5)) {
-      console.log(`      input ${d.inT}\n      ts    ${d.tsT}\n      lean  ${d.lean}`);
+      console.log(
+        `      input ${d.inT}\n      ts    ${d.tsT}\n      lean  ${d.lean}`,
+      );
     }
     expect(diffs.length).to.equal(0);
     // normalizeCondition does not throw on these trees; a change that makes
@@ -336,29 +408,49 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     let origRejected = 0;
     for (let i = 0; i < CASES; i++) {
       const tree = genRoot();
-      const normalized = normalizeCondition(structuredClone(tree) as any) as any;
+      const normalized = normalizeCondition(
+        structuredClone(tree) as any,
+      ) as any;
       total++;
-      if (checkStoredConditions(flattenCondition(normalized) as any, true) === undefined) continue;
-      if (checkStoredConditions(flattenCondition(tree as any) as any, true) === undefined) origRejected++;
+      if (
+        checkStoredConditions(flattenCondition(normalized) as any, true) ===
+        undefined
+      )
+        continue;
+      if (
+        checkStoredConditions(flattenCondition(tree as any) as any, true) ===
+        undefined
+      )
+        origRejected++;
       qs.push({ input: ser(tree), norm: ser(normalized) });
     }
     const res = spawnSync(LEAN_BIN, {
-      input: qs.flatMap((q) => [`ivt ${q.input}`, `ivt ${q.norm}`]).join("\n") + "\n",
+      input:
+        qs.flatMap((q) => [`ivt ${q.input}`, `ivt ${q.norm}`]).join("\n") +
+        "\n",
       maxBuffer: 1 << 28,
     });
     expect(res.status, String(res.stderr)).to.equal(0);
     const out = String(res.stdout).trim().split("\n");
     expect(out.length).to.equal(2 * qs.length);
-    const badIn = qs.map((q, i) => ({ ...q, r: out[2 * i] })).filter((q) => q.r !== "ok");
-    const badNorm = qs.map((q, i) => ({ ...q, r: out[2 * i + 1] })).filter((q) => q.r !== "ok");
+    const badIn = qs
+      .map((q, i) => ({ ...q, r: out[2 * i] }))
+      .filter((q) => q.r !== "ok");
+    const badNorm = qs
+      .map((q, i) => ({ ...q, r: out[2 * i + 1] }))
+      .filter((q) => q.r !== "ok");
     const why = new Map<string, number>();
-    for (const b of badIn) why.set(b.r.split(" ")[2], (why.get(b.r.split(" ")[2]) ?? 0) + 1);
+    for (const b of badIn)
+      why.set(b.r.split(" ")[2], (why.get(b.r.split(" ")[2]) ?? 0) + 1);
     console.log(
-      `      ${qs.length} of ${total} accepted after normalization; not well-typed: ${badIn.length} as written, ${badNorm.length} normalized; the check rejects ${origRejected} of them as written`
+      `      ${qs.length} of ${total} accepted after normalization; not well-typed: ${badIn.length} as written, ${badNorm.length} normalized; the check rejects ${origRejected} of them as written`,
     );
-    for (const [k, n] of [...why].sort()) console.log(`      as written, ${k}: ${n}`);
-    for (const b of badIn.slice(0, 4)) console.log(`      ${b.r} on ${b.input}`);
-    for (const b of badNorm.slice(0, 2)) console.log(`      normalized ${b.r} on ${b.norm}`);
+    for (const [k, n] of [...why].sort())
+      console.log(`      as written, ${k}: ${n}`);
+    for (const b of badIn.slice(0, 4))
+      console.log(`      ${b.r} on ${b.input}`);
+    for (const b of badNorm.slice(0, 2))
+      console.log(`      normalized ${b.r} on ${b.norm}`);
     expect(badNorm.length).to.equal(0);
     expect(badIn.length).to.equal(0);
   });
@@ -378,8 +470,11 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     const out = String(res.stdout).trim().split("\n");
     expect(out.length).to.equal(trees.length);
     const bad = trees.filter((_, i) => out[i] !== "eq");
-    console.log(`      ${trees.length} trees, ${bad.length} that do not read back`);
-    for (const t of bad.slice(0, 3)) console.log(`      ${ser(t)}\n      ${flat(t)}`);
+    console.log(
+      `      ${trees.length} trees, ${bad.length} that do not read back`,
+    );
+    for (const t of bad.slice(0, 3))
+      console.log(`      ${ser(t)}\n      ${flat(t)}`);
     expect(bad.length).to.equal(0);
   });
 
@@ -392,16 +487,28 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     // branch allows the call (normalize_meaning); the calldata is malformed.
     const tree: C = node(E.None, O.Or, undefined, [
       node(E.Abi, O.Matches, undefined, [
-        node(E.Array, O.ArrayEvery, undefined, [node(E.Static, O.EqualTo, word(1))]),
+        node(E.Array, O.ArrayEvery, undefined, [
+          node(E.Static, O.EqualTo, word(1)),
+        ]),
       ]),
-      node(E.Abi, O.Pass, undefined, [node(E.Array, O.Pass, undefined, [node(E.Static, O.Pass)])]),
+      node(E.Abi, O.Pass, undefined, [
+        node(E.Array, O.Pass, undefined, [node(E.Static, O.Pass)]),
+      ]),
     ]);
     const normalized = normalizeCondition(structuredClone(tree) as any) as any;
     expect(normalized.children[0].operator).to.equal(O.Pass);
-    const cd = "aabbccdd" + (32).toString(16).padStart(64, "0") + (2n ** 64n).toString(16).padStart(64, "0");
+    const cd =
+      "aabbccdd" +
+      (32).toString(16).padStart(64, "0") +
+      (2n ** 64n).toString(16).padStart(64, "0");
     const res = spawnSync(LEAN_BIN, {
-      input: [tree, normalized].map((t) => `ev 0 - ${cd} ${flat(t)}`).join("\n") + "\n",
+      input:
+        [tree, normalized].map((t) => `ev 0 - ${cd} ${flat(t)}`).join("\n") +
+        "\n",
     });
-    expect(String(res.stdout).trim().split("\n")).to.deep.equal(["255 -", "0 -"]);
+    expect(String(res.stdout).trim().split("\n")).to.deep.equal([
+      "255 -",
+      "0 -",
+    ]);
   });
 });

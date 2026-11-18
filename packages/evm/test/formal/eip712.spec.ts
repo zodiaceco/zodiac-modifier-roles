@@ -298,15 +298,19 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
   it("allowSignTypedMessage permissions follow the type tree and admit exactly the scoped messages", () => {
     // The SDK's authoring helpers do not load under Hardhat's module loader
     // (an import cycle), so this part runs in its own tsx process.
-    const res = spawnSync(TSX, [path.resolve(here, "../../scripts/formal/eip712-permissions.ts")], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        EIP712_CASES: String(CASES),
-        EIP712_SEED: String(SEED),
+    const res = spawnSync(
+      TSX,
+      [path.resolve(here, "../../scripts/formal/eip712-permissions.ts")],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          EIP712_CASES: String(CASES),
+          EIP712_SEED: String(SEED),
+        },
+        maxBuffer: 1 << 30,
       },
-      maxBuffer: 1 << 30,
-    });
+    );
     if (res.status !== 0) throw new Error(res.stderr || res.stdout);
     const r = JSON.parse(res.stdout.trim().split("\n").pop()!);
     console.log(

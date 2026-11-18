@@ -78,10 +78,7 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
     // f((uint256) t, uint256 x) or g((uint256, uint256) t)
     const f = "0x11111111";
     const g = "0x22222222";
-    const tree = or(
-      call(f, tuple(eq(1)), eq(2)),
-      call(g, tuple(eq(3), eq(4))),
-    );
+    const tree = or(call(f, tuple(eq(1)), eq(2)), call(g, tuple(eq(3), eq(4))));
     await expectSameVerdicts(tree, [
       concat([f, word(1), word(2)]),
       concat([f, word(1), word(9)]),
@@ -94,7 +91,10 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
   it("leaves a Zip's fields and plucked arrays as written", async function () {
     // f(bytes[] a, uint256[] b), every (a[i], b[i]) passes: the trailing
     // Pass field must stay, a Zip has one field per plucked array
-    const pass = (paramType: Encoding) => ({ paramType, operator: Operator.Pass });
+    const pass = (paramType: Encoding) => ({
+      paramType,
+      operator: Operator.Pass,
+    });
     const pluck = (slot: number, el: Encoding) => ({
       paramType: Encoding.Array,
       operator: Operator.Pluck,
@@ -116,7 +116,10 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
         zip,
       ],
     };
-    const data = concat([f, abi.encode(["bytes[]", "uint256[]"], [["0xaa"], [7]])]);
+    const data = concat([
+      f,
+      abi.encode(["bytes[]", "uint256[]"], [["0xaa"], [7]]),
+    ]);
     await expectSameVerdicts(tree, [hexlify(data)]);
   });
 });

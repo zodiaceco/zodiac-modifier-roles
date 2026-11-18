@@ -1820,7 +1820,7 @@ describe("Integrity gaps (fuzz)", function () {
       process.env.GAP_SOLC ??
       path.join(
         os.homedir(),
-        "Library/Caches/hardhat-nodejs/compilers-v3/macosx-amd64/solc-macosx-amd64-v0.8.37+commit.f401782d",
+        "Library/Caches/hardhat-nodejs/compilers-v3/macosx-amd64/solc-macosx-amd64-v0.8.38+commit.1835d247",
       );
     if (!existsSync(SOLC)) this.skip();
     rand = mulberry32(SEED);

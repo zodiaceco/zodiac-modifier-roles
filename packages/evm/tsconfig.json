@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "es2023",
-    "typeRoots": ["node_modules/@types", "typings", "typechain-types/hardhat.d.ts"]
+    "typeRoots": ["node_modules/@types"]
   },
   "include": ["tasks", "./test", "./typechain-types"],
   "files": ["./hardhat.config.ts"]

@@ -727,7 +727,9 @@ function targetedCases(): Case[] {
   for (const lop of [O.And, O.Or]) {
     const lg = (...ch: N[]) => node(E.None, lop, ch);
     // dynamic tuples: (bytes, uint) and (bytes, uint, uint)
-    both(() => lg(ptup(O.Matches, D(), eqS()), ptup(O.Matches, D(), S(), eqS())));
+    both(() =>
+      lg(ptup(O.Matches, D(), eqS()), ptup(O.Matches, D(), S(), eqS())),
+    );
     both(() => lg(ptup(O.Matches, D()), ptup(O.EqualTo, D(), S())));
     both(() => lg(ptup(O.EqualTo, D(), S()), ptup(O.Matches, D())));
     both(() => lg(ptup(O.EqualTo, D()), ptup(O.EqualTo, D(), S())));
@@ -748,8 +750,12 @@ function targetedCases(): Case[] {
   }
   // array elements: the template must be the most specific
   for (const op of [O.Matches, O.ArraySome, O.ArrayEvery, O.ArrayTailMatches]) {
-    both(() => node(E.Array, op, [ptup(O.Matches, D(), eqS()), ptup(O.Matches, D())]));
-    both(() => node(E.Array, op, [ptup(O.Matches, D()), ptup(O.Matches, D(), eqS())]));
+    both(() =>
+      node(E.Array, op, [ptup(O.Matches, D(), eqS()), ptup(O.Matches, D())]),
+    );
+    both(() =>
+      node(E.Array, op, [ptup(O.Matches, D()), ptup(O.Matches, D(), eqS())]),
+    );
   }
   // navigation below an operator that reads its whole value
   both(() => node(E.Tuple, O.EqualTo, [ptup(O.Matches, S())], bytes(32)));
@@ -1157,8 +1163,9 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     // the check has teeth: arrays both modes reject, with valid codes
     const rejected = arrays.filter(
       (fs) =>
-        fs.every((f) => f.paramType <= 6 && Object.values(O).includes(f.operator)) &&
-        checkStored(fs, false) === undefined,
+        fs.every(
+          (f) => f.paramType <= 6 && Object.values(O).includes(f.operator),
+        ) && checkStored(fs, false) === undefined,
     );
     const res = spawnSync(LEAN_BIN, {
       input:
@@ -1185,7 +1192,9 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     );
     for (const [k, n] of [...why].sort()) console.log(`      ${k}: ${n}`);
     for (const b of bad.slice(0, 5))
-      console.log(`      s=${b.s ? 1 : 0} ${b.r} on ${line(0, b.fs).slice(5, 2000)}`);
+      console.log(
+        `      s=${b.s ? 1 : 0} ${b.r} on ${line(0, b.fs).slice(5, 2000)}`,
+      );
     expect(bad.length).to.equal(0);
   });
 });

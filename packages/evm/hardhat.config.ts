@@ -1,13 +1,18 @@
-import dotenv from "dotenv";
+import { existsSync } from "node:fs";
 import { defineConfig } from "hardhat/config";
-import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
+import hardhatMocha from "@nomicfoundation/hardhat-mocha";
+import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
+import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
 
+import { compiler } from "./solidity.config.js";
 import deployMastercopy from "./tasks/deploy-mastercopy.js";
 import verifyMastercopy from "./tasks/verify-mastercopy.js";
 
-dotenv.config();
+if (existsSync(".env")) process.loadEnvFile();
 
-const { INFURA_KEY, PK, MNEMONIC, ETHERSCAN_API_KEY } = process.env;
+const { INFURA_KEY, PK, MNEMONIC } = process.env;
 
 const accounts = PK
   ? [PK]
@@ -18,22 +23,20 @@ const accounts = PK
     };
 
 export default defineConfig({
-  plugins: [hardhatToolboxMochaEthers],
+  plugins: [
+    hardhatEthers,
+    hardhatEthersChaiMatchers,
+    hardhatMocha,
+    hardhatNetworkHelpers,
+    hardhatTypechain,
+  ],
   paths: {
     artifacts: "build/artifacts",
     cache: "build/cache",
     sources: "contracts",
   },
   solidity: {
-    version: "0.8.37",
-    settings: {
-      evmVersion: "cancun",
-      viaIR: true,
-      optimizer: {
-        enabled: true,
-        runs: 10,
-      },
-    },
+    ...compiler,
     npmFilesToBuild: [
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
     ],
@@ -84,15 +87,6 @@ export default defineConfig({
       chainId: 11155111,
       accounts,
       url: `https://sepolia.infura.io/v3/${INFURA_KEY}`,
-    },
-  },
-  verify: {
-    etherscan: {
-      apiKey: ETHERSCAN_API_KEY ?? "",
-      enabled: true,
-    },
-    sourcify: {
-      enabled: false,
     },
   },
   tasks: [deployMastercopy, verifyMastercopy],

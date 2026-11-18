@@ -1,8 +1,20 @@
 import { defineConfig } from "hardhat/config";
-import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-ethers";
+import hardhatEthers from "@nomicfoundation/hardhat-ethers";
+import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
+import hardhatMocha from "@nomicfoundation/hardhat-mocha";
+import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
+import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
+
+import { compiler } from "../evm/solidity.config.js";
 
 export default defineConfig({
-  plugins: [hardhatToolboxMochaEthers],
+  plugins: [
+    hardhatEthers,
+    hardhatEthersChaiMatchers,
+    hardhatMocha,
+    hardhatNetworkHelpers,
+    hardhatTypechain,
+  ],
   // Hardhat v3 no longer honors `paths.root` from user config (it's always the
   // directory containing this file). Keep artifacts/cache local so this package
   // and the evm package don't race on the same Hardhat artifact files when
@@ -14,15 +26,7 @@ export default defineConfig({
     tests: "test",
   },
   solidity: {
-    version: "0.8.37",
-    settings: {
-      evmVersion: "cancun",
-      viaIR: true,
-      optimizer: {
-        enabled: true,
-        runs: 10,
-      },
-    },
+    ...compiler,
     npmFilesToBuild: [
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/Roles.sol",
