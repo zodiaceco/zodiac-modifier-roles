@@ -4,15 +4,15 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "./Topology.sol";
+import "../../types/Types.sol";
 
 /**
  * @title  ConditionPacker
  * @notice A library that provides packing functions for conditions,
  *         transforming ConditionsFlat[] into a memory-optimized buffer.
  *
- * @dev    This library is NOT gas-sensitive since packing is intended to be
- *         called as a helper function within a view entrypoint.
+ * @dev    A first pass computes every node's child count and inlined size,
+ *         so that packing does not rescan the tree for each node.
  *
  * @author gnosisguild
  *
@@ -50,7 +50,9 @@ library ConditionPacker {
     function pack(
         ConditionFlat[] memory conditions
     ) internal pure returns (bytes memory buffer) {
-        _transform(conditions);
+        LayoutNode[] memory nodes = _layout(conditions);
+
+        _transform(conditions, nodes);
 
         (uint256 compValuesSize, uint256 maxPluckCount) = _count(conditions);
 
@@ -65,11 +67,12 @@ library ConditionPacker {
             mstore(add(buffer, 0x20), shl(232, header))
         }
 
-        _packNodes(conditions, buffer);
+        _packNodes(conditions, nodes, buffer);
     }
 
     function _packNodes(
         ConditionFlat[] memory conditions,
+        LayoutNode[] memory nodes,
         bytes memory buffer
     ) private pure {
         uint256 offset = HEADER_BYTES;
@@ -79,10 +82,8 @@ library ConditionPacker {
             ConditionFlat memory condition = conditions[i];
 
             Encoding encoding = condition.paramType;
-            (, uint256 childCount) = Topology.childBounds(conditions, i);
-            uint256 inlinedSize = Topology.isInlined(conditions, i)
-                ? Topology.inlinedSize(conditions, i)
-                : 0;
+            uint256 childCount = nodes[i].childCount;
+            uint256 inlinedSize = nodes[i].inlinedSize;
 
             bytes memory compValue = condition.compValue;
             uint256 compValueLength = compValue.length;
@@ -151,7 +152,10 @@ library ConditionPacker {
      *      1. AbiEncoded without compValue gets default leadingBytes (0x0004)
      *      2. EqualTo at offset has 32-byte head pointer stripped
      */
-    function _transform(ConditionFlat[] memory conditions) private pure {
+    function _transform(
+        ConditionFlat[] memory conditions,
+        LayoutNode[] memory nodes
+    ) private pure {
         for (uint256 i; i < conditions.length; ++i) {
             /*
              * Patch AbiEncoded leadingBytes
@@ -167,21 +171,20 @@ library ConditionPacker {
             }
 
             /*
-             * Remove Extraneous Offsets
+             * Remove Extraneous Offsets - Strip the head offset from EqualTo
+             * compValues
              *
-             * Remove unnecessary offsets from compValue fields. This ensures a
-             * consistent API where every `compValue` provided for use in
-             * `Operator.EqualTo` is obtained by calling `abi.encode` directly.
+             * Callers pass `abi.encode(value)` as compValue. For a value that
+             * is not inlined, that encoding starts with a 32-byte offset to the
+             * data. The evaluator compares against the parameter where its data
+             * sits in calldata, with no such offset, so the first word is
+             * dropped here.
              *
-             * By removing the leading extraneous offset this makes
-             * `abi.encode(...)` output line up with the layout produced by
-             * Decoder inspection. Without it, callers would need to patch
-             * compValues based on whether the payload is fully inline or at
-             * offset.
+             * Inlined values are encoded without an offset and stay as is.
              */
             if (
                 conditions[i].operator == Operator.EqualTo &&
-                !Topology.isInlined(conditions, i)
+                nodes[i].notInlined
             ) {
                 bytes memory compValue = conditions[i].compValue;
                 assembly {
@@ -190,6 +193,72 @@ library ConditionPacker {
                     mstore(compValue, newLength)
                 }
                 conditions[i].compValue = compValue;
+            }
+        }
+    }
+
+    struct LayoutNode {
+        uint256 childCount;
+        /// The node or a descendant is Dynamic, Array or AbiEncoded
+        bool notInlined;
+        /// Encoded size in bytes, 0 if not inlined
+        uint256 inlinedSize;
+    }
+
+    /**
+     * @dev Linear pre-pass: child count, inlined and size of every node.
+     *
+     *      A node is inlined when its value is encoded in place and always
+     *      has the same size. That holds unless the node, or anything below
+     *      it, is Dynamic, Array or AbiEncoded.
+     *
+     *      Sizes:
+     *      - Static:      32 bytes
+     *      - None:        the size of its first child that has one
+     *      - anything else: the sum of its children
+     *      - not inlined: 0
+     *
+     *      Runs backwards, leveraging BFS order: children before parents.
+     */
+    function _layout(
+        ConditionFlat[] memory conditions
+    ) private pure returns (LayoutNode[] memory nodes) {
+        uint256 count = conditions.length;
+        nodes = new LayoutNode[](count);
+
+        for (uint256 next = count; next > 0; --next) {
+            uint256 i = next - 1;
+            LayoutNode memory node = nodes[i];
+            Encoding encoding = conditions[i].paramType;
+
+            if (
+                encoding == Encoding.Dynamic ||
+                encoding == Encoding.Array ||
+                encoding == Encoding.AbiEncoded
+            ) {
+                node.notInlined = true;
+            }
+
+            if (node.notInlined) {
+                node.inlinedSize = 0;
+            } else if (encoding == Encoding.Static) {
+                node.inlinedSize = 32;
+            }
+
+            if (i == 0) break;
+
+            uint256 parentIndex = conditions[i].parent;
+            LayoutNode memory parent = nodes[parentIndex];
+            ++parent.childCount;
+            if (node.notInlined) {
+                parent.notInlined = true;
+            } else if (conditions[parentIndex].paramType != Encoding.None) {
+                parent.inlinedSize += node.inlinedSize;
+            } else if (node.inlinedSize > 0) {
+                // And / Or are transparent: the size of the value they sit
+                // at, given by the first child that has one. Children are
+                // visited last to first, so the first one is written last
+                parent.inlinedSize = node.inlinedSize;
             }
         }
     }

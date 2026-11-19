@@ -32,14 +32,6 @@ contract MockLocator {
         return AbiLocation.size(data, location, condition);
     }
 
-    function pluck(
-        bytes calldata data,
-        uint256 offset,
-        uint256 size
-    ) public pure returns (bytes calldata) {
-        return data[offset:offset + size];
-    }
-
     /**
      * @dev Packs conditions, unpacks to build tree, then finds condition at BFS index.
      */

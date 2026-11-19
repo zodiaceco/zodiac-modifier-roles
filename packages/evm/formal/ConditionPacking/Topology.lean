@@ -1,9 +1,9 @@
 import ConditionPacking.Bfs
 
 /-!
-# Topology on the flat array = Topology on the tree
+# Inlined and inlined size: on the flat array = on the tree
 
-On a BFS-ordered array, `Topology.isInlined` / `inlinedSize` (which walk the
+On a BFS-ordered array, `isInlined` / `inlinedSize` (which walk the
 flat array through `childBounds`) agree with the tree versions in
 `DecoderFaithfulness/Roles.lean`, evaluated on the input tree.
 -/

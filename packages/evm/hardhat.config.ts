@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { register as registerTsxCjs } from "tsx/cjs/api";
 import { defineConfig } from "hardhat/config";
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
@@ -10,6 +11,7 @@ import { compiler } from "./solidity.config.js";
 import deployMastercopy from "./tasks/deploy-mastercopy.js";
 import verifyMastercopy from "./tasks/verify-mastercopy.js";
 
+registerTsxCjs();
 if (existsSync(".env")) process.loadEnvFile();
 
 const { INFURA_KEY, PK, MNEMONIC } = process.env;

@@ -6,9 +6,11 @@ import DecoderFaithfulness.Bytes
 Transcribed from `packages/evm/contracts` (branch `main`, commit 9a63c505):
 
 * `common/AbiLocation.sol`         → `tailLocation`, `children`, `size`
-* `core/serialize/Topology.sol`    → `isInlined`, `inlinedSize`
 * `core/serialize/ConditionPacker.sol` + `ConditionUnpacker.sol`
-                                   → `annotate` (the `inlined` / `size` /
+                                   → `isInlined`, `inlinedSize` (in
+                                     `core/serialize/Topology.sol` at that
+                                     commit; `ConditionPacker._layout` now)
+                                     and `annotate` (the `inlined` / `size` /
                                      `leadingBytes` metadata the evaluator sees)
 * `core/evaluate/ConditionEvaluator.sol`
                                    → `input` (`__input`), `Visit` (which
@@ -30,9 +32,12 @@ control flow; deviations are listed here and at the definition:
   a default node. Integrity rejects containers without children, and the
   theorems assume trees accepted by Integrity.
 * The tree is the recursive `Condition` the unpacker produces, not the flat
-  `ConditionFlat[]`. `Topology` walks the flat array via `childBounds`; on a
-  BFS-ordered array (enforced by Integrity) that yields the node's children,
-  in order, as used here.
+  `ConditionFlat[]`. `ConditionPacker._layout` computes `inlined` and the
+  inlined size on the flat array, in one bottom-up pass; `isInlined` and
+  `inlinedSize` here define them by recursion on the tree. On a BFS-ordered
+  array (enforced by Integrity) the nodes whose `parent` is a node are its
+  children, in order, as used here. That the pass computes these values is
+  proven in `ConditionPacking/Layout.lean` (`layout_eq`).
 -/
 
 namespace DecoderFaithfulness.Roles
@@ -174,7 +179,7 @@ mutual
              + sizeTuple data location cs (headOffset + 32)
 end
 
-/-! ## Topology.sol (run at pack time on the flat tree) -/
+/-! ## Inlined and inlined size (computed at pack time, on the flat array) -/
 
 mutual
   def isInlined : Condition → Bool
@@ -204,7 +209,7 @@ end
 
 /-! ## Pack + unpack: the metadata the evaluator sees
 
-`ConditionPacker._packNodes` stores `inlinedSize = isInlined ? inlinedSize : 0`;
+`ConditionPacker` stores `inlinedSize` for an inlined node and 0 otherwise;
 `ConditionUnpacker` sets `inlined = inlinedSize > 0`, `size = inlinedSize`,
 maps `EtherValue` to `None`, and sets `leadingBytes` for `AbiEncoded` from the
 compValue (default `4`, patched in by `ConditionPacker._transform`).
@@ -327,8 +332,8 @@ of the Zip as an array at `pluckedLocations[compValue[f]]`, with
 
 Modeling assumption (from Integrity, not proven here): when a Zip reads
 slot `k`, the slot holds a location at which the unique Pluck node with
-index `k` was evaluated. `_validateUniquePluckDefinitions` makes the Pluck
-node unique, `_validatePluckAssignments` makes every slot a Zip reads
+index `k` was evaluated. Integrity's `_plucks` makes the Pluck
+node unique, `_slots` makes every slot a Zip reads
 written before on that evaluation path, and `_pluck` is the only writer. -/
 
 /-- `condition.children[0].children`: the fields of a Zip. -/

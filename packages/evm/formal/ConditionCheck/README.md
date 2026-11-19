@@ -3,9 +3,9 @@
 `checkStored s fs` is a decidable check on a flat condition array, with proofs
 that every array it accepts is stored, unpacked and evaluated as intended. It
 is the specification for the check the SDK runs before storing a tree with a
-`...Packed` setter, which skips `Integrity` on-chain. Unlike Integrity, it
-rejects the shapes in [INTEGRITY_BACKLOG.md](../../../sdk/INTEGRITY_BACKLOG.md)
-that `evaluate` misreads.
+`...Packed` setter, which skips `Integrity` on-chain. It rejects the shapes in
+[INTEGRITY_BACKLOG.md](../../../sdk/INTEGRITY_BACKLOG.md) that `evaluate`
+misreads. Integrity used to accept them, and now rejects them too.
 
 The formulas are in the [overview](../README.md#condition-check). This page has
 the details.
@@ -25,7 +25,7 @@ these hold. It returns `typed t` (the root describes calldata of type `t`) or
 | ---------------- | ------------ | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | `packableB`      | `Flat.lean`  | `Packable`: BFS order, field widths, Pluck index ≤ 254, compValue shapes the packer relies on             | implies `Packable` (`packableB_sound`)                   |
 | `opsOk`          | `Ops.lean`   | Integrity's per-operator rules: encodings, compValue lengths and fields, child counts, unique Pluck slots | nothing (a transcription; tested against Integrity)      |
-| `assigned`       | `Slots.lean` | `_validatePluckAssignments`: every slot a Zip or `WithinRatio` reads is written first, on every path      | no execution reads an unwritten slot (`assigned_no_bad`) |
+| `assigned`       | `Slots.lean` | `_slots`: every slot a Zip or `WithinRatio` reads is written first, on every path                         | no execution reads an unwritten slot (`assigned_no_bad`) |
 | `checkCondition` | `Check.lean` | the tree describes an ABI type (below)                                                                    | the decoder hypotheses (`checkCondition_sound`)          |
 | or `ns` root     | `Check.lean` | the root is non-structural                                                                                | only the ether value is read (`ns_root_input`)           |
 
@@ -172,69 +172,73 @@ contract), `WithinAllowance`/`CallWithinAllowance` (allowance storage),
 `ns_root_input`: if the root is non-structural, every node `evaluate`
 reaches, including through Zips, reads the ether value.
 
-## Findings: where Integrity and the check differ
+## Findings: where Integrity and the check differed
 
-Found while transcribing Integrity and by the fuzzer's checker mode
-(`GAP_CHECK=1`, with `GAP_MUTATE` probing operator rules). In 2,000+
-unmutated and mutated runs, every difference fell into one of these classes.
+Integrity was rewritten to follow the check's rules (covered in
+`test/serialization/integrity.spec.ts`). The fuzzer run is in the
+[backlog](../../../sdk/INTEGRITY_BACKLOG.md#resolved):
 
-**Integrity accepts, `evaluate` misreads; the check rejects** (backlog items):
+| Finding                                                                                    | Integrity then | Integrity now         |
+| ------------------------------------------------------------------------------------------ | -------------- | --------------------- |
+| A Zip anywhere but under `And`/`Or`, or before the child that describes the value (item 1) | accepts        | rejects               |
+| A non-structural child of a `Tuple`/`Array` under `Pass`/`EqualTo` (item 2)                | accepts        | rejects               |
+| A root that is not `AbiEncoded`/logical (item 6)                                           | accepts        | rejects               |
+| A `None`-encoded node with children under `Pass`                                           | accepts        | rejects               |
+| A tuple `Matches` or an `And`/`Or` below an operator that reads its whole value            | accepts        | rejects               |
+| Checks of a prefix of one dynamic tuple or call                                            | rejects        | accepts               |
+| `Slice` next to plain checks in an `And`/`Or` (item 4)                                     | rejects        | accepts               |
+| A Zip in an `And`/`Or` next to a `Tuple` or `Array` check (item 10)                        | rejects        | accepts               |
+| Two checks of one array whose `bytes` elements are read as different interpretations       | rejects        | accepts               |
+| `DuplicatePluckIndex`, and a Zip over at least two arrays                                  | enforced       | enforced              |
+| A Pluck with an empty compValue after a Zip                                                | `Panic`        | `UnsuitableCompValue` |
+
+One difference remains: Integrity rejects a root whose `parent` is not 0, and
+the check never reads that field.
+
+The differences were found while transcribing the earlier Integrity, and by
+the fuzzer's checker mode (`GAP_CHECK=1`, with `GAP_MUTATE` probing operator
+rules). The classes, as the check and Integrity decide them:
+
+**Rejected: `evaluate` would misread** (backlog items):
 
 - a Zip anywhere but under `And`/`Or` (item 1, bypass), or before the child
   that describes the value;
 - a non-structural child of a `Tuple`/`Array` under `Pass`/`EqualTo` (item 2);
 - a root that is not `AbiEncoded`/logical, e.g. a `Dynamic` variant (item 6).
 
-**Integrity accepts, the check rejects, not a misread:**
+**Rejected, though not a misread:**
 
-- a `None`-encoded node with children under `Pass` (Integrity's `Pass` rule
-  takes any encoding). `evaluate` treats it like a tuple; a probe through
-  `MockEvaluator` read the following parameter correctly. The decoder proof
-  doesn't model it, so the check rejects it; the SDK has no reason to produce
-  it.
+- a `None`-encoded node with children under `Pass`. `evaluate` treats it like
+  a tuple; a probe through `MockEvaluator` read the following parameter
+  correctly. The decoder proof doesn't model it, and the SDK has no reason to
+  produce it.
 - a tuple `Matches` or an `And`/`Or` below an operator that reads its whole
   value (`EqualTo`, a comparison, `Pluck` or `Custom` on a tuple or array, or
   below a `Pass` container). The operator hashes or passes the whole value;
   the children only describe its type, through their sizes. `Desc` requires
   such a type description (`exactTy`): a `Matches` listing fewer fields there
-  would give a shorter size, and an `Or` of different types has none. Nested calldata
-  and `Slice` nodes are allowed there with any checks below them:
-  `AbiLocation.size` reads them as `bytes` or a word. (In a fuzz run of 3,000
-  trees the check rejected 232 trees Integrity accepts, 334 before nested
-  calldata and `Slice` were allowed; about half of the rest are this class.)
+  would give a shorter size, and an `Or` of different types has none. Nested
+  calldata and `Slice` nodes are allowed there with any checks below them:
+  `AbiLocation.size` reads them as `bytes` or a word.
 
-**Integrity rejects, but the tree is read correctly; the check accepts:**
+**Accepted: read correctly:**
 
 - Checks of a prefix of one dynamic tuple or call in an `And`/`Or`, or as
   the elements of one array: `Or[Matches:Tuple[D, EqualTo], Matches:Tuple[D,
-  Pass, EqualTo]]` on `(bytes, uint, uint)`, written with only the
-  fields each branch checks. Integrity compares type hashes exactly; each check reads
-  the fields it lists where they are (`Desc` allows a `Matches` to describe
-  the first fields of a value, `Ty` has open tuple and call types ordered by
-  prefix, `Ty.sub`). This is why `normalizeCondition` no longer pads.
-
-- `Slice` next to plain checks in an `And`/`Or` (item 4,
-  `UnsuitableChildTypeTree`).
+  Pass, EqualTo]]` on `(bytes, uint, uint)`, written with only the fields
+  each branch checks. Each check reads the fields it lists where they are
+  (`Desc` allows a `Matches` to describe the first fields of a value, `Ty`
+  has open tuple and call types ordered by prefix, `Ty.sub`). This is why
+  `normalizeCondition` no longer pads.
+- `Slice` next to plain checks in an `And`/`Or` (item 4).
 - A Zip in an `And`/`Or` next to a `Tuple` or `Array` check, e.g.
   `And[Matches:Tuple[...], ZipSome[...]]` on a dynamic tuple (item 10).
-  `_validateVariantTypes` counts the Zip as a typed sibling that is only
-  compatible with `Dynamic`/`AbiEncoded` ones. Only the root form
-  `And[Matches:AbiEncoded[...], Zip]` gets through.
+- Two checks of one array in an `And`/`Or` whose elements are `bytes` values
+  read as different interpretations, e.g.
+  `And[ArrayEvery:Array[Matches:AbiEncoded[...]], ArraySome:Array[EqualTo:Dynamic]]`.
+  Each element is read at the array's element location either way.
 
-- Two checks of one array in an `And`/`Or` whose elements are `bytes`
-  values read as different interpretations, described differently, e.g.
-  `And[Pass:Array[And[Dynamic, AbiEncoded]], ArrayTailMatches[And[Dynamic,
-  AbiEncoded], Or[AbiEncoded, Dynamic]]]`. `TypeTree.resolve` keeps one
-  element layout for an array with one child and all of them for a variant
-  array, so the two arrays hash differently and `_isTypeCompatible` only
-  lets differing hashes through for `Dynamic`/`AbiEncoded`. Each element is
-  read at the array's element location either way (found by the packed-path
-  fuzzer, `GAP_PACKED=1`).
-
-Every "check accepts, Integrity rejects" case in the fuzzer runs is one of
-these three.
-
-**Integrity rules the decoder does not need; the check keeps them anyway**
+**Rules the decoder does not need; the check and Integrity keep them anyway**
 (they are about intent, not safety):
 
 - `DuplicatePluckIndex`: two Pluck nodes with one slot only make the Zip read
@@ -244,18 +248,11 @@ these three.
 
 **Notes for the SDK:**
 
-- The `...Packed` setters check nothing, not even what `pack_roundtrip` needs
-  (`MalformedConditionBuffer` is never raised). `checkStored` must run.
+- The `...Packed` setters check nothing, not even what `pack_roundtrip`
+  needs. `checkStored` must run.
 - `Custom` checkers receive `pluckedValues`, but no rule says which slots
   they read, so a checker may see unwritten (zero) slots. Integrity cannot
   check this either.
-- Integrity's `_findPluck` in `WithinRatio` skips missing Plucks; the
-  assignment check catches them instead.
-- A Pluck with an empty compValue after a Zip makes Integrity revert with a
-  `Panic` (array index out of bounds in `_findPluck`, called from
-  `_checkZipIterator` before the Pluck's own check) instead of
-  `UnsuitableCompValue`. It is still rejected; the fuzzer counts Panics as
-  accepted, so such cases show up as "Integrity accepts, check rejects".
 
 ## SDK implementation
 
@@ -288,7 +285,7 @@ runs `checkStored` first. Tests:
   `MockPackerUnpacker.packUnchecked` (the contract) on accepted ones;
 - `sdk-packed-roles.spec.ts`: end to end on `Roles`. The SDK buffer equals the
   one `allowFunction` stores, and trees stored with `allowFunctionPacked` are
-  enforced as intended, including the two shapes Integrity rejects
+  enforced as intended, including the two shapes Integrity used to reject
   (`Slice` next to a plain check, a Zip next to a tuple check);
 - `packConditions.test.ts` (vitest): a hand-computed buffer.
 

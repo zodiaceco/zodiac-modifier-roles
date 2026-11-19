@@ -221,13 +221,14 @@ const wordVal = (bs: Uint8Array): number => {
 const range = (n: number) => Array.from({ length: n }, (_, i) => i)
 
 // ---------------------------------------------------------------------------
-// Topology on the flat array (`ConditionPacking/Model.lean`)
+// Children, inlined and inlined size on the flat array
+// (`ConditionPacking/Model.lean`)
 // ---------------------------------------------------------------------------
 
 export const at = (fs: readonly FlatNode[], i: number): FlatNode =>
   fs[i] ?? DEFAULT_FLAT
 
-/** `Topology.childBounds`: `[childStart, childCount]`. */
+/** `childBounds`: `[childStart, childCount]`. */
 export const childBounds = (
   fs: readonly FlatNode[],
   index: number
@@ -244,7 +245,7 @@ export const childBounds = (
   return [start, count]
 }
 
-/** `Topology.isInlined`. */
+/** `isInlined`. */
 export const isInlinedFlat = (
   fs: readonly FlatNode[],
   index: number
@@ -261,7 +262,7 @@ export const isInlinedFlat = (
   return range(count).every((i) => isInlinedFlat(fs, start + i))
 }
 
-/** `Topology.inlinedSize` (`sizeLoop`). */
+/** `inlinedSize` (`sizeLoop`). */
 export const inlinedSizeFlat = (
   fs: readonly FlatNode[],
   index: number

@@ -8,66 +8,75 @@ import "../common/AllowanceConsumer.sol";
 import "./serialize/ConditionStorer.sol";
 import "./Storage.sol";
 
-import {Clearance} from "../types/Permission.sol";
-
-/*
- * Permission Model
- *
- * Role
- *  │
- *  ├─ members ───────────────────────► who can use this role
- *  │
- *  ├─ targets (address → Clearance)
- *  │   │
- *  │   ├─ Clearance.None ────────────► no target rule (default) - only a
- *  │   │                               global entry can authorize
- *  │   │
- *  │   ├─ Clearance.Target ──────────► all functions allowed, subject to
- *  │   │                               the target entry below (wildcard)
- *  │   │
- *  │   └─ Clearance.Function ────────► only functions with a function
- *  │                                   entry below are allowed
- *  │
- *  └─ scopeConfig (key → ExecutionOptions + condition tree)
- *      │
- *      │   Key: [20 bytes: address][8 bytes][4 bytes]
- *      │   ├─ Function entry: address  | 0x00..00 | selector  one selector on one address
- *      │   ├─ Target entry:   address  |        0xFF..FF      any calldata on one address
- *      │   └─ Global entry:   0x00..00 | 0x00..00 | selector  one selector on any address
- *      │
- *      ├─ no matching entry ─────────► blocked (TransactionNotAllowed)
- *      │
- *      └─ matching entry ────────────► allowed, subject to ExecutionOptions
- *                                      (send/delegatecall flags) and the
- *                                      condition tree
- *
- * Resolution: the destination-specific entry (function or target, per
- * Clearance) is consulted first - destination rules take precedence over
- * global rules. If no destination-specific entry matches, the global entry
- * applies. A global entry keys on the selector, so calls with empty calldata
- * never resolve globally.
- *
- * Allowances (separate storage, referenced by conditions)
- */
-
 /**
- * @title Setup - Configuration and setup functions for Zodiac Roles Mod.
+ * @title  Setup
+ * @notice Owner configuration of roles, permissions, allowances, and unwrappers.
  *
- * @dev Permission setters come in two flavors:
+ * @dev    Permission lookup
+ *         ─────────────────
+ *         A permission is a `scopeConfig` entry:
+ *         - `ExecutionOptions`: whether the call may send value, delegatecall
+ *         - condition tree: pointer to the packed tree, stored as contract code
  *
- *      - Validated (allowTarget, allowFunction, allowFunctionGlobally):
- *        take a ConditionFlat[] tree, then validate (Integrity) and pack it
- *        on-chain. Costs more setup gas, but the stored buffer is guaranteed
- *        well-formed.
- *      - Packed (allowTargetPacked, allowFunctionPacked,
- *        allowFunctionGloballyPacked): take a pre-packed condition buffer
- *        and store it as-is, skipping on-chain validation. An escape hatch
- *        for large condition trees, where packing on-chain can be costly.
+ *         Its key has three components: a target address, a selector and
+ *         padding. They give the entry one of three scopes:
  *
- *      To produce a buffer, call the read-only packConditions() off-chain
- *      (eth_call): validation runs offchain, only the storage write is paid.
+ *         ┌─────────────────┬──────────┬──────────┬──────────┐
+ *         │      Scope      │ bytes 20 │ bytes 4  │ bytes 8  │
+ *         ├─────────────────┼──────────┼──────────┼──────────┤
+ *         │ target          │ address  │ 0xFF..FF │ 0xFF..FF │
+ *         │ function        │ address  │ selector │ 0x00..00 │
+ *         │ global function │ 0x00..00 │ selector │ 0x00..00 │
+ *         └─────────────────┴──────────┴──────────┴──────────┘
  *
- * @author  gnosisguild
+ *         For a call to a target, the `clearance[target]` config sets which
+ *         entries are checked, in order. The first one found governs the
+ *         call. If none is found, the call reverts with
+ *         `TransactionNotAllowed`.
+ *
+ *         None (the default): `target` has no rule of its own.
+ *           1. global function entry for the selector
+ *           2. if none matches, revert: the call is unauthorized
+ *
+ *         Target: one rule covers every call to `target`.
+ *           1. target entry
+ *           2. if none matches, revert: the call is unauthorized
+ *
+ *         Function: each function of `target` has its own rule.
+ *           1. function entry for the selector
+ *           2. global function entry for the selector
+ *           3. if none matches, revert: the call is unauthorized
+ *
+ *         A global function entry allows one selector on any target. It
+ *         never permits sending value or delegatecall, and is skipped for
+ *         empty calldata.
+ *
+ *         Clearance and entries are written independently:
+ *         - `allowTarget` sets Target and writes the target entry.
+ *         - `scopeTarget` sets Function; `revokeTarget` resets to None.
+ *         - `allowFunction` and `revokeFunction` write and delete a function
+ *           entry, which applies only under Function.
+ *         Changing the clearance deletes no entries: function entries
+ *         written earlier apply again once the target is scoped.
+ *
+ *         Packed words
+ *         ────────────
+ *         members[module]     start (64) | end (64) | usesLeft (128)
+ *         scopeConfig[key]    unused (94) | options (2) | pointer (160)
+ *
+ *         `pointer` is the address holding the packed condition tree. A
+ *         zero `scopeConfig` means no entry.
+ *
+ *         Validated vs. pre-packed setters
+ *         ────────────────────────────────
+ *         Validated: `allowTarget`, `allowFunction`, `allowFunctionGlobally`.
+ *         Take a `ConditionFlat[]` tree, validate it (`Integrity`) and pack
+ *         it on-chain, so the stored buffer is well-formed.
+ *
+ *         Pre-packed: `allowTargetPacked`, `allowFunctionPacked`,
+ *         `allowFunctionGloballyPacked`. Store a buffer as-is, with no
+ *         validation: the caller is responsible for it. Build one off-chain
+ *         with the SDK, or with an eth_call to `packConditions`.
  */
 abstract contract Setup is RolesStorage {
     /*//////////////////////////////////////////////////////////////
@@ -173,7 +182,7 @@ abstract contract Setup is RolesStorage {
     ///      target-wide condition: the same condition tree governs every
     ///      call to the target, regardless of selector.
     ///
-    ///      Sets Clearance.Target.
+    ///      Sets Clearance.Target and writes the target entry.
     ///
     ///      Conditions are validated and packed on-chain; use
     ///      allowTargetPacked() for a pre-packed buffer.
@@ -234,8 +243,8 @@ abstract contract Setup is RolesStorage {
         emit ScopeTarget(roleKey, targetAddress);
     }
 
-    /// @dev Removes the target-level rule: resets Clearance to None, so only
-    ///      a global entry can still authorize calls to this target.
+    /// @dev Resets Clearance to None: only a global function entry can still
+    ///      authorize calls to this target. Deletes no entries.
     /// @param roleKey identifier of the role to be modified.
     /// @param targetAddress Destination address of transaction.
     function revokeTarget(
@@ -308,13 +317,12 @@ abstract contract Setup is RolesStorage {
         );
     }
 
-    /// @dev Allows a function selector on all targets, restricted by validated
-    ///      conditions. Always enforces no send and no delegatecall
-    ///      (ExecutionOptions.None). Consulted only when no destination-
-    ///      specific entry matches, and only for calls carrying a selector - calls with
-    ///      empty calldata never resolve via a global entry. Conditions are
-    ///      validated and packed on-chain; use allowFunctionGloballyPacked()
-    ///      for a pre-packed buffer.
+    /// @dev Writes a global function entry: allows a function selector on
+    ///      all targets, restricted by validated conditions. Always enforces
+    ///      no send and no delegatecall (ExecutionOptions.None). Consulted
+    ///      only when no target or function entry matches, and never for
+    ///      empty calldata. Conditions are validated and packed on-chain; use
+    ///      allowFunctionGloballyPacked() for a pre-packed buffer.
     /// @param roleKey identifier of the role to be modified.
     /// @param selector 4 byte function selector.
     /// @param conditions Condition tree in flat BFS order. Empty array means
@@ -349,7 +357,7 @@ abstract contract Setup is RolesStorage {
         emit AllowFunctionGlobally(roleKey, selector, packedConditions);
     }
 
-    /// @dev Removes a function permission for a target.
+    /// @dev Deletes the function entry for a selector on a target.
     /// @param roleKey identifier of the role to be modified.
     /// @param targetAddress Destination address of transaction.
     /// @param selector 4 byte function selector.
@@ -363,7 +371,7 @@ abstract contract Setup is RolesStorage {
         emit RevokeFunction(roleKey, targetAddress, selector);
     }
 
-    /// @dev Removes a globally allowed function permission.
+    /// @dev Deletes the global function entry for a selector.
     /// @param roleKey identifier of the role to be modified.
     /// @param selector 4 byte function selector.
     function revokeFunctionGlobally(

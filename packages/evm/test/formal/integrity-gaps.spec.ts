@@ -1,20 +1,20 @@
 /**
- * Integrity-gap fuzzer: condition trees that `Integrity.enforce` accepts but
- * that `evaluate` does not read the way their author meant.
+ * Integrity-gap fuzzer: looks for condition trees that `Integrity.enforce`
+ * accepts but that `evaluate` does not read the way their author meant.
  *
  * Each case starts from an intended ABI signature and a random value. It
  * builds a condition tree for that signature (compValues often match the
  * value, so a misread usually flips the result), then sometimes adds shapes
- * that Integrity accepts but that sit outside the decoder proof's
- * hypotheses (non-positional nodes inside containers, a Zip among `Matches`
- * children, ...). Every added shape leaves a tag.
+ * that sit outside the decoder proof's hypotheses (non-positional nodes
+ * inside containers, a Zip among `Matches` children, ...), which Integrity
+ * is expected to reject. Every added shape leaves a tag.
  *
  * Trees Integrity rejects are skipped. For the others, a reference evaluator
  * written from the intended meaning (below, `ref`) gives ok / fail / unknown,
  * and `MockEvaluator` (Integrity → pack → unpack → evaluate) gives a status.
  * A mismatch is a bypass (reference fails, chain passes) or a false reject.
  * Mismatches are grouped by tag set; packages/sdk/INTEGRITY_BACKLOG.md
- * tracks the confirmed ones.
+ * lists the ones found so far, with their status.
  *
  * Off by default. `GAP_CASES=2000 npx hardhat test test/formal/integrity-gaps.spec.ts`.
  * `GAP_CLEAN=1` adds only shapes inside the proof's hypotheses: any mismatch
@@ -73,14 +73,11 @@ import hre, { network } from "hardhat";
 
 import {
   checkStored,
+  checkStoredConditions,
   toFlatNodes,
   tyKey,
 } from "../../../sdk/src/main/condition/checkStored.js";
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
-import {
-  checkStoredConditions,
-  toFlatNodes,
-} from "../../../sdk/src/main/condition/checkStored.js";
 import {
   checkAndPack,
   packConditions,

@@ -2243,17 +2243,30 @@ describe("Operator - WithinAllowance", async () => {
 
         const allowanceKey = hexlify(randomBytes(32));
 
-        for (const encoding of [Encoding.Static, Encoding.EtherValue]) {
-          //Should succeed without reverting
-          await roles.packConditions([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.WithinAllowance,
-              compValue: allowanceKey,
-            },
-          ]);
-        }
+        // Should succeed without reverting: on a parameter of a call
+        await roles.packConditions([
+          {
+            parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
+          {
+            parent: 0,
+            paramType: Encoding.Static,
+            operator: Operator.WithinAllowance,
+            compValue: allowanceKey,
+          },
+        ]);
+        // and on the ether value, which reads no calldata and may be the root
+        await roles.packConditions([
+          {
+            parent: 0,
+            paramType: Encoding.EtherValue,
+            operator: Operator.WithinAllowance,
+            compValue: allowanceKey,
+          },
+        ]);
       });
     });
 
@@ -2291,6 +2304,12 @@ describe("Operator - WithinAllowance", async () => {
 
         // Should succeed without reverting
         await roles.packConditions([
+          {
+            parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
           {
             parent: 0,
             paramType: Encoding.Static,
@@ -2371,6 +2390,12 @@ describe("Operator - WithinAllowance", async () => {
 
         // Should succeed without reverting
         await roles.packConditions([
+          {
+            parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
           {
             parent: 0,
             paramType: Encoding.Static,

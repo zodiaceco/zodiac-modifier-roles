@@ -1,9 +1,11 @@
 import { expect } from "chai";
 import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface, solidityPacked, ZeroHash } from "ethers";
+import { AbiCoder, Interface, solidityPacked, ZeroHash, hexlify } from "ethers";
 
 import { network } from "hardhat";
 
+import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../setup.js";
 import {
   Encoding,
@@ -3432,10 +3434,8 @@ describe("Operator - EqualTo", () => {
 
       const targetTuple = [100, 200];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3466,7 +3466,13 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 
@@ -3503,10 +3509,8 @@ describe("Operator - EqualTo", () => {
 
       const targetTuple = ["0xdeadbeef", 42];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3537,7 +3541,13 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 
@@ -3609,10 +3619,8 @@ describe("Operator - EqualTo", () => {
 
       const targetArray = [10, 20, 30];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3639,7 +3647,13 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 
@@ -3679,10 +3693,8 @@ describe("Operator - EqualTo", () => {
         ["0xccdd", 2],
       ];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3719,7 +3731,13 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 
@@ -3770,10 +3788,8 @@ describe("Operator - EqualTo", () => {
       );
       const targetArray = [innerEncoded1, innerEncoded2];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3810,7 +3826,13 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 
@@ -3937,10 +3959,8 @@ describe("Operator - EqualTo", () => {
       const targetArray = [innerEncoded1, innerEncoded2];
       const targetDynamic = 777;
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3981,7 +4001,13 @@ describe("Operator - EqualTo", () => {
               operator: Operator.Pass,
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 

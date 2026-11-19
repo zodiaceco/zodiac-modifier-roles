@@ -97,10 +97,16 @@ describe("Operator - Pluck", () => {
     it("reverts UnsuitableChildCount when Pluck(Array) has a non-structural child", async () => {
       const { roles, allowTarget } = await loadFixture(setupTestContract);
 
-      // The evaluator reads raw children[0] as the array element template,
-      // so a non-structural child (invisible to TypeTree) must be rejected.
+      // The evaluator reads children[0] as the array element template, so a
+      // child that reads no calldata must be rejected.
       await expect(
         allowTarget([
+          {
+            parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
           {
             parent: 0,
             paramType: Encoding.Array,
@@ -108,13 +114,13 @@ describe("Operator - Pluck", () => {
             compValue: "0x00",
           },
           {
-            parent: 0,
+            parent: 1,
             paramType: Encoding.None,
             operator: Operator.Pass,
             compValue: "0x",
           },
           {
-            parent: 0,
+            parent: 1,
             paramType: Encoding.Static,
             operator: Operator.Pass,
             compValue: "0x",
@@ -122,7 +128,7 @@ describe("Operator - Pluck", () => {
         ]),
       )
         .to.be.revertedWithCustomError(roles, "UnsuitableChildCount")
-        .withArgs(0);
+        .withArgs(1);
     });
   });
 });

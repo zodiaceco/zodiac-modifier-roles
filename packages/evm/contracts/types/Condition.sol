@@ -39,27 +39,3 @@ struct ConditionFlat {
     Operator operator;
     bytes compValue;
 }
-
-/// @dev Layout is a type tree used for AbiDecoder and EIP712 encoding.
-struct Layout {
-    Encoding encoding;
-    Layout[] children;
-    uint256 leadingBytes;
-    bool inlined;
-}
-
-struct LayoutFlat {
-    uint256 parent;
-    Encoding encoding;
-}
-
-/// @dev Payload is the result of AbiDecoder.inspect() - maps parameter locations.
-struct Payload {
-    uint256 location;
-    uint256 size;
-    Payload[] children;
-    /* meta flags */
-    bool inlined;
-    bool variant;
-    bool overflow;
-}

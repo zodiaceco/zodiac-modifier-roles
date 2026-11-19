@@ -140,7 +140,7 @@ suite("checkStored()", () => {
     expect(verdict(tree)).toBe("rejected")
   })
 
-  it("accepts Slice next to a plain check, which Integrity rejects (backlog 4)", () => {
+  it("accepts Slice next to a plain check (backlog 4)", () => {
     const slice: N = {
       e: Enc.Static,
       o: Op.Slice,

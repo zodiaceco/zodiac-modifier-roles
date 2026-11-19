@@ -84,14 +84,21 @@ abstract contract Authorization is RolesStorage {
          * Clearance records how the owner scoped the target:
          *   Target:   whole contract allowed - any calldata, even empty
          *   Function: only individually allowed selectors
-         *   None:     not scoped - only a global entry can authorize
+         *   None:     not scoped - only a global function entry can authorize
          *
-         * scopeConfig keys pack [20 bytes: address][12 bytes: discriminator]:
+         * A scopeConfig key has three components: a target address, a
+         * selector and padding. They give the entry one of three scopes:
          *
-         *                   20 bytes   |  8 bytes   | 4 bytes   |
-         *   Target entry:   address    |        0xFF..FF        | = any calldata
-         *   Function entry: address    |  0x00..00  | selector  |
-         *   Global entry:   0x00..00   |  0x00..00  | selector  | = any target
+         * ┌─────────────────┬──────────┬──────────┬──────────┐
+         * │      Scope      │ bytes 20 │ bytes 4  │ bytes 8  │
+         * ├─────────────────┼──────────┼──────────┼──────────┤
+         * │ target          │ address  │ 0xFF..FF │ 0xFF..FF │
+         * │ function        │ address  │ selector │ 0x00..00 │
+         * │ global function │ 0x00..00 │ selector │ 0x00..00 │
+         * └─────────────────┴──────────┴──────────┴──────────┘
+         *
+         * A target entry covers any calldata on the target, a global function
+         * entry one selector on any target.
          *
          * A function entry can never collide with a target entry: it always
          * has 8 zero bytes where a target entry has 0xFF.
@@ -103,7 +110,8 @@ abstract contract Authorization is RolesStorage {
          * Destination rules take precedence over global rules, so this is
          * consulted first.
          *
-         * Clearance.None falls through: only a global entry can authorize.
+         * Clearance.None falls through: only a global function entry can
+         * authorize.
          */
         uint256 scopeConfig;
         if (clearance == Clearance.Function) {
@@ -118,8 +126,9 @@ abstract contract Authorization is RolesStorage {
         }
 
         /*
-         * Lookup 2 of 2: global entry. Same layout with the address zeroed:
-         * selector allowed on any target (write side: allowFunctionGlobally).
+         * Lookup 2 of 2: global function entry. Same layout with the address
+         * zeroed: selector allowed on any target (write side:
+         * allowFunctionGlobally).
          * Requires a selector, so empty-calldata calls never resolve here.
          */
         if (scopeConfig == 0 && data.length != 0) {

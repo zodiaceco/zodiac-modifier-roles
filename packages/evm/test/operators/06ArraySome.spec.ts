@@ -418,12 +418,18 @@ describe("Operator - ArraySome", () => {
         await allowTarget([
           {
             parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
+          {
+            parent: 0,
             paramType: Encoding.Array,
             operator: Operator.ArraySome,
             compValue: "0x",
           },
           {
-            parent: 0,
+            parent: 1,
             paramType: Encoding.Static,
             operator: Operator.Pass,
             compValue: "0x",
@@ -435,18 +441,24 @@ describe("Operator - ArraySome", () => {
           allowTarget([
             {
               parent: 0,
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x",
+            },
+            {
+              parent: 0,
               paramType: Encoding.Array,
               operator: Operator.ArraySome,
               compValue: "0x",
             },
             {
-              parent: 0,
+              parent: 1,
               paramType: Encoding.Static,
               operator: Operator.Pass,
               compValue: "0x",
             },
             {
-              parent: 0,
+              parent: 1,
               paramType: Encoding.None,
               operator: Operator.CallWithinAllowance,
               compValue: allowanceKey,

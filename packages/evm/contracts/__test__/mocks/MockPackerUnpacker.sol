@@ -16,6 +16,7 @@ contract MockPackerUnpacker {
         Encoding encoding;
         bool inlined;
         uint256 size;
+        uint256 leadingBytes;
     }
 
     function roundtrip(
@@ -51,6 +52,21 @@ contract MockPackerUnpacker {
         return ConditionPacker.pack(conditions);
     }
 
+    /// @dev Unpacks a buffer as the evaluator loads it, whoever packed it.
+    function unpack(
+        bytes memory buffer
+    )
+        public
+        view
+        returns (ConditionForTest[] memory result, uint256 maxPluckValueCount)
+    {
+        (Condition memory condition, uint256 maxCount) = ConditionUnpacker
+            .unpack(buffer);
+
+        result = _flatten(condition);
+        maxPluckValueCount = maxCount;
+    }
+
     function _flatten(
         Condition memory root
     ) internal pure returns (ConditionForTest[] memory) {
@@ -78,7 +94,8 @@ contract MockPackerUnpacker {
                 compValue: node.compValue,
                 encoding: node.encoding,
                 inlined: node.inlined,
-                size: node.size
+                size: node.size,
+                leadingBytes: node.leadingBytes
             });
 
             for (uint256 i = 0; i < node.children.length; ++i) {

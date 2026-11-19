@@ -3,17 +3,16 @@ import ConditionCheck.Flat
 /-!
 # Operator rules
 
-`opsOk fs` transcribes the per-node rules of `Integrity.sol`
-(`_validateOperator`, `_validateEncoding`, `_validateUniquePluckDefinitions`)
-on the flat array: which encodings each operator takes, compValue lengths and
-fields, child counts. Rules about structural children and type trees
-(`_sChildBounds`, `TypeTree`, `_validateVariantTypes`,
-`_validatePluckZipTypes`) are left to `classify` and `zipCheck`, which decide
-them differently on purpose (see the README).
+`opsOk fs` holds the per-node rules of `Integrity.sol` (`_plucks`, and
+`_operator` with the functions it calls) on the flat array: which encodings
+each operator takes, compValue lengths and fields, child counts. The rules
+about what a node describes (`_type` and `_zipTypes` in Integrity) are
+`classify` and `zipCheck` (see the README).
 
 These rules are not about where `evaluate` reads, so nothing about them is
 proven here. They keep the check at least as strict as Integrity on operator
-arguments; `test/formal/integrity-gaps.spec.ts` (`GAP_CHECK=1`) compares.
+arguments; `test/formal/integrity-gaps.spec.ts` (`GAP_CHECK=1`) compares, and
+`test/serialization/integrity.spec.ts` asserts every case against both.
 -/
 
 namespace ConditionCheck
@@ -22,7 +21,8 @@ open ConditionPacking (Flat at! shapes childBounds kids)
 
 def cvAt (cv : Bytes) (k : Nat) : Nat := (cv.getD k 0).val
 
-/-- `_findPluck`: the first Pluck node with slot `k`. -/
+/-- The first Pluck node with slot `k` (Integrity keeps a slot map, built by
+    `_plucks`). -/
 def findPluck (fs : List Flat) (k : Nat) : Option Nat :=
   (List.range fs.length).find? fun i =>
     (at! fs i).operator == .Pluck && cvAt (at! fs i).compValue 0 == k
@@ -33,7 +33,7 @@ def isUnder (fs : List Flat) (a : Nat) : (fuel j : Nat) → Bool
   | 0, j => j == a
   | fuel + 1, j => j == a || (j != 0 && isUnder fs a fuel (at! fs j).parent)
 
-/-- `_checkAdapterBlob`: the offset after the blob, or `none`. -/
+/-- `_adapterBlob`: the offset after the blob, or `none`. -/
 def adapterBlob (cv : Bytes) (off : Nat) : Option Nat :=
   let len := cvAt cv off
   if len != 0 && len < 20 then none
@@ -59,7 +59,7 @@ def opOk (fs : List Flat) (j : Nat) : Bool :=
   let len := cv.length
   let cc := (childBounds (shapes fs) j).2
   let ch0 := (kids fs j).headD 0
-  -- `_validateEncoding`: leaves have no children (except `Slice`)
+  -- leaves have no children (except `Slice`): the last rule of `_operator`
   let leafRule := !((e == .Static || e == .Dynamic || e == .EtherValue) && f.operator != .Slice) ||
     cc == 0
   let pluckEnc (k : Nat) (ok : Encoding → Bool) : Bool :=

@@ -1,7 +1,7 @@
 import DecoderFaithfulness.Basic
 
 /-!
-# Metadata: `Topology` + pack/unpack agree with the ABI spec
+# Metadata: `inlined` / `size` after pack/unpack agree with the ABI spec
 
 For a tree that describes value `u`, the evaluator's `inlined` flag is
 "`u` is static" and `size` is the length of `u`'s encoding (0 for dynamic

@@ -1513,6 +1513,12 @@ describe("Operator - Matches", () => {
           allowTarget([
             {
               parent: 0,
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x",
+            },
+            {
+              parent: 0,
               paramType: encoding,
               operator: Operator.Matches,
               compValue: "0x",
@@ -1524,13 +1530,19 @@ describe("Operator - Matches", () => {
           allowTarget([
             {
               parent: 0,
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x",
+            },
+            {
+              parent: 0,
               paramType: encoding,
               operator: Operator.Matches,
               compValue: "0x",
             },
             {
               // Non-structural child - should not count as structural
-              parent: 0,
+              parent: 1,
               paramType: Encoding.None,
               operator: Operator.CallWithinAllowance,
               compValue: allowanceKey,

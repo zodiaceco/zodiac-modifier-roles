@@ -5,7 +5,7 @@ import ConditionCheck.Sound
 
 The decoder proof's example trees pass the check (so `checkCondition_sound`
 applies to them), and the Zip-as-positional-child shape from the Integrity
-backlog (item 1, a bypass that Integrity accepts) is rejected.
+backlog (item 1, a bypass that Integrity used to accept) is rejected.
 -/
 
 namespace ConditionCheck.Examples
@@ -30,8 +30,8 @@ example : checkCondition false root3 =
     some (.call 4 [.array .static, .array .static] true) := by decide +kernel
 
 /-- Backlog item 1: `f(uint256[] a, uint256[] b, uint256 c)` with
-    `Matches[Pluck a, Pluck b, Zip, EqualTo(c)]`. Integrity accepts it and
-    `evaluate` reads `c` from `a`; the check rejects it, because a Zip may
+    `Matches[Pluck a, Pluck b, Zip, EqualTo(c)]`. `evaluate` reads `c` from
+    `a`; the check rejects it, as Integrity does now, because a Zip may
     only be the child of an `And`/`Or`. -/
 def zipInMatches : Condition :=
   node .AbiEncoded .Matches [pluckA, pluckB, zipNode, node .Static .EqualTo []] 4

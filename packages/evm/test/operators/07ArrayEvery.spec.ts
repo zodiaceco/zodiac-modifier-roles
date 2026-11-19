@@ -415,12 +415,18 @@ describe("Operator - ArrayEvery", () => {
         await allowTarget([
           {
             parent: 0,
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            compValue: "0x",
+          },
+          {
+            parent: 0,
             paramType: Encoding.Array,
             operator: Operator.ArrayEvery,
             compValue: "0x",
           },
           {
-            parent: 0,
+            parent: 1,
             paramType: Encoding.Static,
             operator: Operator.Pass,
             compValue: "0x",
@@ -432,18 +438,24 @@ describe("Operator - ArrayEvery", () => {
           allowTarget([
             {
               parent: 0,
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x",
+            },
+            {
+              parent: 0,
               paramType: Encoding.Array,
               operator: Operator.ArrayEvery,
               compValue: "0x",
             },
             {
-              parent: 0,
+              parent: 1,
               paramType: Encoding.Static,
               operator: Operator.Pass,
               compValue: "0x",
             },
             {
-              parent: 0,
+              parent: 1,
               paramType: Encoding.None,
               operator: Operator.CallWithinAllowance,
               compValue: allowanceKey,

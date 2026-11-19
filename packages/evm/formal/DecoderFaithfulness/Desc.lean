@@ -24,7 +24,7 @@ stronger.
   interpretations of the same `bytes` value.
 * `Slice` on a static word or on a bytes value, with nested slices below.
 * `ZipSome` / `ZipEvery` as a non-structural child of an `And` / `Or` over a
-  dynamic value (Integrity only allows Zip next to dynamic-ish siblings).
+  dynamic value (Integrity rejects a Zip at a static value).
   What a Zip's fields describe is the separate hypothesis `ZipOK`.
 
 **Interpretations that do not hold.** A bytes-like child (`Dynamic`,
@@ -220,8 +220,8 @@ inductive Sub : Condition → Condition → Prop
   | refl (c : Condition) : Sub c c
   | child {d ch c : Condition} : ch ∈ c.children → Sub d ch → Sub d c
 
-/-- The Zip type rules Integrity enforces (`_checkZipIterator`,
-    `_validatePluckZipTypes`), stated on values: a Pluck node that a Zip in
+/-- The Zip type rules Integrity enforces (`_checkZip`,
+    `_zipTypes`), stated on values: a Pluck node that a Zip in
     `root` references (by slot index) is an `Array` node, and Zip field `f`
     describes every element of any array that Pluck node describes. -/
 def ZipOK (s : Bool) (root : Condition) : Prop :=
