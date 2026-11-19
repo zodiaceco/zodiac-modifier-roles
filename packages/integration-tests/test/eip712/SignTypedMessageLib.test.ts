@@ -196,6 +196,89 @@ describe("SignTypedMessageLib", () => {
 
     expect(result).to.deep.equal([EIP712_MAGIC_VALUE_OLD])
   })
+  it("fallback - rejects arguments that do not lie within calldata", async () => {
+    const { relayer, lib } = await loadFixture(setup)
+    const contract = await ethers.getContractAt("SignTypedMessageLib", lib)
+
+    const types = { Message: [{ name: "amount", type: "uint256" }] }
+    const encoded = encodeSignTypedMessage({
+      domain: { version: "1", chainId: 1 },
+      message: { amount: 100 },
+      types,
+    })
+    const data = `0x11223344${encoded.slice(10)}`
+    const size = (data.length - 2) / 2
+
+    // the word at byte `position` of data
+    const read = (position: number) =>
+      Number(BigInt(`0x${data.slice(2 + position * 2, 66 + position * 2)}`))
+    // data with the word at byte `position` replaced
+    const write = (position: number, value: bigint) =>
+      data.slice(0, 2 + position * 2) +
+      value.toString(16).padStart(64, "0") +
+      data.slice(66 + position * 2)
+
+    const max = 2n ** 256n - 1n
+    const [domainLength, messageLength, typesLength] = [
+      read(0x04) + 4,
+      read(0x24) + 4,
+      read(0x44) + 4,
+    ]
+
+    // well formed: decoded, and then refused for not being a delegatecall
+    await expect(relayer.call({ to: lib, data })).to.be.revertedWithCustomError(
+      contract,
+      "OnlyDelegateCall"
+    )
+
+    const malformed = {
+      "selector only": data.slice(0, 10),
+      "shorter than the head": data.slice(0, 2 + 0x63 * 2),
+      "truncated by one byte": data.slice(0, -2),
+      "truncated by one type node": data.slice(0, -0x60 * 2),
+      "domain offset wraps": write(0x04, max - 3n),
+      "message offset wraps": write(0x24, max - 3n),
+      "types offset wraps": write(0x44, max - 3n),
+      "domain offset wraps to its own content": write(0x04, max - 0x23n),
+      "domain offset at the end": write(0x04, BigInt(size - 4)),
+      "types offset past the end": write(0x44, BigInt(size)),
+      "domain length past the end": write(
+        domainLength,
+        BigInt(size - domainLength - 0x20 + 1)
+      ),
+      "domain length wraps": write(domainLength, max),
+      "message length past the end": write(
+        messageLength,
+        BigInt(size - messageLength - 0x20 + 1)
+      ),
+      "types length past the end": write(
+        typesLength,
+        BigInt(read(typesLength) + 1)
+      ),
+      "types length wraps": write(typesLength, max / 0x60n + 2n),
+    }
+
+    for (const [name, data] of Object.entries(malformed)) {
+      await expect(
+        relayer.call({ to: lib, data }),
+        name
+      ).to.be.revertedWithCustomError(contract, "InvalidCalldata")
+    }
+  })
+  it("reverts when called directly", async () => {
+    const { relayer, lib } = await loadFixture(setup)
+    const contract = await ethers.getContractAt("SignTypedMessageLib", lib)
+
+    await expect(
+      contract.connect(relayer).signMessage("0xbadfed")
+    ).to.be.revertedWithCustomError(contract, "OnlyDelegateCall")
+    await expect(
+      contract.connect(relayer).personalSign("0xbadfed")
+    ).to.be.revertedWithCustomError(contract, "OnlyDelegateCall")
+    await expect(
+      contract.connect(relayer).signTypedMessage("0x", "0x", [])
+    ).to.be.revertedWithCustomError(contract, "OnlyDelegateCall")
+  })
 })
 
 async function _encodeSignMessage({

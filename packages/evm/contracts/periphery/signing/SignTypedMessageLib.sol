@@ -23,6 +23,12 @@ contract SignTypedMessageLib is SafeStorage {
     bytes32 private constant safeMessageTypeHash =
         keccak256("SafeMessage(bytes message)");
 
+    /// @dev The library was called directly, not through delegatecall.
+    error OnlyDelegateCall();
+
+    /// @dev An argument of a fallback call does not lie within calldata.
+    error InvalidCalldata();
+
     constructor() {
         deployedAt = address(this);
     }
@@ -35,7 +41,7 @@ contract SignTypedMessageLib is SafeStorage {
      * @param message The message to be signed
      */
     function signMessage(bytes calldata message) external {
-        require(address(this) != deployedAt);
+        if (address(this) == deployedAt) revert OnlyDelegateCall();
         bytes32 safeMessageHash = keccak256(safeMessagePreimage(message));
 
         signedMessages[safeMessageHash] = 1;
@@ -50,7 +56,7 @@ contract SignTypedMessageLib is SafeStorage {
      * @param message The raw message text to be signed
      */
     function personalSign(bytes calldata message) external {
-        require(address(this) != deployedAt);
+        if (address(this) == deployedAt) revert OnlyDelegateCall();
         bytes memory wrapped = abi.encodePacked(
             "\x19Ethereum Signed Message:\n",
             uintToString(message.length),
@@ -79,7 +85,7 @@ contract SignTypedMessageLib is SafeStorage {
         bytes calldata message,
         TypeNodeFlat[] calldata types
     ) public {
-        require(address(this) != deployedAt);
+        if (address(this) == deployedAt) revert OnlyDelegateCall();
         bytes32 safeMessageHash = keccak256(
             safeTypedMessagePreimage(domain, message, types)
         );
@@ -137,21 +143,56 @@ contract SignTypedMessageLib is SafeStorage {
         bytes calldata domain;
         bytes calldata message;
         TypeNodeFlat[] calldata types;
+
+        (uint256 offset, uint256 length) = _argument(0x04, 1);
         assembly {
-            // offset to domain block
-            domain.offset := add(calldataload(0x04), 0x24)
-            domain.length := calldataload(sub(domain.offset, 0x20))
-
-            // offset to message block
-            message.offset := add(calldataload(0x24), 0x24)
-            message.length := calldataload(sub(message.offset, 0x20))
-
-            // offset to types array
-            let typesPtr := add(calldataload(0x44), 0x04)
-            types.length := calldataload(typesPtr)
-            types.offset := add(typesPtr, 0x20)
+            domain.offset := offset
+            domain.length := length
         }
+
+        (offset, length) = _argument(0x24, 1);
+        assembly {
+            message.offset := offset
+            message.length := length
+        }
+
+        // each TypeNodeFlat takes three words
+        (offset, length) = _argument(0x44, 0x60);
+        assembly {
+            types.offset := offset
+            types.length := length
+        }
+
         signTypedMessage(domain, message, types);
+    }
+
+    /**
+     * @dev Locates a dynamic argument from its head word, and requires its
+     *      length word and content to lie within calldata.
+     */
+    function _argument(
+        uint256 head,
+        uint256 itemSize
+    ) private pure returns (uint256 offset, uint256 length) {
+        // selector and three head words
+        if (msg.data.length < 0x64) revert InvalidCalldata();
+
+        uint256 pointer;
+        assembly {
+            pointer := calldataload(head)
+        }
+
+        // selector, pointer, length word
+        if (pointer > msg.data.length - 0x24) revert InvalidCalldata();
+        offset = pointer + 0x24;
+
+        assembly {
+            length := calldataload(add(pointer, 0x04))
+        }
+
+        if (length > (msg.data.length - offset) / itemSize) {
+            revert InvalidCalldata();
+        }
     }
 }
 

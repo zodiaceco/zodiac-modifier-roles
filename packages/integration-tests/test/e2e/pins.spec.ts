@@ -443,9 +443,8 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
         BigInt(
           hexlify(Uint8Array.from({ length: 32 }, (_, k) => d[p + k] ?? 0))
         )
-      // The fallback takes `domain` and `message` lengths from the
-      // calldata unchecked; past the end it reads zeros. A length far past
-      // the end cannot be handed to the reference encoder as bytes.
+      // The fallback takes `domain` and `message` offsets and lengths from
+      // the calldata, and reverts unless they lie within it.
       const arg = (j: number) => {
         const off = Number((load(4 + 32 * j) + 36n) % 2n ** 256n)
         const len = load(off - 32)

@@ -59,10 +59,15 @@ defines the canonical words.
 ## The view of an argument
 
 The fallback hands the library `bytes calldata` slices whose offset and
-length it read from calldata without checking them against `msg.data`. The
-library reads `view data base m` (`Agree.lean`): calldata from `base`, zeros
-past its end, as `calldataload` does. Roles checks its reads against
-`msg.data`, so it only fails where the library would read zeros.
+length it reads from calldata by hand. It reverts (`InvalidCalldata`) unless
+each argument's length word and content lie within `msg.data`, as Solidity's
+decoder does for the `signTypedMessage` selector.
+
+The model is more permissive: the library reads `view data base m`
+(`Agree.lean`), calldata from `base` with zeros past its end, as
+`calldataload` does without that check. The theorems hold on any calldata,
+so they cover the calls the fallback accepts; the calls it now rejects are
+those where the model would read zeros.
 
 ## Hypotheses checked on the SDK's output
 
@@ -154,8 +159,10 @@ argument root.
   rejects them (the driver does not give their slots an element type).
 - `WithinRatio` compares plucked values, not locations: it is a leaf here,
   and its operands are the values the `Pluck` nodes read at their `Site`.
-- Empty structs and `T[0]`: the encoder reverts (fails closed). Solidity has
-  neither.
+- Empty structs and `T[0]` as members: the encoder reverts (fails closed).
+  Solidity has neither. An empty root struct (`EIP712Domain()` with no
+  fields) does not revert: `_inlineSize` is not called on the root, and it
+  hashes to `keccak256(typeHash)`, as EIP-712 says.
 - What the signature authorizes elsewhere (Permit, orders, `RoleTx` of
   another Roles instance): that is the permission's intent, see
   [the overview](../README.md).
