@@ -60,8 +60,8 @@ the SDK at least rejects what the chain rejects.
 `TypeTree` counts a `ZipSome`/`ZipEvery` node as structural (its hash is
 non-zero), so Integrity accepts it wherever a parameter may stand. But a Zip
 reads its arrays from Pluck slots, not from its position. Wherever it sits
-inside a type node, `AbiLocation` and `Topology` give it a parameter slot or an
-inline size of its own, and later reads shift.
+inside a type node, `AbiLocation` and `ConditionPacker` give it a parameter slot
+or an inline size of its own, and later reads shift.
 
 Confirmed on-chain (2026-10-20):
 
@@ -85,7 +85,7 @@ today.
 
 SDK check: every ancestor of a Zip is an `And` or `Or`. Contract fix: make
 `TypeTree.hash` return 0 for a Zip, so Integrity rejects it among positional
-children, and have `Topology`/`AbiLocation` give it no slot and no size.
+children, and have `ConditionPacker`/`AbiLocation` give it no slot and no size.
 
 ## 2. Non-structural child in a Pass/EqualTo container (false reject)
 

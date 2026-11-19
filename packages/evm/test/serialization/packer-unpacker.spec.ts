@@ -441,18 +441,18 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       expect(byteLength(nodes[1].compValue)).to.equal(65535);
     });
 
-    it("unpacks 1023 children, in a tree of more than 255 nodes", async () => {
+    it("1023 children, in a tree of more than 255 nodes", async () => {
       const tree = call(...repeat(1023, S));
-      const nodes = await expectUnpacked(sdkPack(tree), tree);
+      const { nodes } = await roundtrip(tree);
       expect(nodes.length).to.equal(1024);
       expect(nodes.filter((n, i) => i > 0 && n.parent === 0).length).to.equal(
         1023,
       );
     });
 
-    it("unpacks the largest inlined size, 8160 bytes", async () => {
+    it("the largest inlined size, 8160 bytes", async () => {
       const tree = call(tuple(...repeat(255, S)));
-      const nodes = await expectUnpacked(sdkPack(tree), tree);
+      const { nodes } = await roundtrip(tree);
       expect(nodes[1].size).to.equal(8160);
     });
   });

@@ -14,9 +14,7 @@
  *
  * Not covered here, because it cannot be reached through `Roles`:
  *  - the empty array (`packConditions` returns before Integrity runs);
- *  - `ConditionNodeCountExceedsMax` (decoding 65,536 nodes runs out of gas);
- *  - a node with exactly 1,023 children, or an inlined size of exactly
- *    8,160 bytes, the largest there is (the packer runs out of gas).
+ *  - `ConditionNodeCountExceedsMax` (decoding 65,536 nodes runs out of gas).
  */
 import { expect } from "chai";
 import { network } from "hardhat";
@@ -306,6 +304,11 @@ describe("Integrity", () => {
       );
     });
 
+    it("accepts 1023 children", async () => {
+      const children = Array.from({ length: 1023 }, () => S);
+      await expectAccepted(call(...children));
+    });
+
     it("rejects more than 1023 children", async () => {
       const children = (count: number) =>
         Array.from({ length: count }, () => S);
@@ -313,6 +316,11 @@ describe("Integrity", () => {
         X(call(...children(1024))),
         "ConditionChildCountExceedsMax",
       );
+    });
+
+    it("accepts the largest inlined size, 8160 bytes", async () => {
+      const words = Array.from({ length: 255 }, () => S);
+      await expectAccepted(call(pass(E.Tuple, ...words)));
     });
 
     it("rejects an inlined size above 8191 bytes", async () => {
