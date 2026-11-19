@@ -9,9 +9,11 @@ Each definition follows the Solidity control flow. `none` is a revert.
 * `bytes calldata data` is the byte view the library reads: `_word` is
   `calldataload`, `data[left:right]` copies calldata. Both read zeros past
   the end of `msg.data`. `SignTypedMessageLib`'s fallback sets the offsets
-  and lengths of `domain` / `message` by hand, without checking them against
-  `msg.data`, so a view can run past the end of the calldata; that tail
-  reads as zeros. `View.lean` builds the view from calldata.
+  and lengths of `domain` / `message` by hand, and reverts unless they lie
+  within `msg.data`. The model does not have that check: a view can run past
+  the end of the calldata, and that tail reads as zeros. So the model
+  accepts every call the fallback accepts. `View.lean` builds the view from
+  calldata.
 * Arithmetic is on `Nat`. Checked `uint256` arithmetic reverts on overflow;
   here the following bound check fails instead, so the outcome (revert) is
   the same. `new bytes32[](childCount)` with a huge count runs out of gas;

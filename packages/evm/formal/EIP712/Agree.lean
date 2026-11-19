@@ -6,9 +6,11 @@ import DecoderFaithfulness.Decode
 
 `SignTypedMessageLib`'s fallback hands `EIP712Encoder` the `message`
 argument as calldata from `base` (the content of the `bytes` parameter, at
-the offset the head word gives), of the length its length word gives,
-without checking either against `msg.data`. So the library reads
-`view data base m`: the calldata from `base`, zeros past its end.
+the offset the head word gives), of the length its length word gives. The
+fallback reverts unless both lie within `msg.data`; the model leaves that
+check out, so it covers every call the fallback accepts. In the model the
+library reads `view data base m`: the calldata from `base`, zeros past its
+end.
 
 Roles reads the same calldata with `AbiLocation.children`
 (`DecoderFaithfulness.Roles`), with bound checks against `msg.data`.
