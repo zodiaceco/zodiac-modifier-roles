@@ -5,7 +5,7 @@ import ConditionPacking.Bytes
 
 With parents that never decrease (`BFS`), the children of node `i` are the
 block `[1 + cnt i, 1 + cnt (i + 1))`, where `cnt p` counts the non-root nodes
-whose parent is below `p`. `Topology.childBounds` finds exactly that block, and
+whose parent is below `p`. `childBounds` finds exactly that block, and
 the unpacker's running child pointer reaches it.
 -/
 
@@ -139,7 +139,7 @@ theorem cnt_le (fs : List Flat) (p : Nat) : cnt fs p ≤ fs.length - 1 := by
   unfold cnt
   exact Nat.le_trans (List.length_filter_le _ _) (by simp)
 
-/-! ## `Topology.childBounds` -/
+/-! ## `childBounds` -/
 
 theorem shapes_getD (fs : List Flat) (j : Nat) :
     (shapes fs).getD j default = ⟨(at! fs j).parent, (at! fs j).paramType⟩ := by

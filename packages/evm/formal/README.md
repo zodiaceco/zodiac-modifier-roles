@@ -38,12 +38,15 @@ Not covered yet:
 
 - **Integrity ⇒ `Desc`, `ZipOK`.** That `Integrity.enforce` only accepts
   condition trees that describe some ABI type, and enforces the Zip type rules.
-  Decoder faithfulness assumes it, and it is false today: trees Integrity
-  accepts but `evaluate` misreads are tracked in
+  Decoder faithfulness assumes it, and it is not proven. It used to be false:
+  the trees Integrity accepted but `evaluate` misread are tracked in
   [packages/sdk/INTEGRITY_BACKLOG.md](../../sdk/INTEGRITY_BACKLOG.md), found
-  with the fuzzer `test/formal/integrity-gaps.spec.ts`. The
-  [condition check](#condition-check) proves the hypotheses for every tree it
-  accepts instead, for clients that store trees with the `...Packed` setters.
+  with the fuzzer `test/formal/integrity-gaps.spec.ts`. Integrity has since
+  been rewritten to follow the rules of the
+  [condition check](#condition-check); that the two agree is tested, not
+  proven ([status](../../sdk/INTEGRITY_BACKLOG.md#resolved)). The condition check proves the
+  hypotheses for every tree it accepts, for clients that store trees with the
+  `...Packed` setters.
 - **Pluck slots, in the decoder model.** That the slot a Zip reads holds the
   location where a Pluck with that index was evaluated. The decoder model
   assumes it. The condition check proves no unwritten slot is read, against a
@@ -81,9 +84,11 @@ Not covered yet:
   `fit` check covers the permissions `allowSignTypedMessage` builds; it
   found that the helpers described fixed-size arrays as dynamic arrays.)
 - **The Integrity path.** Trees stored with the setters that run
-  `Integrity` (not `...Packed`) get none of these guarantees: Integrity
-  accepts trees `evaluate` misreads (the backlog above). It is a separate,
-  known-unsafe entry path, not an unfinished proof.
+  `Integrity` (not `...Packed`) get these guarantees only if Integrity
+  accepts no tree the condition check rejects. Integrity was rewritten to
+  follow the check's rules, and that the two agree is tested, not proven
+  ([status](../../sdk/INTEGRITY_BACKLOG.md#resolved)). Before the rewrite, Integrity accepted
+  trees `evaluate` misreads (the backlog above).
 - **Buffers the SDK did not pack.** `pack_roundtrip` is about the packer's
   output. A buffer passed to a `...Packed` setter by other means is not
   covered.
@@ -96,10 +101,10 @@ Not covered yet:
   ancestors are all `And`/`Or` is modeled. The SDK check rejects the others
   (a `Matches` child must read a parameter), and so does `Bridge`'s
   well-typedness `inv`, so trees stored through the SDK never have one.
-  Integrity accepts such trees, but the decoder gives the Zip a
+  Integrity used to accept such trees, and the decoder gives the Zip a
   parameter slot or inline size: later parameters are read at the wrong place (a
   policy bypass, reproduced on-chain), and a Zip over dynamic fields falsely
-  overflows. See the [details](DecoderFaithfulness/README.md#not-covered) and
+  overflows. Integrity now rejects them. See the [details](DecoderFaithfulness/README.md#not-covered) and
   the backlog.
 - **`checkStored` ⇒ `inv`.** `Bridge` assumes the tree is well-typed
   (`inv`, node by node `invP` in `Bridge/ReadNorm.lean`): adequacy's
@@ -320,9 +325,9 @@ $`i`$ exactly where the spec put $`u_i`$.
     unpacker by [condition packing](#condition-packing).
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
 - Integrity only accepts trees with $`\mathsf{Desc}_s`$, $`\mathsf{RootOK}`$ and
-  $`\mathsf{ZipOK}_s`$ (not proven yet, and false for navigating nodes below
+  $`\mathsf{ZipOK}_s`$ (not proven. It was false for navigating nodes below
   an operator that reads its whole value, which $`\mathsf{Desc}_s`$ excludes;
-  see [Findings](#findings)).
+  Integrity now rejects those, see [Findings](#findings)).
 - When a Zip reads a Pluck slot, it holds a location where a Pluck with that
   index was evaluated (Integrity's slot-filled-before-use rule; the
   [condition check](#condition-check) proves its version against a model of
@@ -350,6 +355,11 @@ $`\mathsf{annotate}`$ adds the `inlined` / `size` / `leadingBytes` metadata. It
 is the function the decoder proof assumes, so the decoder theorems hold for the
 tree `unpack` returns.
 
+$`\mathsf{pack}`$ is stated with each node's child count and inlined size
+defined by walking its children. The contract computes them in one bottom-up
+pass (`_layout`); `layout_eq` proves that the pass computes the same values,
+and `packL_roundtrip` is this theorem for the packer as written.
+
 ### `packBuffer_eq`: the buffer format
 
 ```math
@@ -364,7 +374,8 @@ produce exactly this.
 
 ### Trusted base
 
-- `ConditionPacking/Model.lean` matches the Solidity, including the assembly.
+- `ConditionPacking/Model.lean` and `Layout.lean` match the Solidity, including
+  the assembly.
   It's tested against the contracts (byte-identical buffers and identical
   unpacked trees) by `test/formal/lean-model.spec.ts`.
 - The EVM semantics of `mload` / `mstore` / `mcopy` / `shl` / `shr` / `or` as
@@ -441,10 +452,12 @@ of type `call` only. A variant root (an `Or` of `AbiEncoded` branches, type
 
 ### Findings
 
-Where Integrity and the check differ (details in the
-[README](ConditionCheck/README.md#findings-where-integrity-and-the-check-differ)):
-Integrity accepts trees `evaluate` misreads (backlog items 1, 2, 6), and
-rejects shapes that are read correctly: `Slice` next to plain checks
+Where Integrity and the check differed (details in the
+[README](ConditionCheck/README.md#findings-where-integrity-and-the-check-differed)).
+Integrity has since been rewritten to follow the check's rules, and these
+differences are gone ([status and what was run](../../sdk/INTEGRITY_BACKLOG.md#resolved)). As
+found: Integrity accepted trees `evaluate` misreads (backlog items 1, 2, 6),
+and rejected shapes that are read correctly: `Slice` next to plain checks
 (item 4), a Zip next to a `Tuple`/`Array` check (item 10), checks of a
 prefix of one dynamic tuple or call (branches written with fewer
 parameters; the SDK no longer pads them to one type tree), and two checks of one array whose elements are
@@ -472,7 +485,7 @@ decoding.
 
 The SDK normalizes every condition before it is stored (`normalizeCondition`:
 flatten, dedupe and unwrap `And`/`Or`, push `Or` down into `Matches`/`And`,
-sort). It used to pad branches to one type tree, as Integrity requires; the
+sort). It used to pad branches to one type tree, as Integrity then required; the
 SDK stores trees with the `...Packed` setters, and its check accepts checks
 of a prefix of one tuple as siblings, so padding was removed (with it, bug 13
 below and about 1,500 lines of proof). It also used to prune trailing `Pass`
@@ -561,19 +574,19 @@ in the SDK with regression tests (`effects.test.ts`,
 10. Pruning and padding inside a Zip's fields or a plucked array changed their
     types, which Integrity then rejects; those subtrees are now left as written.
 11. Pushing an `Or` down merged children of incompatible types (e.g. a `Slice`
-    next to a plain check), which Integrity rejects. Merges now require
+    next to a plain check), which Integrity then rejected. Merges now require
     branches of exactly the same type tree: every child of the merged `Or`
     has the same SDK-check type (`compatibleSiblings`, `siblingsSameType` in
     checkStored.ts). A `bytes` check and a nested call, or checks of a prefix
     of one tuple, stay separate branches.
 12. `createTypeTree` gave an `And`/`Or` the type of its first child, and none
     when that child reads no parameter, so the parent's type tree lost a field;
-    it now takes the first structural child, as the contract's `TypeTree` does.
+    it now takes the first structural child, as the contract's `TypeTree` did.
     The SDK also crashed on such nodes while padding.
 13. Padding extended the call branches of a variant `Or` inside a tuple with
     the parameters of a call with another selector (from a sibling tuple):
     the stored tree rejected calls the written one accepted (narrowing, on
-    the packed path only: Integrity rejects the tree). Removed with padding.
+    the packed path only: Integrity rejected the tree). Removed with padding.
 
 Removed with pruning: `Pass` places no constraint on a value, including
 whether it is well-formed. A trailing `Pass` still makes the contract locate
@@ -852,7 +865,7 @@ rejected by Integrity or ran out of gas on corrupted array lengths).
 evaluated from that buffer without Integrity
 (`MockEvaluator.evaluatePackedWith`), as the `...Packed` setters store them.
 3,000 cases (seed 31): 1,147 compared, 0 differences. 237 of them are trees
-the SDK check accepts and Integrity rejects (`UnsuitableChildTypeTree`; see
+the SDK check accepted and Integrity then rejected (`UnsuitableChildTypeTree`; see
 `ConditionCheck/README.md` for the classes).
 
 Limits: the driver's custom checkers, price adapters and `WithinRatio`

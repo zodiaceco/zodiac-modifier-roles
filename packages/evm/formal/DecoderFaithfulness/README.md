@@ -29,7 +29,7 @@ Setting (`Main.lean`):
   the 4-byte selector), the **spec encoding** of the arguments, then arbitrary
   trailing bytes.
 - The evaluator runs on `annotate root`, the tree as pack + unpack leave it
-  (with the `inlined` / `size` / `leadingBytes` metadata `Topology` computes).
+  (with the `inlined` / `size` / `leadingBytes` metadata the packer computes).
   That pack + unpack really produce `annotate` of the input tree is proven
   separately, on the byte buffer:
   [`ConditionPacking`](../ConditionPacking/README.md).
@@ -82,15 +82,15 @@ any `leadingBytes`), nested arbitrarily. Covered operators: `Matches`,
 `Pluck` and `ZipSome`/`ZipEvery`, `Pass`, and all leaf operators via the
 location and operand theorems. A Zip is covered as a child of an `And`/`Or` over
 a dynamic value, after the child that describes the value (`ZipsAfter`):
-Integrity only allows a Zip next to dynamic-ish siblings, and requires the
-Plucks it reads to be visited before it.
+Integrity rejects a Zip at a static value or before that child, and requires
+the Plucks it reads to be visited before it.
 
 ## How it is built
 
 | File                              | Contents                                                                                                                                                                                                                                                                                             | Depends on        |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `Spec.lean`                       | ABI encoding, transcribed from the [formal spec section](https://docs.soliditylang.org/en/latest/abi-spec.html#formal-specification-of-the-encoding) of the Solidity docs: values in, bytes out.                                                                                                     | `Bytes.lean` only |
-| `Roles.lean`                      | Line-by-line transcription of `AbiLocation.sol`, `Topology.sol`, the pack/unpack metadata, `ConditionEvaluator.__input`, which node `evaluate` visits at which location (`Visit`, including `_slice`; `Eval` adds the Zip jump), and `BitmaskChecker.check`.                                         | `Bytes.lean` only |
+| `Roles.lean`                      | Line-by-line transcription of `AbiLocation.sol`, the pack/unpack metadata, `ConditionEvaluator.__input`, which node `evaluate` visits at which location (`Visit`, including `_slice`; `Eval` adds the Zip jump), and `BitmaskChecker.check`.                                                         | `Bytes.lean` only |
 | `Desc.lean`                       | `Desc s c u`: condition tree `c` describes value `u` (the structural rules Integrity enforces, a `Matches` the first fields); `ZipOK` (the Zip type rules).                                                                                                                                          | both              |
 | `Basic`, `Meta`, `Decode`, `Main` | Proofs.                                                                                                                                                                                                                                                                                              |                   |
 | `Bitmask.lean`                    | `bitmaskSpec` (what a Bitmask checks, byte by byte) and `decoder_bitmask`.                                                                                                                                                                                                                           |                   |
@@ -158,13 +158,13 @@ by hand; `MockLocator` does not expose them.
   `Pass` containers) to be a type description (`exactTy`): their sizes give
   the length read. No node of it navigates, except below nested calldata
   (sized as `bytes`) and a `Slice` (a word or `bytes`), whose own children do
-  not change their size. Integrity also accepts a tuple `Matches` or an
-  `And`/`Or` there; the theorems say nothing about such trees. Also assumed: inlined sizes ≤ 8191 bytes
-  (Integrity rejects larger), and the flat-BFS-array-to-tree view of `Topology`.
+  not change their size. Integrity rejects a tuple `Matches` or an
+  `And`/`Or` there. Also assumed: inlined sizes ≤ 8191 bytes
+  (Integrity rejects larger), and the flat-BFS-array-to-tree view of `inlined` / `size`.
 - **Pluck slots** (in `Eval`): when a Zip reads slot `k`, it holds a location
   where the Pluck node with slot `k` was evaluated. Integrity makes the slot's
-  Pluck unique (`_validateUniquePluckDefinitions`) and makes sure it ran before
-  on that path (`_validatePluckAssignments`); `_pluck` is the only writer.
+  Pluck unique (`_plucks`) and makes sure it ran before
+  on that path (`_slots`); `_pluck` is the only writer.
   Checked by the Zip end-to-end test.
 - **Bitmask**: `bytes32` values are modeled as byte lists, so `&` is bytewise.
   Bytes read past the end of `data` are modeled as zeros (on-chain they are the
@@ -194,13 +194,13 @@ by hand; `MockLocator` does not expose them.
   interpretation that does not fit the data (case 4).
 - Comparison semantics (`__compare`, keccak), `WithinRatio`, `Custom` checkers.
   Only the operand is proven, not what is done with it.
-- **A Zip as a positional child of a container.** Roles' own Zip tests place the
-  Zip as the trailing child of `Matches`:
+- **A Zip as a positional child of a container,** as in
   `Matches[Pluck a, Pluck b, ZipEvery(...)]` for `f(uint256[] a, uint256[] b)`.
-  `AbiLocation.children` then treats the Zip as one more parameter (its tuple's
-  inlined size, or an offset word for dynamic fields). That works by accident
-  when the Zip is last and its fields are static. Integrity accepts the other
-  cases too, and they misbehave. Both reproduced against the real Roles
+  Integrity rejects it (`UnsuitableChildCount`), so such a tree can only be
+  stored with a `...Packed` setter. `AbiLocation.children` treats the Zip as
+  one more parameter (its tuple's inlined size, or an offset word for dynamic
+  fields). That works by accident when the Zip is last and its fields are
+  static, and misbehaves otherwise. Both reproduced against the real Roles
   contract:
   - Zip before another parameter: for `f(uint256[] a, uint256[] b, uint256 c)`
     with `Matches[Pluck a, Pluck b, ZipEvery(static fields), EqualTo(c, 5)]`,
@@ -212,7 +212,4 @@ by hand; `MockLocator` does not expose them.
   More shapes (nested and static tuples, `ArrayTailMatches`) are in
   [packages/sdk/INTEGRITY_BACKLOG.md](../../../sdk/INTEGRITY_BACKLOG.md). `Desc`
   does not admit a Zip there, so the theorems say nothing about these trees.
-  Placing the Zip under `And[Matches[...], Zip]` (as some of Roles' tests do) is
-  covered and works. A fix would be for Integrity to reject non-structural
-  children (Zip, `WithinRatio`, …) among a container's positional children, or
-  for `AbiLocation` to skip them.
+  Placing the Zip under `And[Matches[...], Zip]` is covered and works.

@@ -36,7 +36,7 @@ unpack avatar (bufMem (pack junk fs) junk') =
   off its first two bytes as `leadingBytes`, and `EqualToAvatar` compares
   against `abi.encode(avatar)`.
 - `annotate` adds the metadata the evaluator reads: `inlined` and `size`
-  (`Topology.isInlined` / `inlinedSize`), and `EtherValue` read as `None`. It is
+  (`isInlined` / `inlinedSize`), and `EtherValue` read as `None`. It is
   the same function the decoder proof assumes
   (`DecoderFaithfulness/Roles.lean`), so the decoder theorems apply to the tree
   `unpack` returns.
@@ -56,28 +56,27 @@ setters.
 
 ## Hypotheses: `Packable`, and where Integrity checks them
 
-| `Packable` field                                          | Why packing needs it                                             | Integrity check                                                                                      |
-| --------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `nonempty`, `bfs`: parents earlier, never decreasing      | `childBounds` and the unpacker's child pointer assume BFS order  | `_validateBFS` (`UnsuitableRootNode`, `NotBFS`)                                                      |
-| `node_count ≤ 65535`                                      | 16-bit node count in the header                                  | `ConditionNodeCountExceedsMax`                                                                       |
-| `comp_value_length ≤ 65535`                               | 16-bit length prefix                                             | `_validatePackedWidths` (`UnsuitableCompValue`)                                                      |
-| `child_count ≤ 1023`                                      | 10-bit field                                                     | `ConditionChildCountExceedsMax`                                                                      |
-| `inlined_size ≤ 8191`                                     | 13-bit field                                                     | `ConditionInlinedSizeExceedsMax`                                                                     |
-| `pluck`: compValue non-empty, index ≤ 254                 | `compValue[0]` in `_count`; 8-bit `maxPluckValue` in the header  | `_checkPluck` (exactly 1 byte, not 255)                                                              |
-| `equal_to`: non-inlined `EqualTo` has ≥ 32 bytes          | `_transform` drops 32 bytes in assembly (no underflow check)     | `_checkEqualTo` (`Dynamic` and non-inlined `Tuple`/`Array` ≥ 64 bytes; `None`/`AbiEncoded` rejected) |
-| `abi_encoded`: compValue length ≠ 1, operator ≠ `EqualTo` | the unpacker reads 2 bytes of leading bytes from every compValue | `_checkPass` (empty), `_checkMatches` (0, 2 or 2 + n bytes), other operators reject `AbiEncoded`     |
+| `Packable` field                                          | Why packing needs it                                             | Integrity check                                                                                               |
+| --------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `nonempty`, `bfs`: parents earlier, never decreasing      | `childBounds` and the unpacker's child pointer assume BFS order  | `_layout` (`UnsuitableRootNode`, `NotBFS`)                                                                    |
+| `node_count ≤ 65535`                                      | 16-bit node count in the header                                  | `_layout` (`ConditionNodeCountExceedsMax`)                                                                    |
+| `comp_value_length ≤ 65535`                               | 16-bit length prefix                                             | `_layout` (`UnsuitableCompValue`)                                                                             |
+| `child_count ≤ 1023`                                      | 10-bit field                                                     | `_layout` (`ConditionChildCountExceedsMax`)                                                                   |
+| `inlined_size ≤ 8191`                                     | 13-bit field                                                     | `_layout` (`ConditionInlinedSizeExceedsMax`)                                                                  |
+| `pluck`: compValue non-empty, index ≤ 254                 | `compValue[0]` in `_count`; 8-bit `maxPluckValue` in the header  | `_plucks` (exactly 1 byte, not 255)                                                                           |
+| `equal_to`: non-inlined `EqualTo` has ≥ 32 bytes          | `_transform` drops 32 bytes in assembly (no underflow check)     | `_checkEqualTo` (`Dynamic` and non-inlined `Tuple`/`Array` ≥ 64 bytes; `None`/`AbiEncoded` rejected)          |
+| `abi_encoded`: compValue length ≠ 1, operator ≠ `EqualTo` | the unpacker reads 2 bytes of leading bytes from every compValue | `_operator`: `Pass` (empty), `_checkMatches` (0, 2 or 2 + n bytes); every other operator rejects `AbiEncoded` |
 
 The table's last column is from reading `Integrity.sol`; "Integrity ⇒
 `Packable`" is not proven in Lean. Outside these hypotheses the buffer is
 corrupt. For example, a 1-byte `AbiEncoded` compValue makes the unpacker's
 `sub(length, 2)` wrap, and an inlined size of 8192 overflows into the child
-count bits. The `...Packed` setters store a buffer without any check (and
-`MalformedConditionBuffer` is never raised), so a client that builds buffers
-itself must enforce `Packable` itself.
+count bits. The `...Packed` setters store a buffer without any check, so a
+client that builds buffers itself must enforce `Packable` itself.
 
 ## Model
 
-`Model.lean` transcribes `Topology.sol`, `ConditionPacker.sol` and
+`Model.lean` and `Layout.lean` transcribe `ConditionPacker.sol` and
 `ConditionUnpacker.sol`:
 
 - **Memory** is a function from positions to bytes (`Mem`). `mload`, `mstore`,
@@ -88,9 +87,16 @@ itself must enforce `Packable` itself.
 - **Allocation:** `new bytes(len)` gives a zeroed buffer. All memory outside the
   buffer is arbitrary (`junk`), also while unpacking, where `mload` reads up to
   32 bytes past the last field.
-- **Topology** reads only `parent` and `paramType` (`Shape`). `_transform`
-  mutates compValues while calling `isInlined`, which therefore can't change the
-  result.
+- **Layout:** `ConditionPacker._layout` computes every node's child count,
+  whether it is inlined and its inlined size in one bottom-up pass.
+  `Layout.lean` transcribes that loop (`layout`) using a Lean array of layout
+  nodes. The round trip is stated with
+  `childBounds`, `isInlined` and `inlinedSize`, which define the same values
+  node by node, by walking the node's children. `layout_eq` proves the pass
+  computes them on a BFS-ordered array, and `packL_eq_pack` that the packer
+  reading from the pass (`packL`) returns the bytes of `pack`. All of these
+  read only `parent` and `paramType` (`Shape`), so `_transform` mutating
+  compValues can't change the result.
 - **Unpacked structs:** the unpacker builds `Condition` structs whose `children`
   are pointers into one `Condition[]` array. The model records the child indices
   (`URec`) and `toTree` follows them. Pointers and the free memory pointer are
@@ -106,10 +112,11 @@ itself must enforce `Packable` itself.
 | `Model.lean`    | The transcription, `rawTree`, `maxPluck`, `Packable`                                                                   |
 | `Bytes.lean`    | Big-endian bytes, memory reads/writes, `shr(mload)`, `mstore(shl)` and the `or(mload, shl)` node write                 |
 | `Bfs.lean`      | BFS order: the children of node `i` are the block `[1 + cnt i, 1 + cnt (i+1))`; `childBounds` finds exactly that block |
-| `Topology.lean` | On BFS input, `Topology.isInlined` / `inlinedSize` on the flat array equal the tree versions the decoder proof uses    |
+| `Topology.lean` | On BFS input, `isInlined` / `inlinedSize` on the flat array equal the tree versions the decoder proof uses             |
 | `Pack.lean`     | `packBuffer_eq`: the packer's memory equals `packSpec` (loop invariant over the node loop)                             |
 | `Unpack.lean`   | Reading `packSpec`: each iteration of `_unpackConditions` decodes node `c` to the expected struct (`unpackStep_eq`)    |
 | `Main.lean`     | The unpacker loop, rebuilding the tree (`toTree_eq`), `maxPluckValue`, and `pack_roundtrip`                            |
+| `Layout.lean`   | `_layout` as a loop; `layout_eq`: it computes `childBounds`, `isInlined`, `inlinedSize`; `packL_roundtrip`             |
 
 ## Tests
 
@@ -117,12 +124,16 @@ itself must enforce `Packable` itself.
 transcription against the contracts. For random condition trees with random
 compValues of every shape Integrity accepts, it requires:
 
-- the model's `pack` to produce byte-identical buffers to `ConditionPacker.pack`
-  (via `MockPackerUnpacker.pack`);
+- the model's packer (`packL`, with the layout pass) to produce byte-identical
+  buffers to `ConditionPacker.pack` (via `MockPackerUnpacker.pack`);
 - the model's `unpack` of the contract's buffer to give the same tree as
   `ConditionUnpacker.unpack` (via `MockPackerUnpacker.roundtrip`).
 
 Driver: `lake build roles-model`, queries `pk` and `up` (see `Diff.lean`).
+
+`test/serialization/packer-unpacker.spec.ts` checks the same bytes against the
+SDK's `packConditions` (a transcription of `packSpec`), including on BFS trees
+Integrity rejects.
 
 `NonVacuity.lean` (built with the library) shows `Packable` holds on
 non-trivial arrays (several levels, a non-inlined `EqualTo`, Plucks, a Zip)

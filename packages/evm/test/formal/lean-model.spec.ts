@@ -1077,8 +1077,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
         sol = await mock.pack(flat, { gasLimit: 30_000_000 });
       } catch (e: any) {
         rejected++;
-        // Integrity's gas grows ~3x per nesting level (see
-        // packages/sdk/INTEGRITY_BACKLOG.md, item 3).
+        // rejected by Integrity, or out of gas at the limit above
         let why = /out of gas/i.test(String(e?.shortMessage ?? e?.message))
           ? "out of gas"
           : "revert";

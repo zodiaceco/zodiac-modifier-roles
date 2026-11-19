@@ -13,6 +13,9 @@ synthetic trees are `f(uint256 × n)` with either n checks (`EqualTo`, a
 transaction. A store is the first store of that tree, which deploys it; storing
 an already-deployed tree again (another role or function) costs about 61k.
 
+The `allowFunction` figures for the synthetic trees, and the v3 checked curve
+of the storing chart, are from 2026-11-19.
+
 ## Storing
 
 ![Storing gas by node count](docs/gas-storing.svg)
@@ -21,9 +24,10 @@ an already-deployed tree again (another role or function) costs about 61k.
   bytes deployed as code (4 bytes, plus 34 for a 32-byte compValue). A `Pass`
   node costs about 0.9k.
 - v2: about 20k gas per check node.
-- v3 checked: Integrity grows faster than linearly with size, and faster
-  still with depth (`INTEGRITY_BACKLOG.md`, item 3). A flat tree of 89 check
-  nodes takes 16.4M gas.
+- v3 checked: for the synthetic flat trees, about 28k gas per check node and
+  18k per `Pass` node. A flat tree of 89 check nodes takes 2.5M gas. A chain
+  of tuples 16 nodes deep stores for 0.4M. Wide `And` and `Or` nodes can
+  cost more because Integrity compares sibling types.
 
 ## Evaluation
 
@@ -48,7 +52,7 @@ plus one prefix byte).
 | Setter                   | Binding limit       | Check nodes (32-byte compValues) | `Pass` nodes                    |
 | ------------------------ | ------------------- | -------------------------------- | ------------------------------- |
 | v3 `allowFunctionPacked` | code size           | about 647                        | about 6,000                     |
-| v3 `allowFunction`       | gas (Integrity)     | about 89 (flat; 8 at depth 8)    | about 95                        |
+| v3 `allowFunction`       | gas                 | about 600                        | about 907                       |
 | v2 `scopeFunction`       | code size, then gas | about 720 (flat trees only)      | about 1,300 (gas, extrapolated) |
 
 - These are for flat trees of one kind (every node a child of the root).
@@ -71,8 +75,7 @@ plus one prefix byte).
 - The packed format also caps each node at 1,023 children (10 bits) and
   65,535 nodes in all.
 - Live mainnet permissions are far below the packed limits: the largest of
-  2,662 distinct trees has 314 nodes, 6.9 KB, and stores for 1.6M gas. With
-  `allowFunction`, 80 of them (3%) don't fit in one transaction.
+  2,662 distinct trees has 314 nodes, 6.9 KB, and stores for 1.6M gas.
 
 ## Live mainnet permissions
 
@@ -80,12 +83,11 @@ Every distinct condition in use on Ethereum mainnet (subgraph snapshot,
 2026-10-25), stored as v2 stored it, and converted to v3 with
 `migrateConditionV2`, first store:
 
-| Stored as             | Trees | Median gas | Total gas |
-| --------------------- | ----- | ---------- | --------- |
-| v2                    | 2,209 | 207k       | 701M      |
-| v3 packed             | 2,662 | 123k       | 393M      |
-| v3 packed, if pruned  | 2,662 | 115k       | 379M      |
-| v3 checked, if pruned | 2,600 | 310k       | 2,739M    |
+| Stored as            | Trees | Median gas | Total gas |
+| -------------------- | ----- | ---------- | --------- |
+| v2                   | 2,209 | 207k       | 701M      |
+| v3 packed            | 2,662 | 123k       | 393M      |
+| v3 packed, if pruned | 2,662 | 115k       | 379M      |
 
 (v3 counts a condition once per function signature it is used with, v2 once
 per stored condition.)

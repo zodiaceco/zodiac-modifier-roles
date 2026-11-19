@@ -1,6 +1,5 @@
 /**
- * The examples of packages/evm/formal/INTEGRITY_REVIEW.md: one tree per
- * class that `allowFunction` (Integrity) used to reject with
+ * One tree per class that `allowFunction` (Integrity) used to reject with
  * `UnsuitableChildTypeTree` while the SDK check (`checkAndPack`) accepted
  * it. Integrity now follows the same rules: each is stored with
  * `allowFunction`, packs to the buffer the SDK produces, and is enforced as

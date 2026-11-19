@@ -5,4 +5,5 @@ import ConditionPacking.Topology
 import ConditionPacking.Pack
 import ConditionPacking.Unpack
 import ConditionPacking.Main
+import ConditionPacking.Layout
 import ConditionPacking.NonVacuity

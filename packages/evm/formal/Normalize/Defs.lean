@@ -66,7 +66,7 @@ def isLogical (c : Cond) : Bool := c.op == 1 || c.op == 2
 def isComplex (c : Cond) : Bool := c.enc == 3 || c.enc == 4 || c.enc == 5
 
 mutual
-  /-- `isStructural`: the node reads a parameter (the contract's `TypeTree`). -/
+  /-- `isStructural`: the node reads a parameter. -/
   def isStruct : Cond → Bool
     | ⟨e, o, _, ch⟩ => if o == 1 || o == 2 then isStructL ch else !(e == 0 || e == 6)
   def isStructL : List Cond → Bool
@@ -150,7 +150,7 @@ def canReorderOr (cs : List Cond) : Bool :=
   !cs.any fun c => writes c || charges c
 
 mutual
-  /-- `isInlined` (the contract's `Topology.isInlined`): no `Dynamic`,
+  /-- `isInlined` (as the contract's packer computes it): no `Dynamic`,
       `Array` or `AbiEncoded` encoding in the subtree. -/
   def isInl : Cond → Bool
     | ⟨e, _, _, ch⟩ => !(e == 2 || e == 4 || e == 5) && isInlL ch

@@ -3,7 +3,7 @@ import Bridge.Base
 /-!
 # Metadata of SDK trees, and what the evaluator reads of it
 
-`isInl c` and `rawSz c`: `Topology.isInlined` and `inlinedSize` of the tree,
+`isInl c` and `rawSz c`: the packer's `isInlined` and `inlinedSize` of the tree,
 which give `D c`'s `inlined` and `size`. `size_tyEq`, `input_tyEq`:
 `AbiLocation.size` and `__input` read a node only through `TyEq`.
 -/

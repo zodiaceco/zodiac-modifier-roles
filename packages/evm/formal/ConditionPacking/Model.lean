@@ -5,9 +5,14 @@ import DecoderFaithfulness.Roles
 
 Transcribed from `packages/evm/contracts` (branch `formal/abi-layer-a`):
 
-* `core/serialize/Topology.sol`        → `childBounds`, `isInlined`, `inlinedSize`
 * `core/serialize/ConditionPacker.sol` → `transform`, `count`, `packNodes`, `pack`
 * `core/serialize/ConditionUnpacker.sol` → `unpackStep`, `unpack`
+
+`ConditionPacker._layout` computes every node's child count, whether it is
+inlined and its inlined size in one bottom-up pass over the array. Here,
+`childBounds`, `isInlined` and `inlinedSize` define the same values node by
+node, by walking the node's children. `Layout.lean` transcribes the pass and
+proves that it computes these values on a BFS-ordered array (`layout_eq`).
 
 Memory is modeled byte by byte (`Mem`), and the assembly blocks are
 transcribed with the EVM's word semantics (`mload`, `mstore`, `shl`, `shr`,
@@ -78,11 +83,12 @@ def opOf? : Nat → Option Operator
   | 21 => some .Bitmask | 22 => some .Custom | 23 => some .WithinRatio
   | 28 => some .WithinAllowance | 30 => some .CallWithinAllowance | _ => none
 
-/-! ## Topology.sol
+/-! ## Child bounds, inlined, inlined size
 
-`Topology` reads only `parent` and `paramType`, so it is defined on those
-(`Shape`). `_transform` rewrites compValues while it calls `isInlined`; that
-cannot change the result. -/
+What `ConditionPacker._layout` computes for a node, defined by walking the
+node's children. These read only `parent` and `paramType`, so they are defined
+on those (`Shape`): `_transform` rewriting compValues cannot change the
+result. -/
 
 structure Shape where
   parent : Nat
@@ -103,7 +109,7 @@ def childBoundsFrom (sh : List Shape) (index : Nat) (j start count : Nat) : Nat 
   else (start, count)
 termination_by sh.length - j
 
-/-- `Topology.childBounds`: `(childStart, childCount)`. -/
+/-- `(childStart, childCount)` of node `index`. -/
 def childBounds (sh : List Shape) (index : Nat) : Nat × Nat :=
   childBoundsFrom sh index (index + 1) 0 0
 
@@ -153,7 +159,8 @@ theorem childBounds_start {sh : List Shape} {index : Nat}
   have := childBoundsFrom_start sh index (index + 1) 0 0 h rfl
   unfold childBounds; omega
 
-/-- `Topology.isInlined`. -/
+/-- Whether node `index` is inlined: neither it nor a descendant is
+    `Dynamic`, `Array` or `AbiEncoded`. -/
 def isInlined (sh : List Shape) (index : Nat) : Bool :=
   let encoding := (sh.getD index default).paramType
   if encoding = .Dynamic ∨ encoding = .Array ∨ encoding = .AbiEncoded then false
@@ -172,8 +179,8 @@ def sizeLoop (isNone : Bool) : List Nat → Nat
   | [] => 0
   | childSize :: rest => if isNone ∧ childSize > 0 then childSize else childSize + sizeLoop isNone rest
 
-/-- `Topology.inlinedSize` (only called on inlined nodes; its `assert` is
-    omitted). -/
+/-- The inlined size of node `index` (only used on inlined nodes; the
+    packer stores 0 for the others). -/
 def inlinedSize (sh : List Shape) (index : Nat) : Nat :=
   let encoding := (sh.getD index default).paramType
   if encoding = .Static then 32
@@ -395,8 +402,8 @@ def maxPluck (fs : List Flat) : Nat :=
   fs.foldl (fun acc f =>
     if f.operator = .Pluck then max acc ((f.compValue.headD 0).val + 1) else acc) 0
 
-/-- What `_validateBFS` checks: every node after the root has an earlier
-    parent, and parents never decrease. -/
+/-- What `Integrity._layout` checks of the order: every node after the root
+    has an earlier parent, and parents never decrease. -/
 structure BFS (fs : List Flat) : Prop where
   parent_lt : ∀ j, 0 < j → j < fs.length → (at! fs j).parent < j
   parent_mono : ∀ j, 0 < j → j + 1 < fs.length → (at! fs j).parent ≤ (at! fs (j + 1)).parent

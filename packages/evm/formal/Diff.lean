@@ -1,5 +1,5 @@
 import DecoderFaithfulness.Roles
-import ConditionPacking.Model
+import ConditionPacking.Layout
 import ConditionCheck.Stored
 import Normalize.Defs
 import Evaluate.Model
@@ -33,7 +33,8 @@ runs `bitmaskCheck` instead and prints the `Status` number it returns
 (0 `Ok`, 8 `BitmaskOverflow`, 9 `BitmaskNotAllowed`, 20 `CalldataOverflow`).
 
 A line `pk <nodes>` prints the buffer `ConditionPacker.pack` produces in the
-packing model (`ConditionPacking/Model.lean`), as hex. A line `up <buffer hex>`
+packing model (`packL` in `ConditionPacking/Layout.lean`, the packer with its
+layout pass), as hex. A line `up <buffer hex>`
 runs the model's `ConditionUnpacker.unpack` on a buffer (avatar = address 0)
 and prints `<maxPluckValue> <nodes>`, the unpacked tree in BFS order as
 `parent:encoding:operator:compValueHex:inlined:size` entries joined by `|`
@@ -221,7 +222,7 @@ def runEval (value allowances hex nodesStr : String) : String :=
   | none => "bad-input"
   | some fs =>
     match ConditionPacking.unpack (zeros 32)
-        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0) with
+        (ConditionPacking.bufMem (ConditionPacking.packL (fun _ => 0) fs) fun _ => 0) with
     | none => "unpack-failed"
     | some (root, maxPluck) =>
       let r := Evaluate.run env (parseHex hex) root maxPluck []
@@ -235,7 +236,7 @@ def runPins (iStr leaf nodesStr : String) : String :=
   | none => "bad-input"
   | some fs =>
     match ConditionPacking.unpack (zeros 32)
-        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0) with
+        (ConditionPacking.bufMem (ConditionPacking.packL (fun _ => 0) fs) fun _ => 0) with
     | none => "unpack-failed"
     | some (root, _) =>
       let lf := if leaf == "t" then EndToEnd.leafTypes else EndToEnd.leafBytes
@@ -322,7 +323,7 @@ def runAuthorize (value op toHex hex allowances unwrappers perms : String) : Str
     match toPackingFlat (parseNodes ns).toList with
     | none => none
     | some fs => ConditionPacking.unpack (zeros 32)
-        (ConditionPacking.bufMem (ConditionPacking.pack (fun _ => 0) fs) fun _ => 0)
+        (ConditionPacking.bufMem (ConditionPacking.packL (fun _ => 0) fs) fun _ => 0)
   let idx (k : Nat) : Option Nat := (ents.zipIdx.find? fun ((t, sl, _, _), _) => keyOf (t, sl) == k).map (·.2)
   let p : EndToEnd.Perms :=
     { clearance := fun t =>
@@ -634,7 +635,7 @@ def runLine (line : String) : String :=
     let fs := (parseNodes nodesStr).toList.map fun n =>
       ({ parent := n.parent, paramType := toEncoding n.encoding, operator := toOperator n.operator,
          compValue := n.compValue } : ConditionPacking.Flat)
-    hexOf (ConditionPacking.pack (fun _ => 0) fs)
+    hexOf (ConditionPacking.packL (fun _ => 0) fs)
   | ["up", hex] => showUnpacked (parseHex hex)
   | ["pn", i, leaf, nodesStr] => runPins i leaf nodesStr
   | "sd" :: hex :: types => runSolDecode hex types

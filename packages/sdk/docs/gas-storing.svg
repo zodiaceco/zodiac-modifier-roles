@@ -46,7 +46,7 @@
 <path d="M78.0,321.2 L112.2,317.3 L155.3,310.1 L204.8,298.4 L258.4,280.5 L314.4,256.6 L371.5,227.8 L379.0,223.8 L385.8,220.0 L392.1,216.6 L398.0,213.3 L403.5,210.2 L405.3,209.2 L429.3,195.6 L463.3,175.7 L487.4,161.3 L521.5,140.7 L545.7,125.9 L564.5,114.4 L565.3,113.9" fill="none" stroke="#1f6feb" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="104" y2="104" stroke="#1f6feb" stroke-width="3"/>
 <text x="640" y="108" fill="#111">v3 packed</text>
-<path d="M78.0,304.4 L112.2,292.9 L155.3,273.2 L204.8,242.8 L258.4,200.3 L314.4,147.0 L371.5,85.7 L379.0,77.3 L385.8,69.5 L392.1,62.3 L398.0,55.6" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M78.0,304.5 L112.2,295.7 L155.3,281.5 L204.8,261.2 L258.4,235.1 L314.3,204.6 L371.5,171.3 L405.2,151.0 L429.3,136.3 L463.2,115.3 L487.4,100.2 L521.4,78.6 L545.6,63.0 L559.0,54.3" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="616" x2="636" y1="122" y2="122" stroke="#c2410c" stroke-width="3"/>
 <text x="640" y="126" fill="#111">v3 checked</text>
 <text x="616" y="170" fill="#555" font-size="11">Every node a check with</text>

@@ -6,10 +6,10 @@ import ConditionCheck.Flat
 `ZipSome`/`ZipEvery` read array locations, and `WithinRatio` values, from the
 slots `Pluck` nodes write (`context.pluckedLocations` / `pluckedValues`). An
 unwritten slot reads as 0: a Zip would decode an array at calldata location 0.
-Integrity rejects trees where that can happen (`_validatePluckAssignments`);
+Integrity rejects trees where that can happen (`_slots`);
 the `...Packed` setters don't.
 
-* `assigned` transcribes `_validatePluckAssignments`: the slots guaranteed to
+* `assigned` is the analysis of Integrity's `_slots`: the slots guaranteed to
   be written once a subtree evaluates successfully, or `none` if a node may
   read an unwritten slot.
 * `Run` models the control flow of `ConditionEvaluator.evaluate` with respect
@@ -51,7 +51,7 @@ def isPlain (op : Operator) : Bool :=
     op == .And || op == .Matches || op == .ArrayTailMatches || op == .ArraySome ||
     op == .ArrayEvery || op == .Slice)
 
-/-! ## The analysis (`_validatePluckAssignments`) -/
+/-! ## The analysis (`_slots`) -/
 
 mutual
   def assigned : Condition → Slots → Option Slots
