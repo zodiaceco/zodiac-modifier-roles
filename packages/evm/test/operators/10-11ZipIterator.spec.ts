@@ -75,11 +75,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -117,11 +120,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
     // Pluck two (uint256,uint256)[] arrays, zip them, require first fields equal
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckTupleArray(0),
-          pluckTupleArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckTupleArray(0), pluckTupleArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -178,11 +184,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -224,11 +233,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -269,12 +281,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
-          pluckArray(2),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1), pluckArray(2)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipSome,
@@ -518,11 +532,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -566,11 +583,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -610,11 +630,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -651,11 +674,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -689,11 +715,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -733,11 +762,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -825,12 +857,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
-              pluckArray(2),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1), pluckArray(2)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -859,11 +893,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -892,11 +929,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -925,14 +965,20 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
               {
-                paramType: Encoding.Static,
-                operator: Operator.Pluck,
-                compValue: "0x01",
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [
+                  pluckArray(0),
+                  {
+                    paramType: Encoding.Static,
+                    operator: Operator.Pluck,
+                    compValue: "0x01",
+                  },
+                ],
               },
               {
                 paramType: Encoding.None,
@@ -961,11 +1007,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -990,11 +1039,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -1031,11 +1083,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -1064,17 +1119,19 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
     it("reverts UnsuitableChildCount when tuple child has a non-structural child", async () => {
       const { roles, allowTarget } = await loadFixture(setupTestContract);
 
-      // TypeTree counts only structural children (2) when matching against
-      // compValue length, but the evaluator iterates the raw child list (3)
-      // and would read compValue out of bounds. Must be rejected at setup.
+      // Every field of the Tuple is evaluated at an element of the array in
+      // its slot, so a field that reads no calldata has no place in it.
       await expect(
         allowTarget(
           flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
+            paramType: Encoding.None,
+            operator: Operator.And,
             children: [
-              pluckArray(0),
-              pluckArray(1),
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [pluckArray(0), pluckArray(1)],
+              },
               {
                 paramType: Encoding.None,
                 operator: Operator.ZipEvery,
@@ -1084,7 +1141,6 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     paramType: Encoding.Tuple,
                     operator: Operator.Pass,
                     children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
                       { paramType: Encoding.Static, operator: Operator.Pass },
                       { paramType: Encoding.None, operator: Operator.Pass },
                     ],

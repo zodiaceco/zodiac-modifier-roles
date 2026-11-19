@@ -8,8 +8,6 @@ import {Status} from "./Authorization.sol";
 
 /**
  * @title IRolesError - All custom errors emitted by the Roles Mod
- *
- * @author gnosisguild
  */
 interface IRolesError {
     /*//////////////////////////////////////////////////////////////
@@ -58,13 +56,6 @@ interface IRolesError {
     error DelegateCallNotAllowed(address target);
 
     /*//////////////////////////////////////////////////////////////
-                            DECODING ERRORS
-    //////////////////////////////////////////////////////////////*/
-
-    /// Attempted to read beyond calldata bounds
-    error CalldataOutOfBounds();
-
-    /*//////////////////////////////////////////////////////////////
                            INTEGRITY ERRORS
     //////////////////////////////////////////////////////////////*/
 
@@ -73,9 +64,6 @@ interface IRolesError {
 
     /// Condition tree is not in BFS (breadth-first search) order
     error NotBFS();
-
-    /// Packed condition buffer is malformed (not produced by pack())
-    error MalformedConditionBuffer();
 
     /// Parameter type is unsuitable for the operator at given index
     error UnsuitableParameterType(uint256 index);
@@ -94,9 +82,6 @@ interface IRolesError {
 
     /// Operator is not supported at given index
     error UnsupportedOperator(uint256 index);
-
-    /// Parent node is unsuitable for the child at given index
-    error UnsuitableParent(uint256 index);
 
     /// Child count is unsuitable for the node at given index
     error UnsuitableChildCount(uint256 index);

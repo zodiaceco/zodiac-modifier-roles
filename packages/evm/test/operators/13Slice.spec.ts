@@ -4,6 +4,8 @@ import { AbiCoder, hexlify, randomBytes, solidityPacked } from "ethers";
 
 import { network } from "hardhat";
 
+import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../setup.js";
 import {
   Encoding,
@@ -395,10 +397,12 @@ describe("Operator - Slice", () => {
     });
 
     it("propagates the narrowed frame through nested slices", async () => {
-      const { roles, allowFunction, invoke } =
+      const { roles, roleKey, testContractAddress, fn, invoke } =
         await loadFixture(setupDynamicParam);
 
-      await allowFunction(
+      // Integrity rejects a Slice of a Slice: packed without it, to cover how it
+      // is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -423,7 +427,13 @@ describe("Operator - Slice", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.allowFunctionPacked(
+        roleKey,
+        testContractAddress,
+        fn.selector,
+        hexlify(packConditions(flat)),
         ExecutionOptions.Both,
       );
 

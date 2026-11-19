@@ -2,8 +2,9 @@
  * End to end on the Roles contract: trees checked and packed by the SDK
  * (`checkAndPack`, packages/sdk/src/main/condition/packConditions.ts) are
  * stored with `allowFunctionPacked` and enforced as intended, including
- * shapes `allowFunction` (Integrity) rejects although they are read correctly
- * (INTEGRITY_BACKLOG.md items 4 and 10).
+ * shapes `allowFunction` (Integrity) used to reject although they are read
+ * correctly (INTEGRITY_BACKLOG.md items 4 and 10). Integrity now accepts
+ * them too.
  */
 import { expect } from "chai";
 import { AbiCoder, Interface } from "ethers";
@@ -137,7 +138,7 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
     );
   });
 
-  it("stores and enforces Slice next to a plain check (Integrity rejects it)", async () => {
+  it("stores and enforces Slice next to a plain check", async () => {
     const { roles, invoke, store, storeValidated } = await setup("fn(uint256)");
     // last byte == 1 and value < 1000
     const tree = {
@@ -163,10 +164,7 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
         },
       ],
     };
-    await expect(storeValidated(tree)).to.be.revertedWithCustomError(
-      roles,
-      "UnsuitableChildTypeTree",
-    );
+    await expect(storeValidated(tree)).to.not.be.revert(ethers);
     await store(tree);
     await expect(invoke(257)).to.not.be.revert(ethers);
     await expect(invoke(2)).to.be.revertedWithCustomError(...violation(roles));
@@ -175,7 +173,7 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
     );
   });
 
-  it("stores and enforces a Zip next to a tuple check (Integrity rejects it)", async () => {
+  it("stores and enforces a Zip next to a tuple check", async () => {
     const { roles, invoke, store, storeValidated } = await setup(
       "fn((uint256[], uint256[], string))",
     );
@@ -202,10 +200,7 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
         },
       ],
     };
-    await expect(storeValidated(tree)).to.be.revertedWithCustomError(
-      roles,
-      "UnsuitableChildTypeTree",
-    );
+    await expect(storeValidated(tree)).to.not.be.revert(ethers);
     await store(tree);
     await expect(invoke([[1, 2], [7, 7], "hi"])).to.not.be.revert(ethers);
     await expect(invoke([[1, 2], [7, 8], "hi"])).to.be.revertedWithCustomError(

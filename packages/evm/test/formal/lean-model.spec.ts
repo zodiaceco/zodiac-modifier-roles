@@ -256,7 +256,7 @@ function passFor(t: Ty): Node {
     case "tuple":
       return {
         paramType: Encoding.Tuple,
-        operator: Operator.Matches,
+        operator: Operator.Pass,
         children: t.cs.map(passFor),
       };
     case "array":

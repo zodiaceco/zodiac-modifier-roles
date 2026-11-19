@@ -1,9 +1,11 @@
 import { expect } from "chai";
 import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface } from "ethers";
+import { AbiCoder, Interface, hexlify } from "ethers";
 
 import { network } from "hardhat";
 
+import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions as sdkPackConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../setup.js";
 import {
   Encoding,
@@ -427,8 +429,8 @@ describe("AbiLocation", () => {
 
       const target = [10, 20];
 
-      const packed = await packConditions(
-        roles,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -449,8 +451,9 @@ describe("AbiLocation", () => {
               ],
             },
           ],
-        }),
+        }) as any,
       );
+      const packed = hexlify(sdkPackConditions(flat));
       await roles.allowFunctionPacked(
         roleKey,
         testContractAddress,
@@ -492,8 +495,8 @@ describe("AbiLocation", () => {
 
       const target = [42, "0xaabbccdd"];
 
-      const packed = await packConditions(
-        roles,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -514,8 +517,9 @@ describe("AbiLocation", () => {
               ],
             },
           ],
-        }),
+        }) as any,
       );
+      const packed = hexlify(sdkPackConditions(flat));
       await roles.allowFunctionPacked(
         roleKey,
         testContractAddress,
@@ -957,8 +961,8 @@ describe("AbiLocation", () => {
 
       const target = [10, 20, 30];
 
-      const packed = await packConditions(
-        roles,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -978,8 +982,9 @@ describe("AbiLocation", () => {
               ],
             },
           ],
-        }),
+        }) as any,
       );
+      const packed = hexlify(sdkPackConditions(flat));
       await roles.allowFunctionPacked(
         roleKey,
         testContractAddress,
@@ -1021,8 +1026,8 @@ describe("AbiLocation", () => {
 
       const target = ["0xaabb", "0xccdd"];
 
-      const packed = await packConditions(
-        roles,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -1042,8 +1047,9 @@ describe("AbiLocation", () => {
               ],
             },
           ],
-        }),
+        }) as any,
       );
+      const packed = hexlify(sdkPackConditions(flat));
       await roles.allowFunctionPacked(
         roleKey,
         testContractAddress,

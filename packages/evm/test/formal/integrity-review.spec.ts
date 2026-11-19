@@ -1,11 +1,13 @@
 /**
  * The examples of packages/evm/formal/INTEGRITY_REVIEW.md: one tree per
- * class that `allowFunction` (Integrity) rejects with
- * `UnsuitableChildTypeTree` and the SDK check (`checkAndPack`) accepts.
- * Each is stored with `allowFunctionPacked` and enforced as intended.
+ * class that `allowFunction` (Integrity) used to reject with
+ * `UnsuitableChildTypeTree` while the SDK check (`checkAndPack`) accepted
+ * it. Integrity now follows the same rules: each is stored with
+ * `allowFunction`, packs to the buffer the SDK produces, and is enforced as
+ * intended.
  */
 import { expect } from "chai";
-import { AbiCoder, Interface } from "ethers";
+import { AbiCoder, Interface, hexlify } from "ethers";
 import { network } from "hardhat";
 
 import { checkAndPack } from "../../../sdk/src/main/condition/packConditions.js";
@@ -63,21 +65,15 @@ async function setup(signature: string) {
         0,
       );
   const check = async (tree: any) => {
-    await expect(
-      env.roles.allowFunction(
-        env.roleKey,
-        env.testContractAddress,
-        fn.selector,
-        flattenCondition(tree),
-        ExecutionOptions.None,
-      ),
-    ).to.be.revertedWithCustomError(env.roles, "UnsuitableChildTypeTree");
     const { packed } = checkAndPack(flattenCondition(tree) as any);
-    await env.roles.allowFunctionPacked(
+    expect(await env.roles.packConditions(flattenCondition(tree))).to.equal(
+      hexlify(packed),
+    );
+    await env.roles.allowFunction(
       env.roleKey,
       env.testContractAddress,
       fn.selector,
-      packed,
+      flattenCondition(tree),
       ExecutionOptions.None,
     );
   };
@@ -91,7 +87,7 @@ async function setup(signature: string) {
   return { check, ok, denied };
 }
 
-describe("Integrity review: trees Integrity rejects, enforced as intended", () => {
+describe("Integrity review: trees Integrity used to reject, enforced as intended", () => {
   it("1. checks of a prefix of one tuple, side by side", async () => {
     const { check, ok, denied } = await setup("fn((bytes, uint256, uint256))");
     // x.b == 1 || x.c == 2, each branch listing only the fields it checks

@@ -6,35 +6,11 @@ import type {
   Roles,
 } from "../typechain-types/contracts/Roles.js";
 
-export const logGas = async (
-  message: string,
-  tx: Promise<any>,
-): Promise<any> => {
-  return tx.then(async (result) => {
-    const receipt = await result.wait();
-    console.log(
-      "           Used",
-      receipt.gasUsed.toNumber(),
-      `gas for >${message}<`,
-    );
-    return result;
-  });
-};
-
 export interface MetaTransaction {
   to: string;
   value: BigNumberish;
   data: string;
   operation: number;
-}
-
-export interface SafeTransaction extends MetaTransaction {
-  safeTxGas: string | number;
-  baseGas: string | number;
-  gasPrice: string | number;
-  gasToken: string;
-  refundReceiver: string;
-  nonce: string | number;
 }
 
 export enum Encoding {
@@ -164,10 +140,6 @@ export enum ConditionViolationStatus {
   NotEveryZippedElementPasses,
 }
 
-export function removeTrailingOffset(data: string) {
-  return `0x${data.substring(66)}`;
-}
-
 export const encodeMultisendPayload = (txs: MetaTransaction[]): string => {
   return (
     "0x" +
@@ -181,9 +153,6 @@ export const encodeMultisendPayload = (txs: MetaTransaction[]): string => {
       .join("")
   );
 };
-
-export const BYTES32_ZERO =
-  "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 interface Condition {
   paramType: Encoding;

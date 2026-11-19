@@ -73,14 +73,11 @@ import hre, { network } from "hardhat";
 
 import {
   checkStored,
+  checkStoredConditions,
   toFlatNodes,
   tyKey,
 } from "../../../sdk/src/main/condition/checkStored.js";
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
-import {
-  checkStoredConditions,
-  toFlatNodes,
-} from "../../../sdk/src/main/condition/checkStored.js";
 import {
   checkAndPack,
   packConditions,

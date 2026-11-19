@@ -8,8 +8,6 @@ import "../common/AllowanceConsumer.sol";
 import "./serialize/ConditionStorer.sol";
 import "./Storage.sol";
 
-import {Clearance} from "../types/Permission.sol";
-
 /*
  * Permission Model
  *
@@ -66,8 +64,6 @@ import {Clearance} from "../types/Permission.sol";
  *
  *      To produce a buffer, call the read-only packConditions() off-chain
  *      (eth_call): validation runs offchain, only the storage write is paid.
- *
- * @author  gnosisguild
  */
 abstract contract Setup is RolesStorage {
     /*//////////////////////////////////////////////////////////////
