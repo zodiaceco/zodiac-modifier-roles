@@ -15,261 +15,176 @@ import "../../types/Types.sol";
 
 /**
  * @title ConditionEvaluator
- * @notice Evaluates condition trees on scoped function calls.
+ * @notice Evaluates a condition tree against transaction calldata, returning
+ *         allowance consumptions on pass or a violation on failure.
+ *
+ * @dev Assumes a tree validated by `Integrity` (valid `compValue` shapes,
+ *      child counts, and pluck slots written before read) and does not
+ *      re-check it.
+ *
+ *      Traverses calldata via monotonically narrowed slices (see AbiLocation).
+ *      Out-of-bounds or non-canonical calldata returns `CalldataOverflow` so
+ *      `Or`, `ArraySome`, and `ZipSome` continue to the next candidate;
+ *      unsupported operators and overflows in `WithinRatio` / scaled
+ *      `WithinAllowance` revert.
+ *
+ *      `consumptions` is copy-on-write (failing branches discard updates;
+ *      violations carry no consumptions). `context.pluckedValues` and
+ *      `context.pluckedLocations` are mutated in place, so writes survive
+ *      failing branches.
+ *
+ *      Violations: `And`, `Matches`, and `ArrayTailMatches` forward the
+ *      failing child's result; `Or`, `ArraySome`, and `ZipSome` report
+ *      themselves; `ArrayEvery` and `ZipEvery` replace `status` while keeping
+ *      the failing child's `violatedNodeIndex` and `calldataOffset`.
+ *
  * @author gnosisguild
  */
 library ConditionEvaluator {
+    /**
+     * @notice Evaluates `condition` against the transaction in `context`.
+     * @param condition    Root of the condition tree.
+     * @param consumptions Allowances consumed so far (copy-on-write).
+     * @param context      Transaction metadata (with `data` packed via
+     *                     `AbiLocation.toSpan`) and pre-allocated pluck slots
+     *                     (mutated in place).
+     * @return             `Status.Ok` with updated `consumptions`, or a
+     *                     violation with `violatedNodeIndex` and `calldataOffset`.
+     */
     function evaluate(
-        bytes calldata data,
-        uint256 location,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) internal view returns (Result memory) {
-        Operator operator = condition.operator;
-
-        if (operator < Operator.EqualTo) {
-            if (operator == Operator.Pass) {
-                return _ok(consumptions);
-            } else if (operator == Operator.Matches) {
-                location = location > 0 &&
-                    condition.encoding == Encoding.AbiEncoded
-                    ? location + 32
-                    : location;
-                return
-                    _matches(data, location, condition, consumptions, context);
-            } else if (operator == Operator.And) {
-                return _and(data, location, condition, consumptions, context);
-            } else if (operator == Operator.Or) {
-                return _or(data, location, condition, consumptions, context);
-            } else if (operator == Operator.Slice) {
-                return _slice(data, location, condition, consumptions, context);
-            } else if (operator == Operator.Pluck) {
-                return _pluck(data, location, condition, consumptions, context);
-            } else if (operator == Operator.Empty) {
-                return
-                    _result(
-                        data.length == 0 ? Status.Ok : Status.CalldataNotEmpty,
-                        0,
-                        condition,
-                        consumptions
-                    );
-            } else if (
-                operator == Operator.ArraySome ||
-                operator == Operator.ArrayEvery
-            ) {
-                return
-                    _arrayIterator(
-                        data,
-                        location,
-                        condition,
-                        consumptions,
-                        context
-                    );
-            } else if (operator == Operator.ArrayTailMatches) {
-                return
-                    _arrayTailMatches(
-                        data,
-                        location,
-                        condition,
-                        consumptions,
-                        context
-                    );
-            } else if (
-                operator == Operator.ZipSome || operator == Operator.ZipEvery
-            ) {
-                return
-                    _zipIterator(
-                        data,
-                        location,
-                        condition,
-                        consumptions,
-                        context
-                    );
-            }
-        } else {
-            if (operator <= Operator.SignedIntLessThan) {
-                (bytes32 value, bool overflow) = __input(
-                    data,
-                    location,
-                    condition,
-                    context
-                );
-
-                return
-                    _result(
-                        overflow
-                            ? Status.CalldataOverflow
-                            : operator <= Operator.LessThan
-                                ? __compare(value, condition)
-                                : __compareSigned(value, condition),
-                        location,
-                        condition,
-                        consumptions
-                    );
-            } else if (operator == Operator.Bitmask) {
-                return
-                    _result(
-                        BitmaskChecker.check(
-                            data,
-                            location,
-                            condition.compValue,
-                            condition.inlined,
-                            condition.size
-                        ),
-                        location,
-                        condition,
-                        consumptions
-                    );
-            } else if (operator == Operator.WithinAllowance) {
-                (bytes32 value, bool overflow) = __input(
-                    data,
-                    location,
-                    condition,
-                    context
-                );
-                if (overflow) {
-                    return
-                        _violation(
-                            Status.CalldataOverflow,
-                            location,
-                            condition
-                        );
-                }
-                return
-                    __allowance(
-                        uint256(value),
-                        location,
-                        condition,
-                        consumptions
-                    );
-            } else if (operator == Operator.CallWithinAllowance) {
-                return __allowance(1, location, condition, consumptions);
-            } else if (operator == Operator.WithinRatio) {
-                return
-                    _result(
-                        WithinRatioChecker.check(
-                            condition.compValue,
-                            context.pluckedValues
-                        ),
-                        location,
-                        condition,
-                        consumptions
-                    );
-            } else if (operator == Operator.Custom) {
-                uint256 size = condition.size != 0
-                    ? condition.size
-                    : AbiLocation.size(data, location, condition);
-                (
-                    Status status,
-                    Consumption[] memory nextConsumptions
-                ) = CustomConditionChecker.check(
-                        condition.compValue,
-                        context.to,
-                        context.value,
-                        data,
-                        context.operation,
-                        location,
-                        size,
-                        consumptions,
-                        context.pluckedValues
-                    );
-                return _result(status, location, condition, nextConsumptions);
-            }
-        }
-
-        revert IRolesError.UnsupportedOperator(condition.index);
+        return
+            _evaluate(
+                AbiLocation.fromSpan(context.data),
+                condition.inlineSize,
+                condition,
+                consumptions,
+                context
+            );
     }
 
-    function _matches(
-        bytes calldata data,
-        uint256 location,
+    /**
+     * @dev Evaluates one node at `dataSlice` (exact slice when inlined, or
+     *      the suffix from the child's offset to the end of its parent when
+     *      referenced). `inlineSize` is the fixed byte size of an inlined
+     *      operand (`condition.inlineSize` or an enclosing `Slice` window),
+     *      or `0` when sized dynamically from calldata.
+     */
+    function _evaluate(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) private view returns (Result memory result) {
-        uint256 length = condition.compValue.length;
-        if (length > 0) {
-            /*
-             * Leading Bytes Validation
-             *
-             * AbiEncoded + Matches may carry an optional prefix (N <= 32,
-             * enforced by Integrity) that must match the first N bytes of
-             * calldata at location:
-             *
-             *   data[location:location + length] == compValue
-             *
-             * The 2-byte count preceding the prefix in the stored payload is
-             * split out by the unpacker into the node's `leadingBytes`, so
-             * compValue is exactly the prefix.
-             *
-             * Both sides are compared on a 32-byte word basis: right-aligned
-             * in bytes32, shifting out the trailing 32 - N bytes (shift
-             * operands are bits, hence * 8). No slice is allocated.
-             */
+        // Compare as uint256 to avoid per-branch enum range checks.
+        // Operators >= EqualTo are leaf checks, splitting dispatch in half;
+        // within each half, the most frequent operators come first.
+        uint256 operator = uint256(condition.operator);
+        Status status;
 
-            // Check bounds before reading leading bytes
-            if (location + length > data.length) {
-                return _violation(Status.CalldataOverflow, location, condition);
-            }
-
-            uint256 shift = (32 - length) * 8;
-            bytes32 expected = bytes32(condition.compValue) >> shift;
-            bytes32 actual = bytes32(data[location:]) >> shift;
-
-            if (expected != actual) {
-                return
-                    _violation(
-                        Status.LeadingBytesNotAMatch,
-                        location,
-                        condition
+        if (operator >= uint256(Operator.EqualTo)) {
+            if (operator <= uint256(Operator.SignedIntLessThan)) {
+                status = _compare(dataSlice, inlineSize, condition, context);
+            } else if (operator == uint256(Operator.WithinAllowance)) {
+                (bytes32 word, , bool ok) = _read(
+                    dataSlice,
+                    inlineSize,
+                    condition,
+                    context
+                );
+                if (ok) {
+                    (status, consumptions) = WithinAllowanceChecker.check(
+                        consumptions,
+                        uint256(word),
+                        condition.compValue
                     );
+                } else {
+                    status = Status.CalldataOverflow;
+                }
+            } else if (operator == uint256(Operator.CallWithinAllowance)) {
+                (status, consumptions) = WithinAllowanceChecker.check(
+                    consumptions,
+                    1,
+                    condition.compValue
+                );
+            } else if (operator == uint256(Operator.Bitmask)) {
+                status = _bitmask(dataSlice, inlineSize, condition);
+            } else if (operator == uint256(Operator.Custom)) {
+                (status, consumptions) = _custom(
+                    dataSlice,
+                    inlineSize,
+                    condition,
+                    consumptions,
+                    context
+                );
+            } else if (operator == uint256(Operator.WithinRatio)) {
+                status = WithinRatioChecker.check(
+                    condition.compValue,
+                    context.pluckedValues
+                );
+            } else {
+                revert IRolesError.UnsupportedOperator(condition.index);
             }
+        } else if (operator == uint256(Operator.Pass)) {
+            status = Status.Ok;
+        } else if (operator == uint256(Operator.Matches)) {
+            return _matches(dataSlice, condition, consumptions, context);
+        } else if (operator == uint256(Operator.And)) {
+            return _and(dataSlice, condition, consumptions, context);
+        } else if (operator == uint256(Operator.Or)) {
+            return _or(dataSlice, condition, consumptions, context);
+        } else if (operator == uint256(Operator.Pluck)) {
+            status = _pluck(dataSlice, inlineSize, condition, context);
+        } else if (operator == uint256(Operator.Slice)) {
+            return
+                _slice(dataSlice, inlineSize, condition, consumptions, context);
+        } else if (
+            operator == uint256(Operator.ArraySome) ||
+            operator == uint256(Operator.ArrayEvery)
+        ) {
+            return _arrayIterator(dataSlice, condition, consumptions, context);
+        } else if (operator == uint256(Operator.ArrayTailMatches)) {
+            return
+                _arrayTailMatches(dataSlice, condition, consumptions, context);
+        } else if (
+            operator == uint256(Operator.ZipSome) ||
+            operator == uint256(Operator.ZipEvery)
+        ) {
+            return _zipIterator(dataSlice, condition, consumptions, context);
+        } else if (operator == uint256(Operator.Empty)) {
+            // Checks the whole transaction calldata, not `dataSlice`.
+            status = AbiLocation.fromSpan(context.data).length == 0
+                ? Status.Ok
+                : Status.CalldataNotEmpty;
+        } else {
+            revert IRolesError.UnsupportedOperator(condition.index);
         }
 
-        // Decode children locations - all children are structural
-        (uint256[] memory childLocations, bool overflow) = AbiLocation.children(
-            data,
-            location + condition.leadingBytes,
-            condition
-        );
-
-        if (overflow) {
-            return _violation(Status.CalldataOverflow, location, condition);
+        if (status != Status.Ok) {
+            return _violation(status, dataSlice, condition, context);
         }
-
-        if (condition.children.length != childLocations.length) {
-            return _violation(Status.ParameterNotAMatch, location, condition);
-        }
-
         result.consumptions = consumptions;
-        for (uint256 i; i < childLocations.length; ++i) {
-            result = evaluate(
-                data,
-                childLocations[i],
-                condition.children[i],
-                result.consumptions,
-                context
-            );
-            if (result.status != Status.Ok) {
-                return result;
-            }
-        }
-        return result;
     }
 
+    /*//////////////////////////////////////////////////////////////
+                             NAVIGATION
+    //////////////////////////////////////////////////////////////*/
+
     function _and(
-        bytes calldata data,
-        uint256 location,
+        bytes calldata dataSlice,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) private view returns (Result memory result) {
         result.consumptions = consumptions;
         for (uint256 i; i < condition.children.length; ++i) {
-            result = evaluate(
-                data,
-                location,
+            result = _evaluate(
+                dataSlice,
+                condition.children[i].inlineSize,
                 condition.children[i],
                 result.consumptions,
                 context
@@ -278,20 +193,18 @@ library ConditionEvaluator {
                 return result;
             }
         }
-        return result;
     }
 
     function _or(
-        bytes calldata data,
-        uint256 location,
+        bytes calldata dataSlice,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) private view returns (Result memory result) {
         for (uint256 i; i < condition.children.length; ++i) {
-            result = evaluate(
-                data,
-                location,
+            result = _evaluate(
+                dataSlice,
+                condition.children[i].inlineSize,
                 condition.children[i],
                 consumptions,
                 context
@@ -301,33 +214,134 @@ library ConditionEvaluator {
             }
         }
 
-        return _violation(Status.OrViolation, location, condition);
+        return _violation(Status.OrViolation, dataSlice, condition, context);
     }
 
+    /**
+     * @dev Evaluates `condition.children` in order against a container:
+     *      - `AbiEncoded`: parameters, after stripping and checking leading bytes
+     *      - `Tuple`:      fields
+     *      - `Array`:      elements, length must equal `condition.children.length`
+     *
+     *      Trailing parameters (`AbiEncoded`) and fields (`Tuple`) may be omitted.
+     */
+    function _matches(
+        bytes calldata dataSlice,
+        Condition memory condition,
+        Consumption[] memory consumptions,
+        Context memory context
+    ) private view returns (Result memory result) {
+        bytes calldata body = dataSlice;
+
+        if (condition.encoding == Encoding.AbiEncoded) {
+            // Root calldata starts at offset 0 with no length word. Every nested
+            // AbiEncoded is length-prefixed `bytes` at offset >= 32 (past its
+            // head slot).
+            bool ok = true;
+            if (AbiLocation.offsetOf(context.data, dataSlice) != 0) {
+                (body, ok) = AbiLocation.slice(dataSlice, 0);
+            }
+            if (!ok || condition.leadingBytes > body.length) {
+                return
+                    _violation(
+                        Status.CalldataOverflow,
+                        dataSlice,
+                        condition,
+                        context
+                    );
+            }
+            dataSlice = body;
+            body = body[condition.leadingBytes:];
+
+            bytes memory leading = condition.compValue;
+            if (leading.length > 0) {
+                // When set, require the payload to start with `leading` (1–32
+                // bytes): load both as left-aligned words and shift out
+                // trailing bytes.
+                uint256 shift = (32 - leading.length) * 8;
+                if (bytes32(leading) >> shift != bytes32(dataSlice) >> shift) {
+                    return
+                        _violation(
+                            Status.LeadingBytesNotAMatch,
+                            dataSlice,
+                            condition,
+                            context
+                        );
+                }
+            }
+        }
+
+        Span[] memory children;
+        {
+            bool ok;
+            (children, ok) = AbiLocation.children(body, condition);
+            if (!ok) {
+                return
+                    _violation(
+                        Status.CalldataOverflow,
+                        dataSlice,
+                        condition,
+                        context
+                    );
+            }
+            if (condition.children.length != children.length) {
+                return
+                    _violation(
+                        Status.ParameterNotAMatch,
+                        dataSlice,
+                        condition,
+                        context
+                    );
+            }
+        }
+
+        result.consumptions = consumptions;
+        for (uint256 i; i < children.length; ++i) {
+            result = _evaluate(
+                AbiLocation.fromSpan(children[i]),
+                condition.children[i].inlineSize,
+                condition.children[i],
+                result.consumptions,
+                context
+            );
+            if (result.status != Status.Ok) {
+                return result;
+            }
+        }
+    }
+
+    /**
+     * @dev `ArrayEvery`: passes iff every element passes (threading
+     *      consumptions; vacuous on empty arrays). `ArraySome`: returns the
+     *      first passing element (from input consumptions).
+     */
     function _arrayIterator(
-        bytes calldata data,
-        uint256 location,
+        bytes calldata dataSlice,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) private view returns (Result memory result) {
         bool every = condition.operator == Operator.ArrayEvery;
 
-        (uint256[] memory childLocations, bool overflow) = AbiLocation.children(
-            data,
-            location,
+        (Span[] memory children, bool ok) = AbiLocation.children(
+            dataSlice,
             condition
         );
-
-        if (overflow) {
-            return _violation(Status.CalldataOverflow, location, condition);
+        if (!ok) {
+            return
+                _violation(
+                    Status.CalldataOverflow,
+                    dataSlice,
+                    condition,
+                    context
+                );
         }
 
         result.consumptions = consumptions;
-        for (uint256 i; i < childLocations.length; ++i) {
-            result = evaluate(
-                data,
-                childLocations[i],
+        for (uint256 i; i < children.length; ++i) {
+            result = _evaluate(
+                AbiLocation.fromSpan(children[i]),
+                condition.children[0].inlineSize,
                 condition.children[0],
                 every ? result.consumptions : consumptions,
                 context
@@ -348,56 +362,70 @@ library ConditionEvaluator {
         return
             every
                 ? result
-                : _violation(Status.NoArrayElementPasses, location, condition);
+                : _violation(
+                    Status.NoArrayElementPasses,
+                    dataSlice,
+                    condition,
+                    context
+                );
     }
 
+    /**
+     * @dev Evaluates `condition.children` in order against the array's tail.
+     */
     function _arrayTailMatches(
-        bytes calldata data,
-        uint256 location,
+        bytes calldata dataSlice,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
     ) private view returns (Result memory result) {
-        // Decode array element locations
-        (uint256[] memory childLocations, bool overflow) = AbiLocation.children(
-            data,
-            location,
+        (Span[] memory children, bool ok) = AbiLocation.children(
+            dataSlice,
             condition
         );
-
-        if (overflow) {
-            return _violation(Status.CalldataOverflow, location, condition);
+        if (!ok) {
+            return
+                _violation(
+                    Status.CalldataOverflow,
+                    dataSlice,
+                    condition,
+                    context
+                );
         }
 
         uint256 conditionCount = condition.children.length;
-        uint256 childCount = childLocations.length;
-
-        if (childCount < conditionCount) {
-            return _violation(Status.ParameterNotAMatch, location, condition);
+        if (children.length < conditionCount) {
+            return
+                _violation(
+                    Status.ParameterNotAMatch,
+                    dataSlice,
+                    condition,
+                    context
+                );
         }
-
-        uint256 tailOffset = childCount - conditionCount;
+        uint256 tailOffset = children.length - conditionCount;
 
         result.consumptions = consumptions;
         for (uint256 i; i < conditionCount; ++i) {
-            result = evaluate(
-                data,
-                childLocations[tailOffset + i],
+            result = _evaluate(
+                AbiLocation.fromSpan(children[tailOffset + i]),
+                condition.children[i].inlineSize,
                 condition.children[i],
                 result.consumptions,
                 context
             );
-
             if (result.status != Status.Ok) {
                 return result;
             }
         }
-        return result;
     }
 
+    /**
+     * @dev Walks the plucked arrays in `compValue` in lockstep, evaluating
+     *      `condition.children[0].children[f]` on element `i` of array `f`.
+     */
     function _zipIterator(
-        bytes calldata data,
-        uint256 location,
+        bytes calldata dataSlice,
         Condition memory condition,
         Consumption[] memory consumptions,
         Context memory context
@@ -405,44 +433,39 @@ library ConditionEvaluator {
         bool every = condition.operator == Operator.ZipEvery;
 
         (
-            uint256[][] memory locations,
+            Span[][] memory elements,
             uint256 length,
             Status status
-        ) = _zipLocations(data, condition, context);
-
+        ) = _zipElements(condition, context);
         if (status != Status.Ok) {
-            return _violation(status, location, condition);
+            return _violation(status, dataSlice, condition, context);
         }
 
         Condition[] memory fields = condition.children[0].children;
 
         result.consumptions = consumptions;
         for (uint256 i; i < length; ++i) {
-            // For ZipSome, we always start from base consumptions.
+            // ZipSome: every step starts from the consumptions given
             if (!every) result.consumptions = consumptions;
 
-            bool tuplePasses = true;
             for (uint256 f; f < fields.length; ++f) {
-                result = evaluate(
-                    data,
-                    locations[f][i],
+                result = _evaluate(
+                    AbiLocation.fromSpan(elements[f][i]),
+                    fields[f].inlineSize,
                     fields[f],
                     result.consumptions,
                     context
                 );
-                if (result.status != Status.Ok) {
-                    tuplePasses = false;
-                    break;
-                }
+                if (result.status != Status.Ok) break;
             }
 
             if (every) {
-                if (!tuplePasses) {
+                if (result.status != Status.Ok) {
                     result.status = Status.NotEveryZippedElementPasses;
                     return result;
                 }
             } else {
-                if (tuplePasses) {
+                if (result.status == Status.Ok) {
                     return result;
                 }
             }
@@ -451,288 +474,274 @@ library ConditionEvaluator {
         return
             every
                 ? result
-                : _violation(Status.NoZippedElementPasses, location, condition);
-    }
-
-    /*
-     * Slice computes a new location pointing to a byte-range within the
-     * current location, so the child transparently evaluates against that
-     * slice.
-     *
-     * The child will read the slice via __input, which right-aligns values
-     * <=32 bytes to match comparison compValue encoding.
-     */
-    function _slice(
-        bytes calldata data,
-        uint256 location,
-        Condition memory condition,
-        Consumption[] memory consumptions,
-        Context memory context
-    ) private view returns (Result memory result) {
-        /*
-         * compValue layout (3 bytes):
-         *
-         *   ┌──────────────────────┬──────────────────────┐
-         *   │ shift (16 bits)      │ size (8 bits)        │
-         *   └──────────────────────┴──────────────────────┘
-         *
-         *   shift  byte offset into the operand content at which the window starts
-         *   size   number of bytes to extract (right-aligned into a bytes32 word)
-         */
-        uint256 shift = uint256(uint16(bytes2(condition.compValue)));
-        uint256 size = uint256(uint8(condition.compValue[2]));
-
-        /*
-         * Integrity guarantees Slice targets either Static or Dynamic values
-         * and has one Static child. Normalize both cases to one byte range:
-         * - Static starts at `location` and is bounded by `condition.size`.
-         * - Dynamic starts after the length word and is bounded by its
-         *   declared byte length, not by ABI padding.
-         */
-        uint256 length = condition.size;
-        if (!condition.inlined) {
-            if (location + 32 > data.length) {
-                return _violation(Status.CalldataOverflow, location, condition);
-            }
-
-            assembly {
-                length := calldataload(add(data.offset, location))
-            }
-        }
-
-        if (shift + size > length) {
-            return _violation(Status.CalldataOverflow, location, condition);
-        }
-
-        Condition memory sliced = condition.children[0];
-        sliced.size = size;
-
-        return
-            evaluate(
-                data,
-                location + (condition.inlined ? 0 : 32) + shift,
-                sliced,
-                consumptions,
-                context
-            );
-    }
-
-    function _pluck(
-        bytes calldata data,
-        uint256 location,
-        Condition memory condition,
-        Consumption[] memory consumptions,
-        Context memory context
-    ) private pure returns (Result memory) {
-        (bytes32 pluckedValue, bool overflow) = __input(
-            data,
-            location,
-            condition,
-            context
-        );
-        if (overflow) {
-            return _violation(Status.CalldataOverflow, location, condition);
-        }
-
-        uint256 index = uint8(condition.compValue[0]);
-        context.pluckedLocations[index] = location;
-        context.pluckedValues[index] = pluckedValue;
-
-        return _ok(consumptions);
-    }
-
-    function __compare(
-        bytes32 value,
-        Condition memory condition
-    ) private pure returns (Status) {
-        bytes32 compValue = condition.compValue.length > 32
-            ? keccak256(condition.compValue)
-            : bytes32(condition.compValue);
-
-        if (condition.operator == Operator.EqualTo) {
-            return value == compValue ? Status.Ok : Status.ParameterNotAllowed;
-        }
-        if (condition.operator == Operator.GreaterThan) {
-            return
-                value > compValue ? Status.Ok : Status.ParameterLessThanAllowed;
-        }
-        return
-            value < compValue ? Status.Ok : Status.ParameterGreaterThanAllowed;
-    }
-
-    function __compareSigned(
-        bytes32 rawValue,
-        Condition memory condition
-    ) private pure returns (Status) {
-        int256 value = int256(uint256(rawValue));
-        int256 compValue = int256(uint256(bytes32(condition.compValue)));
-
-        if (condition.operator == Operator.SignedIntGreaterThan) {
-            return
-                value > compValue ? Status.Ok : Status.ParameterLessThanAllowed;
-        }
-        return
-            value < compValue ? Status.Ok : Status.ParameterGreaterThanAllowed;
-    }
-
-    function __allowance(
-        uint256 value,
-        uint256 location,
-        Condition memory condition,
-        Consumption[] memory consumptions
-    ) private view returns (Result memory) {
-        (
-            Status status,
-            Consumption[] memory nextConsumptions
-        ) = WithinAllowanceChecker.check(
-                consumptions,
-                value,
-                condition.compValue
-            );
-
-        return _result(status, location, condition, nextConsumptions);
+                : _violation(
+                    Status.NoZippedElementPasses,
+                    dataSlice,
+                    condition,
+                    context
+                );
     }
 
     /**
-     * @dev Reads a value from calldata or from Transaction.value, right-aligning when needed.
-     *      - Encoding.None: returns context.value (ether amount)
-     *      - size <= 32: reads from calldata and right-aligns
-     *      - size > 32: returns keccak256 hash of the calldata slice
-     *
-     * @param data      The calldata to read from.
-     * @param location  The location in calldata.
-     * @param condition The condition with layout info.
-     * @param context   The execution context (for ether value).
-     * @return result   The value as bytes32, right-aligned or hashed.
+     * @dev Decodes elements of each plucked array within its stored `Span`
+     *      and verifies all arrays have equal length.
      */
-    function __input(
-        bytes calldata data,
-        uint256 location,
-        Condition memory condition,
-        Context memory context
-    ) private pure returns (bytes32 result, bool overflow) {
-        /*
-         * Integrity rules map Encoding.EtherValue -> Encoding.None during packing.
-         * If we encounter Encoding.None here (in a comparison context), it acts as
-         * a virtual static parameter representing the transaction value.
-         */
-        if (condition.encoding == Encoding.None) {
-            return (bytes32(context.value), false);
-        }
-
-        // Check if condition has size set (e.g., from Slice), otherwise get from decoder
-        uint256 size = condition.size != 0
-            ? condition.size
-            : AbiLocation.size(data, location, condition);
-
-        if (location + size > data.length) {
-            return (0, true);
-        }
-
-        if (size == 32) {
-            assembly {
-                result := calldataload(add(data.offset, location))
-            }
-            return (result, false);
-        }
-
-        // align the word for slicing
-        if (size < 32) {
-            return (
-                bytes32(data[location:location + size]) >> ((32 - size) * 8),
-                false
-            );
-        }
-
-        // size > 32
-        return (keccak256(data[location:location + size]), false);
-    }
-
-    function _ok(
-        Consumption[] memory consumptions
-    ) private pure returns (Result memory) {
-        return
-            Result({
-                status: Status.Ok,
-                violatedNodeIndex: 0,
-                payloadLocation: 0,
-                consumptions: consumptions
-            });
-    }
-
-    function _violation(
-        Status status,
-        uint256 location,
-        Condition memory condition
-    ) private pure returns (Result memory) {
-        Consumption[] memory empty;
-        return
-            Result({
-                status: status,
-                violatedNodeIndex: condition.index,
-                payloadLocation: location,
-                consumptions: empty
-            });
-    }
-
-    function _result(
-        Status status,
-        uint256 location,
-        Condition memory condition,
-        Consumption[] memory consumptions
-    ) private pure returns (Result memory) {
-        return
-            status == Status.Ok
-                ? _ok(consumptions)
-                : _violation(status, location, condition);
-    }
-
-    /**
-     * @dev Resolves element locations for arrays being zipped together.
-     *
-     * @param data      The calldata being evaluated.
-     * @param condition The Zip condition (ZipSome / ZipEvery).
-     * @param context   Evaluation context with pluckedLocations.
-     *
-     * @return result One uint256[] per array – element locations in calldata.
-     * @return length The common length of all zipped arrays.
-     * @return status Status.Ok, or an error
-     */
-    function _zipLocations(
-        bytes calldata data,
+    function _zipElements(
         Condition memory condition,
         Context memory context
     )
         private
         pure
-        returns (uint256[][] memory result, uint256 length, Status status)
+        returns (Span[][] memory result, uint256 length, Status status)
     {
+        bytes memory slots = condition.compValue;
         Condition[] memory fields = condition.children[0].children;
-        Condition memory stub;
-        stub.encoding = Encoding.Array;
-        stub.children = new Condition[](1);
 
-        result = new uint256[][](fields.length);
-
+        result = new Span[][](fields.length);
         for (uint256 f; f < fields.length; ++f) {
-            stub.children[0] = fields[f];
-            (uint256[] memory locations, bool overflow) = AbiLocation.children(
-                data,
-                context.pluckedLocations[uint8(condition.compValue[f])],
-                stub
+            (Span[] memory elements, bool ok) = AbiLocation.elements(
+                AbiLocation.fromSpan(context.pluckedLocations[uint8(slots[f])]),
+                fields[f].inlineSize
             );
-
-            if (overflow) return (result, 0, Status.CalldataOverflow);
+            if (!ok) return (result, 0, Status.CalldataOverflow);
 
             if (f == 0) {
-                length = locations.length;
-            } else {
-                if (length != locations.length) {
-                    return (result, 0, Status.ZippedArrayLengthMismatch);
-                }
+                length = elements.length;
+            } else if (elements.length != length) {
+                return (result, 0, Status.ZippedArrayLengthMismatch);
             }
-
-            result[f] = locations;
+            result[f] = elements;
         }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                CHECKS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Narrows a `Static` or `Dynamic` unpadded payload to a byte slice
+     *      and evaluates its leaf child with `inlineSize = size` (`Integrity`
+     *      enforces `Static`/`Dynamic` parent and one leaf child).
+     */
+    function _slice(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition,
+        Consumption[] memory consumptions,
+        Context memory context
+    ) private view returns (Result memory) {
+        /*
+         * compValue layout (3 bytes):
+         * ┌──────────────────────┬──────────────────────┐
+         * │ shift (16 bits)      │ size (8 bits)        │
+         * └──────────────────────┴──────────────────────┘
+         *   - shift: byte offset into the unpadded payload
+         *   - size:  slice length in bytes (1–32)
+         */
+        uint256 shift = uint16(bytes2(condition.compValue));
+        uint256 size = uint8(condition.compValue[2]);
+
+        (bytes calldata payload, bool ok) = AbiLocation.slice(
+            dataSlice,
+            inlineSize
+        );
+        if (!ok || shift + size > payload.length) {
+            return
+                _violation(
+                    Status.CalldataOverflow,
+                    dataSlice,
+                    condition,
+                    context
+                );
+        }
+
+        return
+            _evaluate(
+                payload[shift:shift + size],
+                size,
+                condition.children[0],
+                consumptions,
+                context
+            );
+    }
+
+    /**
+     * @dev Stores the operand word and encoding `Span` (`0` for ether value)
+     *      in slot `compValue[0]`, mutating `context` in place.
+     */
+    function _pluck(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition,
+        Context memory context
+    ) private pure returns (Status) {
+        (bytes32 word, bytes calldata operand, bool ok) = _read(
+            dataSlice,
+            inlineSize,
+            condition,
+            context
+        );
+        if (!ok) return Status.CalldataOverflow;
+
+        uint256 slot = uint8(condition.compValue[0]);
+        context.pluckedValues[slot] = word;
+        context.pluckedLocations[slot] = condition.encoding == Encoding.None
+            ? Span.wrap(0)
+            : AbiLocation.toSpan(operand);
+        return Status.Ok;
+    }
+
+    /**
+     * @dev Evaluates `EqualTo` (word vs word, or length + `keccak256` above
+     *      32 bytes) and unsigned/signed ordering (`SignedInt*` sign-extends
+     *      narrow `Slice` windows via `signextend(length - 1, word)`).
+     */
+    function _compare(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition,
+        Context memory context
+    ) private pure returns (Status) {
+        (bytes32 word, bytes calldata operand, bool ok) = _read(
+            dataSlice,
+            inlineSize,
+            condition,
+            context
+        );
+        if (!ok) return Status.CalldataOverflow;
+
+        uint256 length = condition.encoding == Encoding.None
+            ? 32
+            : operand.length;
+        uint256 operator = uint256(condition.operator);
+        bytes memory compValue = condition.compValue;
+
+        if (operator == uint256(Operator.EqualTo)) {
+            bool equal = length > 32
+                ? compValue.length == length && word == keccak256(compValue)
+                : compValue.length == 32 && word == bytes32(compValue);
+            return equal ? Status.Ok : Status.ParameterNotAllowed;
+        }
+
+        bytes32 bound = bytes32(compValue);
+        if (operator == uint256(Operator.GreaterThan)) {
+            return word > bound ? Status.Ok : Status.ParameterLessThanAllowed;
+        }
+        if (operator == uint256(Operator.LessThan)) {
+            return
+                word < bound ? Status.Ok : Status.ParameterGreaterThanAllowed;
+        }
+
+        // Sign-extend windows narrower than 32 bytes from their top bit.
+        int256 signedValue;
+        assembly {
+            signedValue := signextend(sub(length, 1), word)
+        }
+        int256 signedBound = int256(uint256(bound));
+        if (operator == uint256(Operator.SignedIntGreaterThan)) {
+            return
+                signedValue > signedBound
+                    ? Status.Ok
+                    : Status.ParameterLessThanAllowed;
+        }
+        return
+            signedValue < signedBound
+                ? Status.Ok
+                : Status.ParameterGreaterThanAllowed;
+    }
+
+    function _bitmask(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition
+    ) private pure returns (Status) {
+        (bytes calldata payload, bool ok) = AbiLocation.slice(
+            dataSlice,
+            inlineSize
+        );
+        if (!ok) return Status.CalldataOverflow;
+
+        return BitmaskChecker.check(payload, condition.compValue);
+    }
+
+    /**
+     * @dev Calls the `ICustomCondition` adapter with `(location, length)` of
+     *      the operand (`slice` when inlined/sliced, `sliceEncoded`
+     *      otherwise, or `length = 0` for ether value).
+     */
+    function _custom(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition,
+        Consumption[] memory consumptions,
+        Context memory context
+    ) private view returns (Status, Consumption[] memory) {
+        uint256 length;
+        if (condition.encoding != Encoding.None) {
+            (bytes calldata operand, bool ok) = inlineSize > 0
+                ? AbiLocation.slice(dataSlice, inlineSize)
+                : AbiLocation.sliceEncoded(dataSlice, condition);
+            if (!ok) return (Status.CalldataOverflow, consumptions);
+            dataSlice = operand;
+            length = operand.length;
+        }
+
+        return
+            CustomConditionChecker.check(
+                condition.compValue,
+                context.to,
+                context.value,
+                AbiLocation.fromSpan(context.data),
+                context.operation,
+                AbiLocation.offsetOf(context.data, dataSlice),
+                length,
+                consumptions,
+                context.pluckedValues
+            );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                              OPERANDS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @dev Reads an operand as one word: `context.value` for `Encoding.None`,
+     *      right-aligned/zero-extended for `<= 32` bytes, or `keccak256` above.
+     */
+    function _read(
+        bytes calldata dataSlice,
+        uint256 inlineSize,
+        Condition memory condition,
+        Context memory context
+    ) private pure returns (bytes32 word, bytes calldata operand, bool ok) {
+        if (condition.encoding == Encoding.None) {
+            return (bytes32(context.value), dataSlice, true);
+        }
+
+        // In place when inlined (or below a Slice), otherwise sized from calldata
+        (operand, ok) = inlineSize > 0
+            ? AbiLocation.slice(dataSlice, inlineSize)
+            : AbiLocation.sliceEncoded(dataSlice, condition);
+        if (!ok) return (0, dataSlice, false);
+
+        uint256 length = operand.length;
+        word = length > 32
+            ? keccak256(operand)
+            : bytes32(operand) >> ((32 - length) * 8);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                              RESULTS
+    //////////////////////////////////////////////////////////////*/
+
+    function _violation(
+        Status status,
+        bytes calldata dataSlice,
+        Condition memory condition,
+        Context memory context
+    ) private pure returns (Result memory result) {
+        result.status = status;
+        result.violatedNodeIndex = condition.index;
+        result.calldataOffset = AbiLocation.offsetOf(context.data, dataSlice);
     }
 }
