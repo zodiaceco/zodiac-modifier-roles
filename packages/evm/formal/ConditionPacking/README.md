@@ -35,7 +35,7 @@ unpack avatar (bufMem (pack junk fs) junk') =
   `EqualTo` on a non-inlined node drops its first word. `AbiEncoded` then splits
   off its first two bytes as `leadingBytes`, and `EqualToAvatar` compares
   against `abi.encode(avatar)`.
-- `annotate` adds the metadata the evaluator reads: `inlined` and `size`
+- `annotate` adds the metadata the evaluator reads: `inlineSize`
   (`isInlined` / `inlinedSize`), and `EtherValue` read as `None`. It is
   the same function the decoder proof assumes
   (`DecoderFaithfulness/Roles.lean`), so the decoder theorems apply to the tree
@@ -120,7 +120,7 @@ client that builds buffers itself must enforce `Packable` itself.
 
 ## Tests
 
-`test/formal/lean-model.spec.ts` ("packs and unpacks like ...") checks the
+`formal/test/lean-model.spec.ts` ("packs and unpacks like ...") checks the
 transcription against the contracts. For random condition trees with random
 compValues of every shape Integrity accepts, it requires:
 

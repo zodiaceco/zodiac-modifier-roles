@@ -49,8 +49,7 @@ theorem annotate_eq (c : Condition) :
       { encoding := if c.encoding = .EtherValue then .None else c.encoding
         operator := if c.operator = .EqualToAvatar then .EqualTo else c.operator
         children := c.children.map annotate
-        inlined := decide ((if Roles.isInlined c then Roles.inlinedSize c else 0) > 0)
-        size := if Roles.isInlined c then Roles.inlinedSize c else 0
+        inlineSize := if Roles.isInlined c then Roles.inlinedSize c else 0
         leadingBytes := if c.encoding = .AbiEncoded then c.leadingBytes else 0
         compValue := c.compValue } := by
   cases c
@@ -136,7 +135,7 @@ theorem count_snd (fs : List Flat) (h : Packable fs) :
 /-- **Pack/unpack round trip.** For a flat condition array `fs` that passes the
     checks Integrity runs (`Packable`), `ConditionPacker.pack` followed by
     `ConditionUnpacker.unpack` yields the input tree (rooted at node 0), with
-    the `inlined`/`size`/`leadingBytes` metadata of `annotate`, and
+    the `inlineSize`/`leadingBytes` metadata of `annotate`, and
     `maxPluckValue = max(pluckIndex) + 1`. `junk` and `junk'` are the
     surrounding memory at pack and unpack time; `avatar` is
     `abi.encode(avatar)`. -/

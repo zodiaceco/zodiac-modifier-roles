@@ -3,7 +3,7 @@ import DecoderFaithfulness.Roles
 /-!
 # `ConditionEvaluator.evaluate`, transcribed
 
-Transcribed from `packages/evm/contracts` (branch `formal/abi-layer-a`):
+Transcribed from `packages/evm/contracts`:
 
 * `core/evaluate/ConditionEvaluator.sol` → `evalC` and its loops
 * `core/evaluate/WithinAllowanceChecker.sol`, `common/AllowanceConsumer.sol`
@@ -11,8 +11,9 @@ Transcribed from `packages/evm/contracts` (branch `formal/abi-layer-a`):
 
 It runs on the unpacked `Condition` the evaluator sees (what
 `ConditionPacking.unpack` returns, `annotate` of the input tree), and uses
-the decoder transcription for locations (`children`, `size`, `input`) and
-`bitmaskCheck`. Differences from the Solidity:
+the decoder transcription for slices (`children`, `elements`,
+`slicePayload`, `operand`, `input`) and `bitmask`. Differences from the
+Solidity:
 
 * Arithmetic is on `Nat`.
 * A revert (`UnsupportedOperator`, a panic) is the status `revert`, which
@@ -24,6 +25,7 @@ the decoder transcription for locations (`children`, `size`, `input`) and
   are equal iff their preimages are; a hash never equals a word, and an
   ordering comparison on a hash fails. Integrity only allows `EqualTo` on
   values longer than 32 bytes.
+* `Result.violatedNodeIndex` and `Result.calldataOffset` are not modeled.
 * `fuel` bounds the recursion depth; `run` gives enough.
 -/
 
@@ -69,9 +71,9 @@ structure Consumption where
     arrays written in place, so writes survive failing branches. -/
 structure Slots where
   values : Nat → Input
-  locations : Nat → Nat
+  locations : Nat → Slice
 
-def Slots.empty : Slots := ⟨fun _ => .word 0, fun _ => 0⟩
+def Slots.empty : Slots := ⟨fun _ => .word 0, fun _ => ⟨0, 0⟩⟩
 
 /-- What `evaluate` reads besides calldata, the tree and its own state. -/
 structure Env where
@@ -83,7 +85,7 @@ structure Env where
       longer than 32 bytes: `(status, amount)`. -/
   scale : Bytes → Nat → Nat × Nat
   /-- The custom checker's answer in `CustomConditionChecker.check(compValue,
-      .., location, size, consumptions, pluckedValues)`: a failure status,
+      .., location, length, consumptions, pluckedValues)`: a failure status,
       or the allowance charges it reports, which `_applyConsumptions` makes. -/
   customCall : Bytes → Nat → Nat → (Nat → Input) → Nat ⊕ List (Bytes × Nat)
   /-- `WithinRatioChecker.check(compValue, pluckedValues)`. -/
@@ -97,7 +99,7 @@ structure Res where
 
 def ok (cons : List Consumption) (sl : Slots) : Res := ⟨sOk, cons, sl⟩
 def violation (s : Nat) (sl : Slots) : Res := ⟨s, [], sl⟩
-/-- `_result`. -/
+/-- A check: `_violation` unless the status is `Ok`. -/
 def result (s : Nat) (cons : List Consumption) (sl : Slots) : Res :=
   if s = sOk then ok cons sl else violation s sl
 
@@ -142,128 +144,152 @@ inductive B32 where
   | h (pre : Bytes)
   deriving DecidableEq
 
-/-- The value `__input` returns (`Encoding.None` reads `context.value`). -/
+/-- The word `_read` returns (`Encoding.None` reads `context.value`). -/
 def inputB (env : Env) : Input → B32
   | .etherValue => .w env.value
   | .word n => .w n
   | .hash pre => .h pre
   | .overflow => .w 0
 
-/-- `bytes32(compValue)`, or its keccak256 if longer than 32 bytes. -/
-def cvB (cv : Bytes) : B32 :=
-  if cv.length > 32 then .h cv else .w (wordVal (key cv))
-
 def toSigned (n : Nat) : Int := if n < 2 ^ 255 then n else (n : Int) - 2 ^ 256
 
-/-- `__compare` and `__compareSigned` (which takes `bytes32(compValue)`,
-    never its hash). -/
-def compare (op : Operator) (v : B32) (cv : Bytes) : Nat :=
+/-- `signextend(length - 1, n)` as an `int256`: a value of fewer than 32
+    bytes carries its sign in its top bit. (For 32 bytes and more, and for
+    0, where `length - 1` wraps, `signextend` leaves `n` as it is.) -/
+def signExtend (length n : Nat) : Int :=
+  if 0 < length ∧ length < 32 then
+    if n % 2 ^ (8 * length) < 2 ^ (8 * length - 1) then ((n % 2 ^ (8 * length) : Nat) : Int)
+    else ((n % 2 ^ (8 * length) : Nat) : Int) - 2 ^ (8 * length)
+  else toSigned n
+
+/-- `_compare`, on the word `v` of an operand of `length` bytes. -/
+def compare (op : Operator) (v : B32) (length : Nat) (cv : Bytes) : Nat :=
   match op with
-  | .EqualTo => if v = cvB cv then sOk else sParameterNotAllowed
+  | .EqualTo =>
+    -- a word against a word, or a hash against the hash of a compValue as long
+    if (if length > 32 then cv.length = length ∧ v = .h cv
+        else cv.length = 32 ∧ v = .w (wordVal (key cv))) then sOk
+    else sParameterNotAllowed
   | .GreaterThan =>
-    match v, cvB cv with
-    | .w a, .w b => if a > b then sOk else sParameterLessThanAllowed
-    | _, _ => sParameterLessThanAllowed
+    match v with
+    | .w a => if a > wordVal (key cv) then sOk else sParameterLessThanAllowed
+    | .h _ => sParameterLessThanAllowed
   | .LessThan =>
-    match v, cvB cv with
-    | .w a, .w b => if a < b then sOk else sParameterGreaterThanAllowed
-    | _, _ => sParameterGreaterThanAllowed
+    match v with
+    | .w a => if a < wordVal (key cv) then sOk else sParameterGreaterThanAllowed
+    | .h _ => sParameterGreaterThanAllowed
   | .SignedIntGreaterThan =>
     match v with
-    | .w a => if toSigned a > toSigned (wordVal (key cv)) then sOk else sParameterLessThanAllowed
-    | _ => sParameterLessThanAllowed
+    | .w a =>
+      if signExtend length a > toSigned (wordVal (key cv)) then sOk else sParameterLessThanAllowed
+    | .h _ => sParameterLessThanAllowed
   | _ =>
     match v with
-    | .w a => if toSigned a < toSigned (wordVal (key cv)) then sOk else sParameterGreaterThanAllowed
-    | _ => sParameterGreaterThanAllowed
+    | .w a =>
+      if signExtend length a < toSigned (wordVal (key cv)) then sOk
+      else sParameterGreaterThanAllowed
+    | .h _ => sParameterGreaterThanAllowed
 
-/-! ## `_matches`: leading bytes -/
+/-! ## `_matches`: the block of the children -/
 
-/-- The leading-bytes check of `_matches`: `none` to go on, or the status. -/
-def leadingCheck (data : Calldata) (loc : Nat) (cv : Bytes) : Option Nat :=
+/-- The leading-bytes check of `_matches`, on the payload of an `AbiEncoded`
+    node: `none` to go on, or the status. Both sides are loaded as a word
+    (`bytes32(..)`, zero-padded) and compared on the leading bytes. -/
+def leadingCheck (data : Calldata) (payload : Slice) (cv : Bytes) : Option Nat :=
   if cv.length = 0 then none
-  else if loc + cv.length > data.length then some sCalldataOverflow
   else if cv.length > 32 then some revert  -- `32 - length` underflows
-  else if (data.drop loc).take cv.length = cv then none
+  else if (payload.bytes data ++ zeros 32).take cv.length = cv then none
   else some sLeadingBytesNotAMatch
+
+/-- `_matches` up to the children: the block they are found in, or the
+    status. (`matchesBody`, with the leading-bytes check.) -/
+def matchesHead (data : Calldata) (s : Slice) (c : Condition) : Nat ⊕ Slice :=
+  if c.encoding = .AbiEncoded then
+    match (if s.offset ≠ 0 then slicePayload data s 0 else some s) with
+    | none => .inl sCalldataOverflow
+    | some payload =>
+      if c.leadingBytes > payload.length then .inl sCalldataOverflow
+      else
+        match leadingCheck data payload c.compValue with
+        | some st => .inl st
+        | none => .inr ⟨payload.offset + c.leadingBytes, payload.length - c.leadingBytes⟩
+  else .inr s
 
 /-! ## `evaluate` -/
 
 /-- `uint8(compValue[k])`; out of range is a panic. -/
 def cvAt (cv : Bytes) (k : Nat) : Option Nat := (cv[k]?).map (·.val)
 
-/-- `AbiLocation.children` allocates `new uint256[](childCount)` before
-    decoding; an array length above `2^64 - 1` panics there. (The decoder
-    transcription returns `none`, an overflow, for it; both deny.) -/
-def allocPanics (data : Calldata) (loc : Nat) (c : Condition) : Bool :=
-  c.encoding = .Array ∧ ¬(loc + 32 > data.length) ∧ load data loc > 2 ^ 64 - 1
-
-/-- `AbiLocation.children` with that panic: `.inl` revert. -/
-def childrenE (data : Calldata) (loc : Nat) (c : Condition) : Nat ⊕ Option (List Nat) :=
-  if allocPanics data loc c then .inl revert else .inr (children data loc c)
-
 /-- `_slice` compValue: `uint16(bytes2(compValue))` (zero-padded). -/
 def shiftOf (cv : Bytes) : Nat := wordVal ((cv ++ zeros 2).take 2)
 
+/-- The child of a `Slice` that `_slice` does not support, one that
+    navigates: `operator > Pass && operator < Slice && operator != Empty`. -/
+def navigates : Operator → Bool
+  | .And | .Or | .Matches | .ArraySome | .ArrayEvery | .ArrayTailMatches
+  | .ZipSome | .ZipEvery => true
+  | _ => false
+
 def zipLocsGo (data : Calldata) (n : Nat) (cv : Bytes) :
-    List Condition → Slots → Nat → Option Nat → List (List Nat) → Nat ⊕ (List (List Nat) × Nat)
+    List Condition → Slots → Nat → Option Nat → List (List Slice) →
+      Nat ⊕ (List (List Slice) × Nat)
   | [], _, _, len, acc => .inr (acc, len.getD 0)
   | fd :: rest, sl, f, len, acc =>
     match cvAt cv f with
     | none => .inl revert
     | some k =>
       if k ≥ n then .inl revert else
-      match childrenE data (sl.locations k) (zipStub fd) with
-      | .inl s => .inl s
-      | .inr none => .inl sCalldataOverflow
-      | .inr (some ls) =>
+      match elements data (sl.locations k) fd.inlineSize with
+      | none => .inl sCalldataOverflow
+      | some ls =>
         match len with
         | some m => if m ≠ ls.length then .inl sZippedArrayLengthMismatch
                     else zipLocsGo data n cv rest sl (f + 1) len (acc ++ [ls])
         | none => zipLocsGo data n cv rest sl (f + 1) (some ls.length) (acc ++ [ls])
 
-/-- `_zipLocations`: the element locations of each plucked array, and
-    their common length, or the status. -/
+/-- `_zipElements`: the elements of each plucked array, and their common
+    length, or the status. -/
 def zipLocs (data : Calldata) (n : Nat) (cv : Bytes) (fields : List Condition) (sl : Slots) :
-    Nat ⊕ (List (List Nat) × Nat) :=
+    Nat ⊕ (List (List Slice) × Nat) :=
   zipLocsGo data n cv fields sl 0 none []
 
 mutual
-  def evalC (env : Env) (data : Calldata) (n : Nat) : Nat → Nat → Condition → List Consumption → Slots → Res
-    | 0, _, _, _, sl => violation revert sl
-    | fuel + 1, loc, c, cons, sl =>
+  /-- `_evaluate(dataSlice, inlineSize, condition, consumptions, context)`:
+      `s` is `dataSlice`, `z` is `inlineSize`. -/
+  def evalC (env : Env) (data : Calldata) (n : Nat) :
+      Nat → Slice → Nat → Condition → List Consumption → Slots → Res
+    | 0, _, _, _, _, sl => violation revert sl
+    | fuel + 1, s, z, c, cons, sl =>
       match c.operator with
       | .Pass => ok cons sl
       | .Matches =>
-        let loc := if loc > 0 ∧ c.encoding = .AbiEncoded then loc + 32 else loc
-        match leadingCheck data loc c.compValue with
-        | some s => violation s sl
-        | none =>
-          match childrenE data (loc + c.leadingBytes) c with
-          | .inl s => violation s sl
-          | .inr none => violation sCalldataOverflow sl
-          | .inr (some locs) =>
-            if c.children.length ≠ locs.length then violation sParameterNotAMatch sl
-            else seqLoop env data n fuel (c.children.zip locs) cons sl
-      | .And => seqLoop env data n fuel (c.children.map (·, loc)) cons sl
-      | .Or => orLoop env data n fuel c.children loc cons sl
+        match matchesHead data s c with
+        | .inl st => violation st sl
+        | .inr body =>
+          match children data body c with
+          | none => violation sCalldataOverflow sl
+          | some spans =>
+            if c.children.length ≠ spans.length then violation sParameterNotAMatch sl
+            else seqLoop env data n fuel (c.children.zip spans) cons sl
+      | .And => seqLoop env data n fuel (c.children.map (·, s)) cons sl
+      | .Or => orLoop env data n fuel c.children s cons sl
       | .Slice =>
         match cvAt c.compValue 2 with
         | none => violation revert sl
         | some sz =>
           let shift := shiftOf c.compValue
-          if c.inlined = false ∧ loc + 32 > data.length then violation sCalldataOverflow sl
-          else
-            let length := if c.inlined then c.size else load data loc
-            if shift + sz > length then violation sCalldataOverflow sl
+          match slicePayload data s z with
+          | none => violation sCalldataOverflow sl
+          | some payload =>
+            if shift + sz > payload.length then violation sCalldataOverflow sl
             else
               match c.children with
               | [] => violation revert sl
               | ch :: _ =>
-                evalC env data n fuel (loc + (if c.inlined then 0 else 32) + shift)
-                  (ch.withSize sz) cons sl
+                if navigates ch.operator then violation revert sl
+                else evalC env data n fuel ⟨payload.offset + shift, sz⟩ sz ch cons sl
       | .Pluck =>
-        match input data loc c with
+        match input data s z c with
         | .overflow => violation sCalldataOverflow sl
         | v =>
           match cvAt c.compValue 0 with
@@ -273,91 +299,93 @@ mutual
             ok cons ⟨fun j => if j = k then (match v with
                         | .etherValue => .word env.value
                         | v => v) else sl.values j,
-                     fun j => if j = k then loc else sl.locations j⟩
+                     fun j => if j = k then (pluckSpan data s z c).getD default
+                       else sl.locations j⟩
       | .Empty => result (if data.length = 0 then sOk else sCalldataNotEmpty) cons sl
       | .ArraySome | .ArrayEvery =>
-        match childrenE data loc c with
-        | .inl s => violation s sl
-        | .inr none => violation sCalldataOverflow sl
-        | .inr (some locs) =>
+        match children data s c with
+        | none => violation sCalldataOverflow sl
+        | some spans =>
           match c.children with
-          | [] => if locs = [] then
+          | [] => if spans = [] then
                     (if c.operator = .ArrayEvery then ok cons sl
                      else violation sNoArrayElementPasses sl)
                   else violation revert sl
           | ch :: _ =>
-            if c.operator = .ArrayEvery then everyLoop env data n fuel ch locs cons sl
-            else someLoop env data n fuel ch locs cons sl
+            if c.operator = .ArrayEvery then everyLoop env data n fuel ch spans cons sl
+            else someLoop env data n fuel ch spans cons sl
       | .ArrayTailMatches =>
-        match childrenE data loc c with
-        | .inl s => violation s sl
-        | .inr none => violation sCalldataOverflow sl
-        | .inr (some locs) =>
-          if locs.length < c.children.length then violation sParameterNotAMatch sl
-          else seqLoop env data n fuel (c.children.zip (locs.drop (locs.length - c.children.length)))
-            cons sl
+        match children data s c with
+        | none => violation sCalldataOverflow sl
+        | some spans =>
+          if spans.length < c.children.length then violation sParameterNotAMatch sl
+          else seqLoop env data n fuel
+            (c.children.zip (spans.drop (spans.length - c.children.length))) cons sl
       | .ZipSome | .ZipEvery =>
         match c.children with
         | [] => violation revert sl
         | t :: _ =>
           match zipLocs data n c.compValue t.children sl with
-          | .inl s => violation s sl
+          | .inl st => violation st sl
           | .inr (locss, len) =>
             zipLoop env data n fuel (c.operator = .ZipEvery) t.children locss len 0 cons cons sl
       | .EqualTo | .GreaterThan | .LessThan | .SignedIntGreaterThan | .SignedIntLessThan =>
-        match input data loc c with
+        match input data s z c with
         | .overflow => violation sCalldataOverflow sl
-        | v => result (compare c.operator (inputB env v) c.compValue) cons sl
-      | .Bitmask =>
-        result (bitmaskStatus (bitmaskCheck data loc c.compValue c.inlined c.size [])) cons sl
+        | v =>
+          result (compare c.operator (inputB env v) (inputLength data s z c) c.compValue) cons sl
+      | .Bitmask => result (bitmaskStatus (bitmask data s z c.compValue [])) cons sl
       | .WithinAllowance =>
-        match input data loc c with
+        match input data s z c with
         | .overflow => violation sCalldataOverflow sl
         | v =>
           let amount := match inputB env v with
             | .w x => x
             | .h _ => 0
-          let (s, cons') := allowance env cons amount c.compValue
-          result s cons' sl
+          let (st, cons') := allowance env cons amount c.compValue
+          result st cons' sl
       | .CallWithinAllowance =>
-        let (s, cons') := allowance env cons 1 c.compValue
-        result s cons' sl
+        let (st, cons') := allowance env cons 1 c.compValue
+        result st cons' sl
       | .WithinRatio => result (env.ratio c.compValue sl.values) cons sl
       | .Custom =>
-        let sz := if c.size ≠ 0 then c.size else size data loc c
-        match env.customCall c.compValue loc sz sl.values with
-        | .inl s => violation s sl
-        | .inr chs =>
-          let (s, cons') := applyCharges env cons chs
-          result s cons' sl
+        -- the ether value has no encoding: it is passed with a length of 0
+        match (if c.encoding = .None then some ⟨s.offset, 0⟩ else operand data s z c) with
+        | none => violation sCalldataOverflow sl
+        | some op =>
+          match env.customCall c.compValue op.offset op.length sl.values with
+          | .inl st => violation st sl
+          | .inr chs =>
+            let (st, cons') := applyCharges env cons chs
+            result st cons' sl
       | .EqualToAvatar => violation revert sl
-  termination_by fuel _ _ _ _ => (fuel, 0, 0)
+  termination_by fuel _ _ _ _ _ => (fuel, 0, 0)
 
   /-- `_and`, `_matches`, `_arrayTailMatches`: in order, stop at the first
       failure. -/
   def seqLoop (env : Env) (data : Calldata) (n : Nat) (fuel : Nat) :
-      List (Condition × Nat) → List Consumption → Slots → Res
+      List (Condition × Slice) → List Consumption → Slots → Res
     | [], cons, sl => ok cons sl
     | (c, l) :: rest, cons, sl =>
-      let r := evalC env data n fuel l c cons sl
+      let r := evalC env data n fuel l c.inlineSize c cons sl
       if r.status ≠ sOk then r else seqLoop env data n fuel rest r.cons r.slots
   termination_by xs _ _ => (fuel, 1, xs.length)
 
   /-- `_or`: from the same consumptions, stop at the first success. -/
   def orLoop (env : Env) (data : Calldata) (n : Nat) (fuel : Nat) :
-      List Condition → Nat → List Consumption → Slots → Res
+      List Condition → Slice → List Consumption → Slots → Res
     | [], _, _, sl => violation sOrViolation sl
     | c :: rest, loc, cons, sl =>
-      let r := evalC env data n fuel loc c cons sl
+      let r := evalC env data n fuel loc c.inlineSize c cons sl
       if r.status = sOk ∨ r.status = revert then r else orLoop env data n fuel rest loc cons r.slots
   termination_by xs _ _ _ => (fuel, 1, xs.length)
 
   /-- `_arrayIterator` for `ArrayEvery`. -/
   def everyLoop (env : Env) (data : Calldata) (n : Nat) (fuel : Nat) (c : Condition) :
-      List Nat → List Consumption → Slots → Res
+      List Slice → List Consumption → Slots → Res
     | [], cons, sl => ok cons sl
     | l :: rest, cons, sl =>
-      let r := evalC env data n fuel l c cons sl
+      let r := evalC env data n fuel l c.inlineSize c cons sl
       if r.status = revert then r
       else if r.status ≠ sOk then { r with status := sNotEveryArrayElementPasses }
       else everyLoop env data n fuel c rest r.cons r.slots
@@ -365,21 +393,21 @@ mutual
 
   /-- `_arrayIterator` for `ArraySome`. -/
   def someLoop (env : Env) (data : Calldata) (n : Nat) (fuel : Nat) (c : Condition) :
-      List Nat → List Consumption → Slots → Res
+      List Slice → List Consumption → Slots → Res
     | [], _, sl => violation sNoArrayElementPasses sl
     | l :: rest, cons, sl =>
-      let r := evalC env data n fuel l c cons sl
+      let r := evalC env data n fuel l c.inlineSize c cons sl
       if r.status = sOk ∨ r.status = revert then r else someLoop env data n fuel c rest cons r.slots
   termination_by ls _ _ => (fuel, 1, ls.length)
 
   /-- `_zipIterator`, from element `i` of `n`. `base` are the consumptions
       the Zip started with (each `ZipSome` element starts from them). -/
   def zipLoop (env : Env) (data : Calldata) (n : Nat) (fuel : Nat) (every : Bool) (fields : List Condition)
-      (locss : List (List Nat)) : Nat → Nat → List Consumption → List Consumption → Slots → Res
+      (locss : List (List Slice)) : Nat → Nat → List Consumption → List Consumption → Slots → Res
     | 0, _, _, cons, sl => if every then ok cons sl else violation sNoZippedElementPasses sl
     | k + 1, i, base, cons, sl =>
       let r := seqLoop env data n fuel
-        (fields.zip (locss.map fun ls => ls.getD i 0)) (if every then cons else base) sl
+        (fields.zip (locss.map fun ls => ls.getD i default)) (if every then cons else base) sl
       if r.status = revert then r
       else if every then
         if r.status ≠ sOk then { r with status := sNotEveryZippedElementPasses }
@@ -393,15 +421,15 @@ end
 mutual
   /-- Tree depth, enough fuel for `evalC`. -/
   def depth : Condition → Nat
-    | ⟨_, _, cs, _, _, _, _⟩ => depthL cs + 1
+    | ⟨_, _, cs, _, _, _⟩ => depthL cs + 1
   def depthL : List Condition → Nat
     | [] => 0
     | c :: cs => max (depth c) (depthL cs)
 end
 
-/-- `evaluate(data, 0, root, consumptions, context)` with `maxPluck` slots. -/
+/-- `evaluate(data, root, consumptions, context)` with `maxPluck` slots. -/
 def run (env : Env) (data : Calldata) (root : Condition) (maxPluck : Nat)
     (cons : List Consumption) : Res :=
-  evalC env data maxPluck (depth root + 2) 0 root cons Slots.empty
+  evalC env data maxPluck (depth root + 2) ⟨0, data.length⟩ root.inlineSize root cons Slots.empty
 
 end Evaluate

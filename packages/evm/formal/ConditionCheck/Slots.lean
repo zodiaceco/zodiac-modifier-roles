@@ -55,7 +55,7 @@ def isPlain (op : Operator) : Bool :=
 
 mutual
   def assigned : Condition → Slots → Option Slots
-    | ⟨_, op, cs, _, _, _, cv⟩, A =>
+    | ⟨_, op, cs, _, _, cv⟩, A =>
       if op = .Pluck then some (A.add (cvByte cv 0))
       else if op = .WithinRatio then (if ratioOk A cv then some A else none)
       else if op = .ZipSome ∨ op = .ZipEvery then
@@ -88,7 +88,7 @@ mutual
   /-- The fields of a Zip (children of its tuple child), in order. -/
   def assignedFields : List Condition → Slots → Option Slots
     | [], A => some A
-    | ⟨_, _, fs, _, _, _, _⟩ :: _, A => assignedSeq fs A
+    | ⟨_, _, fs, _, _, _⟩ :: _, A => assignedSeq fs A
 end
 
 /-! ## The execution model -/
@@ -127,7 +127,7 @@ mutual
     /-- `_arrayIterator`: `children[0]` per element. -/
     | iter {c A o A'} : (c.operator = .ArraySome ∨ c.operator = .ArrayEvery) →
         RunIter (c.operator == .ArraySome) (c.children.headD default) A o A' → Run c A o A'
-    /-- `_zipLocations` reads every slot. -/
+    /-- `_zipElements` reads every slot. -/
     | zipBad {c A} : (c.operator = .ZipSome ∨ c.operator = .ZipEvery) →
         (zipSlots c.compValue).all A = false → Run c A .bad A
     | zipEarly {c A} : (c.operator = .ZipSome ∨ c.operator = .ZipEvery) →
@@ -184,13 +184,13 @@ theorem assigned_eq (c : Condition) (A : Slots) :
         assignedSeq c.children A
       else if c.operator = .Slice then assignedFirst c.children A
       else some A := by
-  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩
+  rcases c with ⟨e, op, cs, sz, lb, cv⟩
   rw [assigned]
 
 theorem assigned_plain {c : Condition} {A : Slots} (h : isPlain c.operator = true) :
     assigned c A = some A := by
   rw [assigned_eq]
-  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩
+  rcases c with ⟨e, op, cs, sz, lb, cv⟩
   cases op <;> simp_all [isPlain]
 
 theorem assignedFirst_eq (cs : List Condition) (A : Slots) :
@@ -203,7 +203,7 @@ theorem assignedFields_eq (cs : List Condition) (A : Slots) :
     assignedFields cs A = assignedSeq (cs.headD default).children A := by
   cases cs with
   | nil => rfl
-  | cons c _ => rcases c with ⟨e, op, fs, i, sz, lb, cv⟩; rfl
+  | cons c _ => rcases c with ⟨e, op, fs, sz, lb, cv⟩; rfl
 
 theorem assignedOr_cons {c : Condition} {cs : List Condition} {A0 R : Slots}
     (h : assignedOr (c :: cs) A0 = some R) :

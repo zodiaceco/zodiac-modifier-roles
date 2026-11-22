@@ -45,7 +45,7 @@ def pinnedBytes (cv : Bytes) : Bytes := (cv.drop 32).take (wordVal (key cv))
 /-- The pin a lint should accept for a `bytes` argument: an `EqualTo`
     read as `Dynamic` (from its offset, size from its length word). -/
 def leafBytes (c : Condition) : Bool :=
-  c.encoding = .Dynamic && c.size = 0
+  c.encoding = .Dynamic && c.inlineSize = 0
 
 theorem load_take {data : Bytes} {L : Nat} (h : L + 32 ≤ data.length) :
     load data L = wordVal ((data.drop L).take 32) := by
@@ -56,27 +56,22 @@ theorem load_take {data : Bytes} {L : Nat} (h : L + 32 ≤ data.length) :
 theorem take_take_le {l : Bytes} {a b : Nat} (h : a ≤ b) : (l.take b).take a = l.take a := by
   rw [List.take_take, Nat.min_eq_left h]
 
-/-- What `__input` reads for a `Dynamic` value read from its offset. -/
-theorem input_dyn (data : Calldata) (L : Nat) (op : Operator) (cs : List Condition) (inl : Bool)
-    (lb : Nat) (cv : Bytes) :
-    input data L ⟨.Dynamic, op, cs, inl, 0, lb, cv⟩ =
-      (let size := if L + 32 > data.length then data.length + 1
-                   else 32 + ((load data L + 31) &&& notU31)
-       if L + size > data.length then .overflow
-       else if size = 32 then .word (load data L)
-       else if size < 32 then .word (wordVal ((data.drop L).take size))
-       else .hash ((data.drop L).take size)) := by
-  have hs : Roles.size data L ⟨.Dynamic, op, cs, inl, 0, lb, cv⟩ =
-      if L + 32 > data.length then data.length + 1
-      else 32 + ((load data L + 31) &&& notU31) := by
-    unfold Roles.size; simp
-  simp only [input, reduceCtorEq, ite_false, ne_eq, not_true_eq_false, hs]
-
-/-- `tailLocation` of head word 0 at `4`, when in bounds: `4 + offset`. -/
-theorem tail0 {data : Bytes} {L : Nat} (h : tailLocation data 4 0 = L) (hL : L ≤ data.length) :
-    L = load data 4 + 4 := by
-  have := EIP712.fallback_offset data 0 L (by simpa using h) hL
-  simpa using this
+/-- The operand `_read` resolves for a `Dynamic` value read from its
+    offset: its region, the length word and the padded content. -/
+theorem operand_dyn {data : Calldata} {L : Slice} {c : Condition} (he : c.encoding = .Dynamic)
+    (hz : c.inlineSize = 0) {op : Slice} (h : operand data L 0 c = some op) :
+    32 ≤ L.length ∧ load data L.offset ≤ L.length - 32 ∧
+      op = ⟨L.offset, 32 + ((load data L.offset + 31) &&& notU31)⟩ ∧
+      ((load data L.offset + 31) &&& notU31) ≤ L.length - 32 := by
+  unfold operand sliceRegion at h
+  simp only [Nat.lt_irrefl, ite_false] at h
+  cases hr : region data L c with
+  | none => rw [hr] at h; cases h
+  | some k =>
+    rw [hr] at h
+    simp only [Option.map_some, Option.some.injEq] at h
+    obtain ⟨h32, hle, rfl, hpad⟩ := region_bytes_some hz (.inl he) hr
+    exact ⟨h32, hle, h.symm, hpad⟩
 
 /-- **The library signs a pinned message.** When Roles passes `data` with
     the `bytes` argument pinned (`pinsArg leafBytes 0`), and Solidity's
@@ -85,16 +80,18 @@ theorem tail0 {data : Bytes} {L : Nat} (h : tailLocation data 4 0 = L) (hL : L �
 theorem route_bytes {env : Env} {data : Calldata} {n F f : Nat} {root : Condition}
     {cons : List Consumption} {sl : Slots} {m : Bytes}
     (hpin : pinsArg leafBytes 0 f root = true)
-    (hrun : (evalC env data n F 0 root cons sl).status = sOk)
+    (hrun : (evalC env data n F ⟨0, data.length⟩ root.inlineSize root cons sl).status = sOk)
     (hdec : solDecodeBytes data = some m) :
     ∃ e, PinUnder 0 root e ∧ pinnedLeaf leafBytes e = true ∧ m = pinnedBytes e.compValue := by
-  obtain ⟨e, hu, hl, hno, heq⟩ := pinsArg_sound leafBytes 0 F f root cons sl hpin hrun
+  obtain ⟨e, L, hu, hl, hoff, hwithin, hno, heq⟩ :=
+    pinsArg_sound leafBytes 0 F f root cons sl hpin hrun
   refine ⟨e, hu, hl, ?_⟩
-  simp only [Nat.mul_zero] at hno heq
+  simp only [Nat.mul_zero, Nat.add_zero] at hoff
   have hleaf := hl
   unfold pinnedLeaf leafBytes at hleaf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hleaf
   obtain ⟨_, henc, hsz⟩ := hleaf
+  have hne : e.encoding ≠ .None := by rw [henc]; decide
   -- Solidity's reading
   unfold solDecodeBytes at hdec
   simp only at hdec
@@ -106,51 +103,49 @@ theorem route_bytes {env : Env} {data : Calldata} {n F f : Nat} {root : Conditio
   rename_i _ _ _ hlen hfit
   simp only [Option.some.injEq] at hdec
   subst hdec
-  generalize hL : tailLocation data 4 0 = L at hno heq
-  -- Roles' reading: in bounds, so at the same place
-  obtain ⟨enc, op, cs, inl, sz, lb, cv⟩ := e
-  simp only at henc hsz ⊢
-  subst henc hsz
-  rw [input_dyn] at hno heq
-  have hin : L + 32 ≤ data.length := by
-    by_cases hc : L + 32 ≤ data.length
-    · exact hc
-    · exfalso; apply hno
-      have h1 : data.length < L + 32 := by omega
-      simp only [gt_iff_lt, h1, ite_true]
-      rw [if_pos (by omega)]
-  have hL4 : L = load data 4 + 4 := tail0 hL (by omega)
-  rw [show 4 + load data 4 = L by omega] at hlen hfit ⊢
-  generalize hlv : load data L = len at hlen hfit ⊢ hno heq
-  have hround : (len + 31) &&& notU31 = ceil32 len := roundUp_eq len (by omega)
-  simp only [show ¬(L + 32 > data.length) by omega, ite_false, hround] at hno heq
-  have hfitR : L + (32 + ceil32 len) ≤ data.length := by
-    by_cases hc : L + (32 + ceil32 len) ≤ data.length
-    · exact hc
-    · exfalso; apply hno; rw [if_pos (by omega)]
-  rw [if_neg (by omega)] at heq
-  by_cases hz : ceil32 len = 0
-  · have hl0 : len = 0 := by have := ceil32_ge len; omega
-    subst hl0
-    rw [if_pos (by omega)] at heq
-    unfold cvB at heq
-    split at heq
-    · simp [inputB] at heq
-    · simp only [inputB, B32.w.injEq] at heq
-      simp [pinnedBytes, ← heq]
-  · rw [if_neg (by omega), if_neg (by omega)] at heq
-    unfold cvB at heq
-    split at heq
-    · simp only [inputB, B32.h.injEq] at heq
-      -- the stored value is exactly the bytes Roles hashed
-      subst heq
-      have hk : key ((data.drop L).take (32 + ceil32 len)) = (data.drop L).take 32 := by
-        unfold key
-        rw [List.take_append_of_le_length (by simp; omega), take_take_le (by omega)]
-      unfold pinnedBytes
-      rw [hk, ← load_take hin, hlv, List.drop_take, List.drop_drop,
-        show 32 + ceil32 len - 32 = ceil32 len by omega, take_take_le (ceil32_ge len)]
-    · simp [inputB] at heq
+  rw [show 4 + load data 4 = L.offset by omega] at hlen hfit ⊢
+  -- Roles' reading: the region at the same place
+  rw [hsz] at hno heq
+  cases hop : operand data L 0 e with
+  | none => exfalso; apply hno; unfold input; rw [ite_eq_right hne, hop]
+  | some op =>
+    obtain ⟨h32, hle, rfl, hpad⟩ := operand_dyn henc hsz hop
+    unfold input inputLength at heq
+    rw [ite_eq_right hne, ite_eq_right hne, hop] at heq
+    simp only [Slice.bytes] at heq
+    generalize hlv : load data L.offset = len at hlen hfit hle hpad heq ⊢
+    have hround : (len + 31) &&& notU31 = ceil32 len := roundUp_eq len (by omega)
+    rw [hround] at heq hpad
+    have hin : L.offset + 32 ≤ data.length := by omega
+    unfold Evaluate.compare at heq
+    simp only at heq
+    by_cases hz : ceil32 len = 0
+    · have hl0 : len = 0 := by have := ceil32_ge len; omega
+      subst hl0
+      rw [hz] at heq
+      simp only [Nat.add_zero, Nat.lt_irrefl, ite_false, inputB] at heq
+      split at heq
+      · rename_i hc
+        obtain ⟨_, hw⟩ := hc
+        simp only [B32.w.injEq] at hw
+        rw [← load_take hin, hlv] at hw
+        simp [pinnedBytes, ← hw]
+      · simp [sParameterNotAllowed, sOk] at heq
+    · have hgt : 32 + ceil32 len > 32 := by omega
+      simp only [hgt, ite_true, inputB] at heq
+      split at heq
+      · rename_i hc
+        obtain ⟨_, hw⟩ := hc
+        simp only [B32.h.injEq] at hw
+        -- the stored value is exactly the bytes Roles hashed
+        rw [← hw]
+        have hk : key ((data.drop L.offset).take (32 + ceil32 len)) = (data.drop L.offset).take 32 := by
+          unfold key
+          rw [List.take_append_of_le_length (by simp; omega), take_take_le (by omega)]
+        unfold pinnedBytes
+        rw [hk, ← load_take hin, hlv, List.drop_take, List.drop_drop,
+          show 32 + ceil32 len - 32 = ceil32 len by omega, take_take_le (ceil32_ge len)]
+      · simp [sParameterNotAllowed, sOk] at heq
 
 
 /-! ## The `types` argument -/
@@ -160,9 +155,9 @@ theorem route_bytes {env : Env} {data : Calldata} {n F f : Nat} {root : Conditio
     words). With another element shape Roles compares fewer bytes than the
     library reads. -/
 def leafTypes (c : Condition) : Bool :=
-  c.encoding = .Array && c.size = 0 &&
+  c.encoding = .Array && c.inlineSize = 0 &&
   match c.children with
-  | [t] => t.inlined && t.size = 96
+  | [t] => t.inlineSize = 96
   | _ => false
 
 /-- `types` as the library's fallback finds it: `typesPtr =
@@ -180,14 +175,27 @@ def typesRaw (data : Bytes) : Bytes :=
     stored value is the length word and the elements). -/
 def pinnedRaw (cv : Bytes) : Bytes := (cv.drop 32).take (96 * wordVal (key cv))
 
-/-- `AbiLocation.size`'s array loop over inlined elements. -/
-theorem sizeArrayLoop_inlined (data : Calldata) (loc : Nat) (c : Condition) (sizeOf : Nat → Nat)
-    (h : c.inlined = true) : ∀ (k h0 : Nat), sizeArrayLoop data loc c sizeOf k h0 = k * c.size
-  | 0, _ => by simp [sizeArrayLoop]
-  | k + 1, h0 => by
-    simp only [sizeArrayLoop, h, ite_true]
-    rw [sizeArrayLoop_inlined data loc c sizeOf h k]
-    rw [Nat.succ_mul]; omega
+/-- The operand `_read` resolves for an array of 96-byte elements read from
+    its offset: the count word and the elements. -/
+theorem operand_arr {data : Calldata} {L : Slice} {o : Operator} {t : Condition} {lb : Nat}
+    {cv : Bytes} (ht : t.inlineSize = 96) {op : Slice}
+    (h : operand data L 0 ⟨.Array, o, [t], 0, lb, cv⟩ = some op) :
+    32 ≤ L.length ∧ 32 + load data L.offset * 96 ≤ L.length ∧
+      op = ⟨L.offset, 32 + load data L.offset * 96⟩ := by
+  unfold operand sliceRegion at h
+  simp only [Nat.lt_irrefl, ite_false] at h
+  rw [region_eq] at h
+  simp only [Nat.lt_irrefl, ite_false, reduceCtorEq, or_self, ite_true, ht] at h
+  cases ha : array data L 96 with
+  | none => rw [ha] at h; simp at h
+  | some q =>
+    obtain ⟨body, count⟩ := q
+    rw [ha] at h
+    obtain ⟨h32, -, rfl, hcount⟩ := array_some ha
+    have hs : slotSize 96 = 96 := rfl
+    rw [hs, Nat.le_div_iff_mul_le (by decide)] at hcount
+    simp only [show (96 : Nat) > 0 by decide, ite_true, Option.map_some, Option.some.injEq] at h
+    exact ⟨h32, by omega, h.symm⟩
 
 /-- **The library hashes pinned type nodes.** When Roles passes `data` with
     `types` pinned (`pinsArg leafTypes 2`), the length and element bytes the
@@ -196,78 +204,73 @@ theorem sizeArrayLoop_inlined (data : Calldata) (loc : Nat) (c : Condition) (siz
 theorem route_types {env : Env} {data : Calldata} {n F f : Nat} {root : Condition}
     {cons : List Consumption} {sl : Slots} (hdl : data.length < 2 ^ 256)
     (hpin : pinsArg leafTypes 2 f root = true)
-    (hrun : (evalC env data n F 0 root cons sl).status = sOk) :
+    (hrun : (evalC env data n F ⟨0, data.length⟩ root.inlineSize root cons sl).status = sOk) :
     ∃ e, PinUnder 2 root e ∧ pinnedLeaf leafTypes e = true ∧
       typesLen data = wordVal (key e.compValue) ∧ typesRaw data = pinnedRaw e.compValue := by
-  obtain ⟨e, hu, hl, hno, heq⟩ := pinsArg_sound leafTypes 2 F f root cons sl hpin hrun
+  obtain ⟨e, L, hu, hl, hoff, hwithin, hno, heq⟩ :=
+    pinsArg_sound leafTypes 2 F f root cons sl hpin hrun
   refine ⟨e, hu, hl, ?_⟩
   have hleaf := hl
   unfold pinnedLeaf leafTypes at hleaf
   simp only [Bool.and_eq_true, decide_eq_true_eq] at hleaf
   obtain ⟨_, ⟨henc, hsz⟩, hch⟩ := hleaf
-  generalize hL : tailLocation data 4 (32 * 2) = L at hno heq
-  obtain ⟨enc, op, cs, inl, sz, lb, cv⟩ := e
-  simp only at henc hsz hch ⊢
+  obtain ⟨enc, op, cs, sz, lb, cv⟩ := e
+  simp only at henc hsz hch hno heq ⊢
   subst henc hsz
   -- the element: one inlined child of 96 bytes
-  obtain ⟨t, rfl, ht⟩ : ∃ t, cs = [t] ∧ t.inlined = true ∧ t.size = 96 := by
+  obtain ⟨t, rfl, ht⟩ : ∃ t, cs = [t] ∧ t.inlineSize = 96 := by
     cases cs with
     | nil => simp at hch
     | cons t rest =>
       cases rest with
       | nil =>
-        simp only [Bool.and_eq_true, decide_eq_true_eq] at hch
+        simp only [decide_eq_true_eq] at hch
         exact ⟨t, rfl, hch⟩
       | cons _ _ => simp at hch
-  have hs : ∀ L, Roles.size data L ⟨.Array, op, [t], inl, 0, lb, cv⟩ =
-      if L + 32 > data.length then data.length + 1 else 32 + load data L * 96 := by
-    intro L
-    unfold Roles.size
-    simp only [reduceCtorEq, ite_false, or_self, ite_true]
-    rw [sizeArrayLoop_inlined data (L + 32) t _ ht.1, ht.2]
-  simp only [input, reduceCtorEq, ite_false, ne_eq, not_true_eq_false, hs] at hno heq
-  have hin : L + 32 ≤ data.length := by
-    by_cases hc : L + 32 ≤ data.length
-    · exact hc
-    · exfalso; apply hno
-      have h1 : data.length < L + 32 := by omega
-      simp only [gt_iff_lt, h1, ite_true]
-      rw [if_pos (by omega)]
-  simp only [show ¬(L + 32 > data.length) by omega, ite_false] at hno heq
-  have hfitR : L + (32 + load data L * 96) ≤ data.length := by
-    by_cases hc : L + (32 + load data L * 96) ≤ data.length
-    · exact hc
-    · exfalso; apply hno; rw [if_pos (by omega)]
-  rw [if_neg (by omega)] at heq
-  -- the library's pointer is Roles' location
-  have hptr : typesPtr data = L := by
-    have := EIP712.fallback_offset data 2 L hL (by omega)
-    simp only [show 4 + 32 * 2 = 68 by rfl] at this
-    unfold typesPtr; rw [Nat.mod_eq_of_lt (by omega)]; omega
-  simp only [typesRaw, typesLen, hptr]
-  generalize hlv : load data L = len at heq hfitR
-  by_cases hz : len = 0
-  · subst hz
-    rw [if_pos (by omega)] at heq
-    unfold cvB at heq
-    split at heq
-    · simp [inputB] at heq
-    · simp only [inputB, B32.w.injEq] at heq
-      simp [pinnedRaw, ← heq]
-  · rw [if_neg (by omega), if_neg (by omega)] at heq
-    unfold cvB at heq
-    split at heq
-    · simp only [inputB, B32.h.injEq] at heq
-      subst heq
-      have hk : key ((data.drop L).take (32 + len * 96)) = (data.drop L).take 32 := by
-        unfold key
-        rw [List.take_append_of_le_length (by simp; omega), take_take_le (by omega)]
-      unfold pinnedRaw
-      rw [hk, ← load_take hin, hlv]
-      refine ⟨rfl, ?_⟩
-      rw [List.take_append_of_le_length (by simp; omega), List.drop_take, List.drop_drop,
-        show 32 + len * 96 - 32 = 96 * len by rw [Nat.mul_comm]; omega, take_take_le (Nat.le_refl _)]
-    · simp [inputB] at heq
+  have hne : (⟨.Array, op, [t], 0, lb, cv⟩ : Condition).encoding ≠ .None := by simp
+  cases hop : operand data L 0 ⟨.Array, op, [t], 0, lb, cv⟩ with
+  | none => exfalso; apply hno; unfold input; rw [ite_eq_right hne, hop]
+  | some opnd =>
+    obtain ⟨h32, hfitR, rfl⟩ := operand_arr ht hop
+    unfold input inputLength at heq
+    rw [ite_eq_right hne, ite_eq_right hne, hop] at heq
+    simp only [Slice.bytes] at heq
+    have hin : L.offset + 32 ≤ data.length := by omega
+    -- the library's pointer is Roles' slice
+    have hptr : typesPtr data = L.offset := by
+      simp only [show 4 + 32 * 2 = 68 by rfl] at hoff
+      unfold typesPtr; rw [Nat.mod_eq_of_lt (by omega)]; omega
+    simp only [typesRaw, typesLen, hptr]
+    generalize hlv : load data L.offset = len at heq hfitR
+    unfold Evaluate.compare at heq
+    simp only at heq
+    by_cases hz : len = 0
+    · subst hz
+      simp only [Nat.zero_mul, Nat.add_zero, Nat.lt_irrefl, ite_false, inputB] at heq
+      split at heq
+      · rename_i hc
+        obtain ⟨_, hw⟩ := hc
+        simp only [B32.w.injEq] at hw
+        rw [← load_take hin, hlv] at hw
+        simp [pinnedRaw, ← hw]
+      · simp [sParameterNotAllowed, sOk] at heq
+    · have hgt : 32 + len * 96 > 32 := by omega
+      simp only [hgt, ite_true, inputB] at heq
+      split at heq
+      · rename_i hc
+        obtain ⟨_, hw⟩ := hc
+        simp only [B32.h.injEq] at hw
+        rw [← hw]
+        have hk : key ((data.drop L.offset).take (32 + len * 96)) = (data.drop L.offset).take 32 := by
+          unfold key
+          rw [List.take_append_of_le_length (by simp; omega), take_take_le (by omega)]
+        unfold pinnedRaw
+        rw [hk, ← load_take hin, hlv]
+        refine ⟨rfl, ?_⟩
+        rw [List.take_append_of_le_length (by simp; omega), List.drop_take, List.drop_drop,
+          show 32 + len * 96 - 32 = 96 * len by rw [Nat.mul_comm]; omega,
+          take_take_le (Nat.le_refl _)]
+      · simp [sParameterNotAllowed, sOk] at heq
 
 
 /-! ## From the element bytes to the type nodes the encoder gets -/
@@ -339,7 +342,7 @@ theorem route_typed {env : Env} {data : Calldata} {n F f : Nat} {root : Conditio
     {cons : List Consumption} {sl : Slots} (K : Bytes → Bytes) (hK : ∀ x, (K x).length = 32)
     (hdl : data.length < 2 ^ 256)
     (hpin : pinsArg leafTypes 2 f root = true)
-    (hrun : (evalC env data n F 0 root cons sl).status = sOk)
+    (hrun : (evalC env data n F ⟨0, data.length⟩ root.inlineSize root cons sl).status = sOk)
     {ts : List EIP712.TNF} (hts : decodeTypes (typesLen data) (typesRaw data) = some ts)
     {domain message domainSep th fields : Bytes} (hds : domainSep.length = 32) (hth : th.length = 32)
     (hD : EIP712.hashTypedMessage K domain message ts = some (typedDigest K domainSep th fields)) :

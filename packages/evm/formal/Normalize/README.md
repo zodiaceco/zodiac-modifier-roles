@@ -63,7 +63,7 @@ later `Matches` siblings read.
 
 ## Testing the transcription
 
-`packages/evm/test/formal/sdk-normalize.spec.ts` normalizes random trees with
+`packages/evm/formal/test/sdk-normalize.spec.ts` normalizes random trees with
 the TypeScript and with `Normalize.normalize` (driver query `nz`) and compares.
 Trees on which the TypeScript throws (`createTypeTree` on tuples without
 structural children) are skipped; the transcription returns a result there. Deliberately broken transcriptions are caught (checked by mutating

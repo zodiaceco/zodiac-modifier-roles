@@ -76,7 +76,7 @@ def FlaggedOrExact (root : Condition) (fuel : Nat) (roleTypeHash D : Bytes) :
 theorem only_flagged {env : Env} {data : Calldata} {n F f : Nat} {root : Condition}
     {cons : List Consumption} {sl : Slots} (K : Bytes → Bytes) (hK : ∀ x, (K x).length = 32)
     (hdl : data.length < 2 ^ 256)
-    (hrun : (evalC env data n F 0 root cons sl).status = sOk)
+    (hrun : (evalC env data n F ⟨0, data.length⟩ root.inlineSize root cons sl).status = sOk)
     {ds th k domainSep roleTypeHash fields : Bytes} (hTH : th = safeTypeHash K)
     (hdsl : domainSep.length = 32) (hrl : roleTypeHash.length = 32)
     (hsign : LibSign K ds data k)

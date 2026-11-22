@@ -40,7 +40,7 @@ import {
 } from "../../../sdk/src/main/condition/checkStored.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LEAN_BIN = path.resolve(here, "../../formal/.lake/build/bin/roles-model");
+const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
 const CASES = Number(process.env.SDK_CHECK_CASES ?? 3000);
 const SEED = Number(process.env.SDK_CHECK_SEED ?? 1);
 

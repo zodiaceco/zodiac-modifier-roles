@@ -52,7 +52,7 @@ with the executable keccak256.
 
 ## Tests
 
-- `test/formal/safe-signing.spec.ts`: `uintToString` on chain
+- `formal/test/safe-signing.spec.ts`: `uintToString` on chain
   (`MockUintToString`), the Lean transcription and JavaScript's decimal agree
   on 500 values (powers of ten and their neighbours, `2^256 - 1`, random).
 - `packages/integration-tests/test/eip712/safe-signing-lean.spec.ts`, against

@@ -18,11 +18,11 @@ open DecoderFaithfulness Roles
 
 def node (e : Encoding) (o : Operator) (cs : List Condition) (lb : Nat := 0)
     (cv : Bytes := []) : Condition :=
-  ⟨e, o, cs, false, 0, lb, cv⟩
+  ⟨e, o, cs, 0, lb, cv⟩
 
-theorem input_ne_ether {data : Bytes} {l : Nat} {c : Condition} (h : c.encoding ≠ .None) :
-    input data l c ≠ .etherValue := by
-  unfold input; rw [ite_eq_right h]; dsimp only
+theorem input_ne_ether {data : Bytes} {l : Slice} {y : Nat} {c : Condition}
+    (h : c.encoding ≠ .None) : input data l y c ≠ .etherValue := by
+  unfold input; rw [ite_eq_right h]
   repeat (first | split | simp)
 
 /-! ## 1. `f(uint256 amount, bytes memo)` -/
@@ -44,8 +44,8 @@ theorem root_ok : RootOK root := .abi rfl
 /-- What the evaluator sees after pack/unpack: `amount` inlined (32 bytes),
     `memo` not inlined. -/
 def packed : Condition :=
-  ⟨.AbiEncoded, .Matches, [⟨.Static, .EqualTo, [], true, 32, 0, []⟩,
-    ⟨.Dynamic, .EqualTo, [], false, 0, 0, []⟩], false, 0, 4, []⟩
+  ⟨.AbiEncoded, .Matches, [⟨.Static, .EqualTo, [], 32, 0, []⟩,
+    ⟨.Dynamic, .EqualTo, [], 0, 0, []⟩], 0, 4, []⟩
 
 theorem annotate_root : annotate root = packed := by
   simp [root, packed, node, annotate_eq, isInlined_eq, inlinedSize_eq, isInlinedAll]
@@ -53,24 +53,32 @@ theorem annotate_root : annotate root = packed := by
 def data : Bytes := calldata selector args []
 
 set_option maxRecDepth 100000 in
+/-- The arguments are found in the calldata past the selector. -/
+theorem body_root : matchesBody data ⟨0, data.length⟩ packed = some ⟨4, 128⟩ := by decide +kernel
+
+set_option maxRecDepth 100000 in
 /-- `children` places `amount` at byte 4 and `memo`'s tail at byte 68. -/
-theorem children_root : children data 4 packed = some [4, 68] := by decide +kernel
+theorem children_root : children data ⟨4, 128⟩ packed = some [⟨4, 32⟩, ⟨68, 64⟩] := by
+  decide +kernel
 
 /-- The evaluator reaches the `memo` condition (child 1 of `Matches`) at 68. -/
 theorem visits_memo :
-    Visit data (annotate root) 0 [1] ⟨.Dynamic, .EqualTo, [], false, 0, 0, []⟩ 68 := by
+    Visit data (annotate root) ⟨0, data.length⟩ (annotate root).inlineSize [1]
+      ⟨.Dynamic, .EqualTo, [], 0, 0, []⟩ ⟨68, 64⟩ 0 := by
   rw [annotate_root]
-  exact .matchesChild [4, 68] 1 (by decide) rfl children_root rfl .here
+  exact .matchesChild ⟨4, 128⟩ [⟨4, 32⟩, ⟨68, 64⟩] 1 (by decide) rfl body_root children_root rfl
+    .here
 
-/-- The theorem applies: for `memo`, `__input` yields exactly the spec
+/-- The theorem applies: for `memo`, `_read` yields exactly the spec
     encoding of the described component, the window case, the ether value,
     or nothing (strict mode rules the last one out). -/
 example := decoder_input root selector args [] root_desc root_ok (.of_noZip rfl)
   (by decide +kernel) (.visit visits_memo) rfl
 
+set_option maxRecDepth 100000 in
 /-- On these bytes it is the first case: the full spec encoding of `memo`
     (length word + "hi" + padding), which `EqualTo` keccak-hashes. -/
-example : input data 68 ⟨.Dynamic, .EqualTo, [], false, 0, 0, []⟩ =
+example : input data ⟨68, 64⟩ 0 ⟨.Dynamic, .EqualTo, [], 0, 0, []⟩ =
     expectInput (enc (.bytes memo)) := by decide +kernel
 
 /-! ## 2. Variant `Or` and `Slice`: `f(bytes data, uint256 x)` -/
@@ -113,47 +121,60 @@ theorem root2_ok : RootOK root2 := .abi rfl
 
 def data2 : Bytes := calldata selector args2 []
 
-/-- The slice's child after pack/unpack, with `size` overridden to 1. -/
-def leafSliced : Condition := ⟨.Static, .EqualTo, [], true, 1, 0, []⟩
+/-- The slice's child after pack/unpack. -/
+def leafSliced : Condition := ⟨.Static, .EqualTo, [], 32, 0, []⟩
+
+theorem annotate_root2_eq :
+    annotate root2 = ⟨.AbiEncoded, .Matches, [annotate orNode, ⟨.Static, .Slice,
+      [⟨.Static, .EqualTo, [], 32, 0, []⟩], 32, 0, [0, 31, 1]⟩], 0, 4, []⟩ := by
+  rw [annotate_eq]
+  simp [root2, sliceNode, node, annotate_eq, isInlined_eq, inlinedSize_eq, isInlinedAll]
 
 theorem annotate_root2_child1 :
     (annotate root2).children.getD 1 default = ⟨.Static, .Slice,
-      [⟨.Static, .EqualTo, [], true, 32, 0, []⟩], true, 32, 0, [0, 31, 1]⟩ := by
-  simp [root2, sliceNode, node, annotate_eq, isInlined_eq, inlinedSize_eq, isInlinedAll]
+      [⟨.Static, .EqualTo, [], 32, 0, []⟩], 32, 0, [0, 31, 1]⟩ := by
+  rw [annotate_root2_eq]; rfl
 
 set_option maxRecDepth 100000 in
-theorem children_root2 : children data2 4 (annotate root2) = some [68, 36] := by
-  have : annotate root2 = ⟨.AbiEncoded, .Matches, [annotate orNode, ⟨.Static, .Slice,
-      [⟨.Static, .EqualTo, [], true, 32, 0, []⟩], true, 32, 0, [0, 31, 1]⟩], false, 0, 4, []⟩ := by
-    rw [annotate_eq]
-    simp [root2, sliceNode, node, annotate_eq, isInlined_eq, inlinedSize_eq, isInlinedAll]
-  have hor : (annotate orNode).inlined = false ∧ (annotate orNode).size = 0 := by
+theorem body_root2 : matchesBody data2 ⟨0, data2.length⟩ (annotate root2) = some ⟨4, 160⟩ := by
+  rw [annotate_root2_eq]
+  unfold matchesBody
+  simp only [ne_eq, not_true_eq_false, ite_false, ite_true]
+  decide +kernel
+
+set_option maxRecDepth 100000 in
+theorem children_root2 :
+    children data2 ⟨4, 160⟩ (annotate root2) = some [⟨68, 96⟩, ⟨36, 32⟩] := by
+  have hor : (annotate orNode).inlineSize = 0 := by
     simp [orNode, interpA, interpB, node, annotate_eq, isInlined_eq, isInlinedAll]
-  rw [this]
+  rw [annotate_root2_eq]
   unfold children
   simp only [reduceCtorEq, ite_false, List.length_cons, List.length_nil]
   simp only [childrenLoop, List.getD_cons_zero, List.getD_cons_succ, hor]
   decide +kernel
 
 set_option maxRecDepth 100000 in
-/-- The evaluator reaches the slice's child at byte 67 (the last byte of `x`). -/
-theorem visits_slice_leaf : Visit data2 (annotate root2) 0 [1] leafSliced 67 := by
-  apply Visit.matchesChild [68, 36] 1 (by decide) (by rw [annotate_eq]; simp [root2, node])
-    (by
-      have hlb : (annotate root2).leadingBytes = 4 := by rw [annotate_eq]; simp [root2, node]
-      simpa [hlb] using children_root2) (by rw [annotate_eq]; simp [root2, node])
+/-- The evaluator reaches the slice's child at byte 67 (the last byte of
+    `x`), with the window size, 1, as `inlineSize`. -/
+theorem visits_slice_leaf :
+    Visit data2 (annotate root2) ⟨0, data2.length⟩ (annotate root2).inlineSize [1] leafSliced
+      ⟨67, 1⟩ 1 := by
+  apply Visit.matchesChild ⟨4, 160⟩ [⟨68, 96⟩, ⟨36, 32⟩] 1 (by decide)
+    (by rw [annotate_eq]; simp [root2, node]) body_root2 children_root2
+    (by rw [annotate_eq]; simp [root2, node])
   simp only [List.getElem_cons_succ, List.getElem_cons_zero]
   rw [annotate_root2_child1]
-  exact .slice rfl (by intro h; cases h) (by decide) .here
+  exact .slice ⟨36, 32⟩ rfl (by decide) (by decide) .here
 
 /-- The theorem applies to the slice's child (`s = true`: `interpB` need
     not hold). -/
 example := decoder_input root2 selector args2 [] root2_desc root2_ok (.of_noZip rfl)
   (by decide +kernel) (.visit visits_slice_leaf) rfl
 
+set_option maxRecDepth 100000 in
 /-- On these bytes it is the window case: the compared value is `0x34`, the
     last byte of `x = 0x1234`, a window of `x`'s word. -/
-example : input data2 67 leafSliced = .word (wordVal [0x34]) ∧
+example : input data2 ⟨67, 1⟩ 1 leafSliced = .word (wordVal [0x34]) ∧
     IsWindow [0x34] (content xVal) := by
   refine ⟨by decide +kernel, 31, by decide, by decide +kernel⟩
 
@@ -166,7 +187,7 @@ shape Roles' own Zip tests use: pair up `a[i]` and `b[i]`, require
 mutual
   /-- Every node of a tree, the tree first. -/
   def nodes : Condition → List Condition
-    | c@⟨_, _, cs, _, _, _, _⟩ => c :: nodesAll cs
+    | c@⟨_, _, cs, _, _, _⟩ => c :: nodesAll cs
   def nodesAll : List Condition → List Condition
     | [] => []
     | c :: cs => nodes c ++ nodesAll cs
@@ -183,7 +204,7 @@ theorem nodes_self (c : Condition) : c ∈ nodes c := by
 theorem nodes_child {c ch z : Condition} (hm : ch ∈ c.children) (hz : z ∈ nodes ch) :
     z ∈ nodes c := by
   cases c with
-  | mk e o cs i sz lb cv => simp only [nodes, List.mem_cons]; exact .inr (nodesAll_mem hm hz)
+  | mk e o cs sz lb cv => simp only [nodes, List.mem_cons]; exact .inr (nodesAll_mem hm hz)
 
 theorem mem_nodes {z c : Condition} (h : Sub z c) : z ∈ nodes c := by
   induction h with
@@ -287,9 +308,10 @@ theorem root3_zipOK {s : Bool} : ZipOK s root3 := by
 
 /-- The theorems apply: every node `evaluate` reaches in `root3`, through
     the Zip as well, is where the spec puts its component. -/
-example (p : List Nat) (d : Condition) (l : Nat)
-    (hv : Eval (calldata selector args3 []) (annotate root3) p d l) :
-    Reached false (calldata selector args3 []) root3 0 (.call selector args3) p d l :=
+example (p : List Nat) (d : Condition) (l : Slice) (y : Nat)
+    (hv : Eval (calldata selector args3 []) (annotate root3) p d l y) :
+    Reached false (calldata selector args3 []) root3 (rootSlice selector args3 [])
+      (.call selector args3) p d l y :=
   decoder_locations root3 selector args3 [] root3_desc root3_ok root3_zipOK (by decide +kernel) hv
 
 end DecoderFaithfulness.Example

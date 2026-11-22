@@ -96,8 +96,10 @@ theorem reach_pair {t : TN} {r : Nat} (h : Reach (view (zeros 64) 0 64) pair t r
   · exact Or.inl rfl
   · exact h
 
-example (Γ : Plucks) (d : Condition) : ¬ Member Γ (zeros 64) 0 64 pair d 1 := by
+example (Γ : Plucks) (d : Condition) (y : Nat) :
+    ¬ Member Γ (zeros 64) 0 64 pair d ⟨1, 31⟩ y := by
   rintro ⟨t, _, r, _, hR, hl, _⟩
+  simp only at hl
   rcases reach_pair hR with h | h <;> omega
 
 /-! ## 3. `fit` accepts an unpinned `types` argument
@@ -107,11 +109,11 @@ library builds from the calldata's `types` holds when the permission pins
 `types` (the SDK's `allowSignTypedMessage` does; a permission lint should
 flag it otherwise). `rootB` itself does not require it: -/
 
-def pass : Condition := ⟨.Dynamic, .Pass, [], false, 0, 0, []⟩
-def argD : Condition := ⟨.AbiEncoded, .Matches, [⟨.Static, .Pass, [], true, 32, 0, []⟩], false, 0, 0, []⟩
+def pass : Condition := ⟨.Dynamic, .Pass, [], 0, 0, []⟩
+def argD : Condition := ⟨.AbiEncoded, .Matches, [⟨.Static, .Pass, [], 32, 0, []⟩], 0, 0, []⟩
 def argM : Condition := ⟨.AbiEncoded, .Matches,
-  [⟨.Static, .Pass, [], true, 32, 0, []⟩, ⟨.Dynamic, .Pass, [], false, 0, 0, []⟩], false, 0, 0, []⟩
-def root : Condition := ⟨.AbiEncoded, .Matches, [argD, argM, pass], false, 0, 4, []⟩
+  [⟨.Static, .Pass, [], 32, 0, []⟩, ⟨.Dynamic, .Pass, [], 0, 0, []⟩], 0, 0, []⟩
+def root : Condition := ⟨.AbiEncoded, .Matches, [argD, argM, pass], 0, 4, []⟩
 
 example : rootB (fun _ => none) root td tm = true := by decide +kernel
 

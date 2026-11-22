@@ -50,23 +50,24 @@ variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : 
 
 include henv in
 /-- The contract's evaluation of a well-typed tree computes its reading. -/
-theorem eval_reading {c : Cond} (hc : inv avatar c) (l fuel : Nat) (hf : height c < fuel)
+theorem eval_reading {c : Cond} (hc : inv avatar c) (l : Slice) (fuel : Nat)
+    (hf : height c < fuel)
     (cons : List Consumption) (sl : Slots)
-    (hne : (evalC env data n fuel l (D avatar c) cons sl).status ≠ revert) :
-    Rel (evalC env data n fuel l (D avatar c) cons sl)
+    (hne : (evalC env data n fuel l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert) :
+    Rel (evalC env data n fuel l (D avatar c).inlineSize (D avatar c) cons sl)
       (sem (readWorld avatar env data n) c (.pos l) sl (toMap cons)) :=
   adequacy_gen avatar env henv data n fuel c (.pos l) hf (AllN.imp (fun _ h => h.1) hc)
-    (fun _ _ h => by cases h) (fun _ h => by cases h) cons sl hne
+    (fun _ h => by cases h) (fun _ h => by cases h) cons sl hne
 
 include henv in
 /-- **The normalized tree computes the meaning of the tree as written.**
     For a well-typed tree `c`, on every calldata, whenever the contract's
     evaluation of `normalize k c` does not revert, it passes exactly when the
     contract's reading of `c` does, with the same consumptions and slots. -/
-theorem normalize_meaning (k : Nat) {c : Cond} (hc : inv avatar c) (l fuel : Nat)
+theorem normalize_meaning (k : Nat) {c : Cond} (hc : inv avatar c) (l : Slice) (fuel : Nat)
     (hf : height (normalize k c) < fuel) (cons : List Consumption) (sl : Slots)
-    (hne : (evalC env data n fuel l (D avatar (normalize k c)) cons sl).status ≠ revert) :
-    Rel (evalC env data n fuel l (D avatar (normalize k c)) cons sl)
+    (hne : (evalC env data n fuel l (D avatar (normalize k c)).inlineSize (D avatar (normalize k c)) cons sl).status ≠ revert) :
+    Rel (evalC env data n fuel l (D avatar (normalize k c)).inlineSize (D avatar (normalize k c)) cons sl)
       (sem (readWorld avatar env data n) c (.pos l) sl (toMap cons)) := by
   have h := eval_reading avatar env henv data n (norm_inv avatar k c hc).1 l fuel hf cons sl hne
   rwa [normalize_sound (readWorld_ok avatar env data n) (readWorld_normOk avatar env data n) k c hc] at h
@@ -76,12 +77,13 @@ include henv in
     `c`, on every calldata, the contract's evaluations of `c` and of
     `normalize k c` agree whenever neither reverts: both pass with the same
     consumptions, or both fail; and they leave the same Pluck slots. -/
-theorem normalize_calldata (k : Nat) {c : Cond} (hc : inv avatar c) (l fuel fuel' : Nat)
+theorem normalize_calldata (k : Nat) {c : Cond} (hc : inv avatar c) (l : Slice)
+    (fuel fuel' : Nat)
     (hf : height c < fuel) (hf' : height (normalize k c) < fuel') (cons : List Consumption) (sl : Slots)
-    (hne : (evalC env data n fuel l (D avatar c) cons sl).status ≠ revert)
-    (hne' : (evalC env data n fuel' l (D avatar (normalize k c)) cons sl).status ≠ revert) :
-    Agree (evalC env data n fuel l (D avatar c) cons sl)
-      (evalC env data n fuel' l (D avatar (normalize k c)) cons sl) :=
+    (hne : (evalC env data n fuel l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert)
+    (hne' : (evalC env data n fuel' l (D avatar (normalize k c)).inlineSize (D avatar (normalize k c)) cons sl).status ≠ revert) :
+    Agree (evalC env data n fuel l (D avatar c).inlineSize (D avatar c) cons sl)
+      (evalC env data n fuel' l (D avatar (normalize k c)).inlineSize (D avatar (normalize k c)) cons sl) :=
   (eval_reading avatar env henv data n hc l fuel hf cons sl hne).agree
     (normalize_meaning avatar env henv data n k hc l fuel' hf' cons sl hne')
 

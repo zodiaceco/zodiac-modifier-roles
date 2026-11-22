@@ -10,13 +10,13 @@ import { AbiCoder, Interface, hexlify } from "ethers";
 import { network } from "hardhat";
 
 import { checkAndPack } from "../../../sdk/src/main/condition/packConditions.js";
-import { createSetup } from "../setup.js";
+import { createSetup } from "../../test/setup.js";
 import {
   Encoding,
   ExecutionOptions,
   Operator,
   flattenCondition,
-} from "../utils.js";
+} from "../../test/utils.js";
 
 const connection = await network.create();
 const { ethers } = connection;

@@ -63,7 +63,7 @@ def keepsCv (op : Operator) : Bool :=
 mutual
   /-- The tree with every compValue the check ignores cleared. -/
   def skel : Condition → Condition
-    | ⟨e, op, cs, _, _, lb, cv⟩ => ⟨e, op, skelAll cs, false, 0, lb, if keepsCv op then cv else []⟩
+    | ⟨e, op, cs, _, lb, cv⟩ => ⟨e, op, skelAll cs, 0, lb, if keepsCv op then cv else []⟩
 
   def skelAll : List Condition → List Condition
     | [] => []
@@ -90,7 +90,7 @@ theorem skel_default : skel default = default := rfl
 
 mutual
   theorem exactTy_skel : ∀ c : Condition, exactTy (skel c) = exactTy c
-    | ⟨e, op, cs, i, sz, lb, cv⟩ => by simp only [skel, exactTy, exactTyAll_skel cs]
+    | ⟨e, op, cs, sz, lb, cv⟩ => by simp only [skel, exactTy, exactTyAll_skel cs]
   theorem exactTyAll_skel : ∀ cs : List Condition, exactTyAll (skelAll cs) = exactTyAll cs
     | [] => rfl
     | c :: cs => by simp only [skelAll, exactTyAll, exactTy_skel c, exactTyAll_skel cs]
@@ -162,7 +162,7 @@ decreasing_by exact sizeOf_child hm
 
 mutual
   theorem nodes_skel : ∀ c : Condition, Example.nodes (skel c) = (Example.nodes c).map skel
-    | ⟨e, op, cs, i, sz, lb, cv⟩ => by
+    | ⟨e, op, cs, sz, lb, cv⟩ => by
       simp only [skel, Example.nodes, List.map_cons, nodesAll_skel cs]
 
   theorem nodesAll_skel : ∀ cs : List Condition,
@@ -271,21 +271,21 @@ theorem NonStruct.not_zipOp {c : Condition} (h : NonStruct c) :
 /-- A non-structural root (e.g. only `EtherValue` checks): `evaluate` only
     reaches non-structural nodes, at no component. -/
 theorem ns_root_eval {s : Bool} {root : Condition} (h : classify s root = some .ns)
-    {data : Bytes} {p : List Nat} {d : Condition} {l : Nat}
-    (hv : Eval data (annotate root) p d l) : ∃ d0, d = annotate d0 ∧ NonStruct d0 := by
+    {data : Bytes} {p : List Nat} {d : Condition} {l : Slice} {y : Nat}
+    (hv : Eval data (annotate root) p d l y) : ∃ d0, d = annotate d0 ∧ NonStruct d0 := by
   induction hv with
   | visit hvis => exact (NonStruct.visit hvis rfl (ns_sound s root h)).2
-  | zip _ _ _ _ _ hzop _ _ _ _ _ _ ihz _ =>
+  | zip _ _ _ _ _ _ hzop _ _ _ _ _ _ _ ihz _ =>
     obtain ⟨z0, rfl, hns⟩ := ihz
     have := NonStruct.not_zipOp hns
     rcases hzop with hzop | hzop
     · exact absurd (annotate_op_of hzop (by decide)) this.1
     · exact absurd (annotate_op_of hzop (by decide)) this.2
 
-/-- ... and every node that reads `__input` reads the ether value. -/
+/-- ... and every node that calls `_read` reads the ether value. -/
 theorem ns_root_input {s : Bool} {root : Condition} (h : classify s root = some .ns)
-    {data : Bytes} {p : List Nat} {d : Condition} {l : Nat}
-    (hv : Eval data (annotate root) p d l) : input data l d = .etherValue := by
+    {data : Bytes} {p : List Nat} {d : Condition} {l : Slice} {y : Nat}
+    (hv : Eval data (annotate root) p d l y) : input data l y d = .etherValue := by
   obtain ⟨d0, rfl, hns⟩ := ns_root_eval h hv
   unfold input
   rw [annotate_encoding]

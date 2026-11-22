@@ -8,6 +8,8 @@ statements are the authoritative versions.
 ```
 cd packages/evm/formal
 lake build                 # checks every proof (Lean 4.35 via elan, no Mathlib)
+lake build roles-model     # the driver the differential tests run the models with
+cd .. && yarn test:formal  # the tests in formal/test (not part of `yarn test`)
 ```
 
 A successful build means every theorem below is proven. There is no `sorry`,
@@ -41,14 +43,14 @@ Not covered yet:
   Decoder faithfulness assumes it, and it is not proven. It used to be false:
   the trees Integrity accepted but `evaluate` misread are tracked in
   [packages/sdk/INTEGRITY_BACKLOG.md](../../sdk/INTEGRITY_BACKLOG.md), found
-  with the fuzzer `test/formal/integrity-gaps.spec.ts`. Integrity has since
+  with the fuzzer `formal/test/integrity-gaps.spec.ts`. Integrity has since
   been rewritten to follow the rules of the
   [condition check](#condition-check); that the two agree is tested, not
   proven ([status](../../sdk/INTEGRITY_BACKLOG.md#resolved)). The condition check proves the
   hypotheses for every tree it accepts, for clients that store trees with the
   `...Packed` setters.
 - **Pluck slots, in the decoder model.** That the slot a Zip reads holds the
-  location where a Pluck with that index was evaluated. The decoder model
+  span a Pluck with that index stored. The decoder model
   assumes it. The condition check proves no unwritten slot is read, against a
   model of `evaluate`'s control flow (`Run`). `Bridge` needs no such assumption: its
   reading is the contract's own, so a Zip reads whatever its slots hold, in
@@ -64,20 +66,20 @@ Not covered yet:
   [comparison operators](#comparison-operators).)
 - **The reading, not execution, is the reference.** `Bridge` proves that
   the stored tree computes the contract's *reading* of the tree as written.
-  The reading treats a branch that panics as a failed branch. The contract
+  The reading treats a branch that reverts as a failed branch. The contract
   stops instead: the tree as written can revert where the normalized tree
-  passes. Example (a regression test in `test/formal/sdk-normalize.spec.ts`):
-  `Or[Matches(ArrayEvery[EqualTo(1)]), Pass]` on `f(uint256[])`, with
-  calldata claiming $`2^{64}`$ elements. `AbiLocation.children` allocates
-  before it reads, so the tree as written panics; normalization sorts the
-  `Pass` branch first, which passes. The model has no gas: the contract also
-  runs out of gas allocating from about 90,000 claimed elements (under the
-  $`2^{24}`$ transaction gas cap), where the model fails the branch. Both
-  need malformed calldata (the count is the caller's word, not the calldata's
-  size). Accepted: in the reading, as in the tree's intent, the `Pass` branch
-  allows the call. Requiring the stored tree to revert wherever the tree as
-  written does would forbid reordering any branch that can panic, which is
-  almost any branch that reads an array.
+  passes, when normalization sorts a branch that passes before one that
+  reverts (an external call that reverts, or a branch that runs out of gas:
+  the model has no gas). An array count the calldata cannot hold used to be
+  such a case: `Or[Matches(ArrayEvery[EqualTo(1)]), Pass]` on `f(uint256[])`,
+  with calldata claiming $`2^{64}`$ elements, panicked as written, because
+  `AbiLocation.children` allocated before it read. `AbiLocation` now bounds
+  the count by its slice, so that branch fails and the tree as written passes
+  like the normalized one (a regression test in
+  `formal/test/sdk-normalize.spec.ts`). Accepted: in the reading, as in the
+  tree's intent, a branch that passes allows the call. Requiring the stored
+  tree to revert wherever the tree as written does would forbid reordering
+  any branch that can revert.
 - **The tree as written versus what the user meant.** The proofs start
   from a condition tree. That the SDK's authoring helpers, ABI selection or
   a UI build the tree the user meant is not covered. (For signing, the
@@ -93,9 +95,11 @@ Not covered yet:
   output. A buffer passed to a `...Packed` setter by other means is not
   covered.
 - **CI.** The repository's CI does not build the Lean proofs or the
-  driver; the differential tests skip without it, and the evaluator fuzzer
-  runs only when asked (`GAP_EVAL`). A green CI run says nothing about
-  them yet.
+  driver, and does not run the differential tests: they live in
+  `formal/test`, apart from the suite `yarn test` runs, and run with
+  `yarn test:formal` (those that need the driver skip without it; the
+  evaluator fuzzer runs only when asked, `GAP_EVAL`). A green CI run says
+  nothing about them yet.
 - A Zip inside a type node, e.g. `f(uint256[] a, uint256[] b, uint256 c)` with
   `Matches[Pluck a, Pluck b, ZipEvery(…), EqualTo(c)]`. Only a Zip whose
   ancestors are all `And`/`Or` is modeled. The SDK check rejects the others
@@ -114,9 +118,9 @@ Not covered yet:
   `inv` is tested, not proven: `invB` decides `inv` (`invB_sound`,
   `Bridge/InvCheck.lean`, the driver's `iv` query), and the differential
   tests ask it of every array `checkStored` accepts
-  (`test/formal/sdk-check.spec.ts`; 11,600 over 4 seeds, all well-typed,
+  (`formal/test/sdk-check.spec.ts`; 11,600 over 4 seeds, all well-typed,
   while half the rejected ones are not) and of every user tree whose
-  normalized form it accepts (`test/formal/sdk-normalize.spec.ts`; 14,300
+  normalized form it accepts (`formal/test/sdk-normalize.spec.ts`; 14,300
   over 8 seeds, all well-typed as written). `checkAndPackCondition` (the SDK
   entry point for the whole path) checks the tree as written too, so the
   check runs on the tree the hypothesis is about. The test found one rule
@@ -161,7 +165,10 @@ All theorems share the hypotheses
 \mathsf{Desc}_s(c, v), \qquad \mathsf{RootOK}(c), \qquad \mathsf{ZipOK}_s(c), \qquad |\mathsf{cd}| < 2^{255}, \qquad (d, \ell, p) \in \mathsf{Eval}(\mathsf{cd}, c), \qquad u = v|_p
 ```
 
-where $`\mathsf{RootOK}(c)`$ says the root is `AbiEncoded`, possibly under
+where $`\ell`$ is the slice of the calldata the node is evaluated in (Roles
+narrows `bytes calldata` slices instead of passing offsets;
+$`\mathsf{cd}[\ell, n]`$ below is the first $`n`$ bytes of the slice, which
+it has room for), $`\mathsf{RootOK}(c)`$ says the root is `AbiEncoded`, possibly under
 `And`/`Or`, and $`\mathsf{ZipOK}_s(c)`$ is Integrity's Zip type rule: each Pluck
 a Zip references is an array node, and Zip field $`f`$ describes every element
 of the arrays that Pluck describes (trivial without Zips). In short:
@@ -194,7 +201,7 @@ which allows variants.
 Below a `Slice` the theorems give *some* window $`w \sqsubseteq
 \mathsf{content}(u)`$, not which one. That it is
 $`[\mathit{shift}, \mathit{shift} + \mathit{size})`$ is tested (the Slice
-end-to-end tests in `test/formal/lean-model.spec.ts`).
+end-to-end tests in `formal/test/lean-model.spec.ts`).
 
 A review of the statements found that (iv) used to need only *some* bytes-like
 condition and *some* bytes value, so with $`s = \mathsf{true}`$ every theorem
@@ -214,7 +221,7 @@ One of:
 \end{aligned}
 ```
 
-In (i), the root call at $`\ell = 0`$ has no length word:
+In (i), the root call, in the slice that is the whole calldata, has no length word:
 $`\mathsf{cd}[0, |\mathit{pre}| + |\mathsf{enc}(\vec a)|] = \mathit{pre} \mathbin{+\!\!+} \mathsf{enc}(\vec a)`$.
 
 ### `decoder_input`: comparison operands are exactly the spec bytes
@@ -237,8 +244,8 @@ For every `EqualTo`, `GreaterThan`, `LessThan`, signed comparison,
 
 ### `decoder_custom_operand`: `Custom` gets exactly the spec region
 
-For a `Custom` node $`d`$, the $`(\mathit{location}, \mathit{size})`$ passed to
-the checker is one of:
+For a `Custom` node $`d`$, the location and the length of the operand passed
+to the checker are one of:
 
 ```math
 (\ell,\ |\mathsf{enc}(u)|) \text{ with } \mathsf{cd}[\ell, |\mathsf{enc}(u)|] = \mathsf{enc}(u)
@@ -261,15 +268,18 @@ For $`d`$ a `Tuple`, `Array` or `AbiEncoded` node:
 \qquad \text{or (iv)}
 ```
 
-Here $`\ell'`$ is $`\ell`$ moved past the length word and leading bytes for
-nested calldata. A `Matches` may leave out trailing fields, so a tuple or call
-gets one location per child of the node, not per component. By `decoder_locations`, each $`\ell_i`$ is then where the spec
-put component $`i`$.
+Here $`\ell'`$ is the block `_matches` finds the children in: $`\ell`$
+itself, or for nested calldata the payload of the `bytes` value past the
+leading bytes. A `Matches` may leave out trailing fields, so a tuple or call
+gets one slice per child of the node, not per component. By
+`decoder_locations`, each $`\ell_i`$ then starts where the spec put
+component $`i`$.
 
 ### `decoder_slice`: `Slice` rejects exactly when the spec window doesn't exist
 
-For a `Slice` node $`d`$, the length $`L`$ that `_slice` checks
-$`\mathit{shift} + \mathit{size} \le L`$ against is:
+For a `Slice` node $`d`$, `_slice` finds a payload (`slicePayload` does not
+fail), and its length $`L`$, which `_slice` checks
+$`\mathit{shift} + \mathit{size} \le L`$ against, is:
 
 ```math
 L = |\mathsf{content}(u)|
@@ -285,7 +295,7 @@ requires), with compValue $`\mathit{cv}`$ = shift, mask, expected ($`n`$ bytes
 each), and any memory contents after the compValue:
 
 ```math
-\mathsf{bitmaskCheck}(\mathsf{cd}, \ell, d) = \mathsf{bitmaskSpec}(b, \mathit{cv})
+\mathsf{bitmask}(\mathsf{cd}, \ell, d) = \mathsf{bitmaskSpec}(b, \mathit{cv})
 \quad\text{with } b = \mathsf{content}(u) \text{, or } b = w \sqsubseteq \mathsf{content}(u) \text{ below }\texttt{Slice}\text{, or (iv)}
 ```
 
@@ -309,9 +319,14 @@ with the slot $`z`$ references for $`f`$:
 ```math
 v|_p = \mathsf{array}(u_0, \dots, u_{k-1})
 \;\wedge\;
-\mathsf{children}(\mathsf{cd}, \ell, \mathsf{stub}(\mathit{field}_f)) = \mathsf{some}(\ell_0, \dots, \ell_{k-1})
+\mathsf{span} = \mathsf{cd}[\ell, |\mathsf{enc}(v|_p)|]
+\;\wedge\;
+\mathsf{elements}(\mathsf{cd}, \mathsf{span}, \mathit{field}_f) = \mathsf{some}(\ell_0, \dots, \ell_{k-1})
 \qquad \text{or (iv)}
 ```
+
+where $`\mathsf{span}`$ is what the Pluck stores: exactly the spec encoding
+of the array.
 
 So `ZippedArrayLengthMismatch` is reported exactly when the plucked spec arrays
 differ in length, and by `decoder_locations` field $`f`$ is evaluated at element
@@ -320,7 +335,7 @@ $`i`$ exactly where the spec put $`u_i`$.
 ### Trusted base
 
 - `Roles.lean` matches the Solidity. It's a hand transcription, tested against
-  the contracts by `test/formal/lean-model.spec.ts`. Its `annotate` (what pack
+  the contracts by `formal/test/lean-model.spec.ts`. Its `annotate` (what pack
   - unpack leave of the tree) is proven against the byte-level packer and
     unpacker by [condition packing](#condition-packing).
 - `Spec.lean` matches the Solidity docs' formal ABI encoding (about 40 lines).
@@ -328,8 +343,8 @@ $`i`$ exactly where the spec put $`u_i`$.
   $`\mathsf{ZipOK}_s`$ (not proven. It was false for navigating nodes below
   an operator that reads its whole value, which $`\mathsf{Desc}_s`$ excludes;
   Integrity now rejects those, see [Findings](#findings)).
-- When a Zip reads a Pluck slot, it holds a location where a Pluck with that
-  index was evaluated (Integrity's slot-filled-before-use rule; the
+- When a Zip reads a Pluck slot, it holds the span a Pluck with that index
+  stored (Integrity's slot-filled-before-use rule; the
   [condition check](#condition-check) proves its version against a model of
   the control flow).
 - The Lean 4.35 kernel.
@@ -351,7 +366,7 @@ buffer:
 
 $`\mathsf{tree}(\mathit{fs})`$ is the tree the parent pointers describe
 (children in array order), with compValues as `_transform` leaves them.
-$`\mathsf{annotate}`$ adds the `inlined` / `size` / `leadingBytes` metadata. It
+$`\mathsf{annotate}`$ adds the `inlineSize` / `leadingBytes` metadata. It
 is the function the decoder proof assumes, so the decoder theorems hold for the
 tree `unpack` returns.
 
@@ -377,7 +392,7 @@ produce exactly this.
 - `ConditionPacking/Model.lean` and `Layout.lean` match the Solidity, including
   the assembly.
   It's tested against the contracts (byte-identical buffers and identical
-  unpacked trees) by `test/formal/lean-model.spec.ts`.
+  unpacked trees) by `formal/test/lean-model.spec.ts`.
 - The EVM semantics of `mload` / `mstore` / `mcopy` / `shl` / `shr` / `or` as
   modeled. `ImmutableStorage` returns the stored bytes.
 - The Lean 4.35 kernel.
@@ -439,12 +454,10 @@ slot), `packableB_sound` (`packableB` implies `Packable`), and
 ```
 
 (`equalTo_intended`, `compare_word`, signed variants likewise, `checked_equalTo`
-end to end), for an operand and compValue of one length class (both 32 bytes,
-or both longer), unless the two differ and keccak256 collides on exactly
-these two values (`KeyCollides`, impossible for words). The check keeps a
-static operand's compValue at exactly its size. In `checked_equalTo` the
-length class (`SameClass`) and a compValue of at least 32 bytes are
-hypotheses; no theorem derives them from `checkStored`.
+end to end), unless the operand and the compValue differ, are as long, and
+keccak256 collides on exactly these two values (`KeyCollides`, impossible for
+words). `_compare` asks an `EqualTo` compValue to be as long as the operand
+(32 bytes for a word), so the theorems assume nothing of its length.
 
 The chained operand theorems (`checked_input`, `stored_input`) cover a root
 of type `call` only. A variant root (an `Or` of `AbiEncoded` branches, type
@@ -469,9 +482,9 @@ decoding.
 - The decoder and packing proofs' trusted bases.
 - `Run` (`Slots.lean`) matches `evaluate`'s control flow, and `_pluck` is the
   only writer of the slots.
-- `comparePasses` matches `__compare`/`__compareSigned`.
+- `comparePasses` matches `_compare`.
 - The SDK's `checkStored.ts` equals the Lean `checkStored` (tested, not
-  proven: differential tests in `test/formal/sdk-check.spec.ts`, driver
+  proven: differential tests in `formal/test/sdk-check.spec.ts`, driver
   query `ck`).
 - The SDK's `packConditions.ts` equals the Lean `packSpec` (tested, not
   proven: `sdk-check.spec.ts` and `sdk-packed-roles.spec.ts`, driver query
@@ -494,7 +507,7 @@ any, so pruning could change the verdict on calldata (see the end of Findings
 on calldata). Pruning was removed; on the live mainnet permissions it saved
 3.6% of storing gas and about 2.8k gas per call for each `Pass` it removed
 ([decision and gas](../../sdk/CONDITION_GAS.md)). `Normalize/Defs.lean`
-transcribes it; `test/formal/sdk-normalize.spec.ts` checks the transcription
+transcribes it; `formal/test/sdk-normalize.spec.ts` checks the transcription
 against the TypeScript on random trees (40,000 over 8 seeds, no difference).
 
 ### `normalize_sound`: normalization keeps the meaning
@@ -560,9 +573,9 @@ values); writing down what padding may do at the value level exposed it.
 ### Findings on calldata
 
 Lifting the theorem to calldata (below) and the on-chain fuzzer
-(`GAP_NORMALIZE=1` in `test/formal/integrity-gaps.spec.ts`) found more, fixed
+(`GAP_NORMALIZE=1` in `formal/test/integrity-gaps.spec.ts`) found more, fixed
 in the SDK with regression tests (`effects.test.ts`,
-`test/formal/sdk-normalize-layout.spec.ts`):
+`formal/test/sdk-normalize-layout.spec.ts`):
 
 9. Padding appended fields to a static tuple of one call interpretation with
    the type of another (`Or[f((uint) t, uint x), g((uint, uint) t)]` at a
@@ -594,10 +607,11 @@ the field (follow its offset), so on a malformed encoding the tree as written
 could fail where the pruned one passed. Example: `f(bytes b)` with
 `Matches:AbiEncoded[EqualTo(1), Pass:Dynamic]` on `b` fails on
 `b = abi.encode(1)` (`CalldataOverflow`), its normalized form
-`Matches:AbiEncoded[EqualTo(1)]` passed. Roles never checks ABI
-well-formedness (a `Pass:Static` field is not read, trailing data and
-non-canonical offsets are accepted), so this side effect is not a check to
-rely on. On top-level calldata a Solidity target rejects such calldata
+`Matches:AbiEncoded[EqualTo(1)]` passed. Roles does not check ABI
+well-formedness in full (a `Pass:Static` field is located but not read,
+trailing data is accepted, and an offset need only point forward within its
+block; only a value read as a whole must be one canonical region), so this
+side effect is not a check to rely on. On top-level calldata a Solidity target rejects such calldata
 anyway. Without pruning, the tree as written and the normalized tree locate
 the same fields, so the theorems below hold on every calldata, malformed or
 not.
@@ -617,12 +631,12 @@ on gas or on anything else is not modeled.
 
 The **reading** (`Bridge/Read.lean`, `readWorld`) is the contract's own
 reading of calldata as a normalization world. A value is where the
-evaluator stands: a location, a `Slice` window (the window's size, which
-`_slice` gives its child), or an element of a Zip (its fields' locations).
-Every operator reads the node the evaluator runs for it, `D(c)`: a
+evaluator stands: a slice, a `Slice` window (a slice whose length `_slice`
+gives its child as `inlineSize`), or an element of a Zip (its fields'
+slices). Every operator reads the node the evaluator runs for it, `D(c)`: a
 `Matches` locates its children with `AbiLocation.children`, from its
-children's `inlined` and `size`; a Zip decodes the arrays at its slots'
-locations with its own field types. Nothing is assumed of the calldata, or of
+children's `inlineSize`; a Zip decodes the arrays in its slots' spans with
+its own fields' `inlineSize`. Nothing is assumed of the calldata, or of
 how the tree relates to an ABI type.
 
 ### `readWorld_ok`: the normalization proof's assumptions hold
@@ -647,8 +661,8 @@ calldata, slots and consumptions:
 ```
 
 where $`\sim`$: same slots; both pass with the same consumptions (as a map),
-or both fail. A revert (an array length above $`2^{64}-1`$, a compValue the
-evaluator cannot read, an external call) denies the call. Gas is not
+or both fail. A revert (a compValue the evaluator cannot read, a child of a
+`Slice` that navigates, an external call) denies the call. Gas is not
 modeled: the contract also reverts out of gas where the model fails or
 passes.
 
@@ -660,7 +674,7 @@ Lean: `Bridge/ReadNorm.lean`, `Bridge/TyLay.lean`, `Bridge/Final.lean`
 
 `inv c` (well-typed): every node satisfies `invP`, the local rules of the SDK
 check: `adOk`; an `And`/`Or` has no encoding, its children that read a
-parameter share one layout (`inlined`, and `size` if inlined), and its other
+parameter share one layout (inlined or not, and the size if inlined), and its other
 children are empty (inlined, size 0) unless one that reads a parameter is not
 inlined; the children of a check on a whole value describe its type (`TD`,
 the SDK check's `exactTy`); the children of the other nodes normalization
@@ -675,7 +689,7 @@ An `And`/`Or` takes the layout of its children that read a parameter, so
 flattening, deduplication, sorting and unwrapping keep it. A merge puts an
 `Or` of the branches' hinge children at the hinge; `sameType` (all of them
 have the same SDK-check type) gives them one layout (`sameType_lay`: the
-SDK check's type determines `inlined` and `size`), so the `Or` has it too.
+SDK check's type determines `inlineSize`), so the `Or` has it too.
 Inside a type description normalization keeps the type (`td_normalize`).
 
 `readWorld_normOk` turns this into `World.NormOk` for the reading: a
@@ -698,7 +712,7 @@ evaluations of `c` and of `normalize_k(c)` agree (same verdict, same
 consumptions as a map, same slots) whenever neither reverts. The stored tree
 never passes where the reading of the tree as written fails. Where one of
 them reverts they can differ either way (an `Or` reordered past a branch
-that panics, see Not covered): the reference is the reading, not the
+that reverts, see Not covered): the reference is the reading, not the
 execution of the tree as written.
 
 Covered: call variants of any types under one `Or` (each branch is read
@@ -745,7 +759,7 @@ Trusted (tested, not proven):
 - that `checkStored` on the tree as written implies `inv` (see Not covered;
   `checkAndPackCondition` runs it);
 - that `flattenCondition` produces an array that reads back as its input
-  (`fl` in `test/formal/sdk-normalize.spec.ts`: trees reach the driver
+  (`fl` in `formal/test/sdk-normalize.spec.ts`: trees reach the driver
   nested, independently of `flattenCondition`);
 - the TypeScript transcriptions: `normalizeCondition`, `checkStored`, the
   packer;
@@ -846,19 +860,19 @@ units (decimals and price adapter), and what each transaction stores.
   `checkAllowanceUnits` rejects conditions that disagree on an allowance's
   balance decimals.
 
-`test/formal/allowance.spec.ts` compares Roles with the model on random
+`formal/test/allowance.spec.ts` compares Roles with the model on random
 allowances, prices, decimals and block times. Details:
 [Allowance/README.md](Allowance/README.md).
 
 ## The evaluator model
 
-`GAP_EVAL=<n>` in `test/formal/integrity-gaps.spec.ts`: generated trees with
+`GAP_EVAL=<n>` in `formal/test/integrity-gaps.spec.ts`: generated trees with
 allowance checks, generated calldata (corrupted in half the cases), random
 allowance balances and `msg.value`, against `MockEvaluator.evaluateWith`
 (Integrity → pack → unpack → evaluate). For every tree Integrity accepts, the
-exact `Status` and the consumption list must match. 3,000 cases: 1,171
-compared, 0 differences, 18 different statuses reached (the others were
-rejected by Integrity or ran out of gas on corrupted array lengths).
+exact `Status` and the consumption list must match. 3,000 cases (seed 1):
+1,109 compared, 0 differences, 17 different statuses reached (the others
+were rejected by Integrity).
 
 `GAP_PACKED=1` takes the path the SDK uses: trees are gated by the SDK's
 `checkStored` instead of Integrity, packed by the SDK's `packConditions` and
@@ -876,9 +890,10 @@ read of them; out-of-gas cases are skipped; trees and arrays are small.
 Case counts and mutation scores are evidence, not a measure of how likely
 the transcription is right.
 
-Found: `AbiLocation.children` allocates the location array before decoding,
-so an array length above $`2^{64}-1`$ panics there; the decoder transcription
-reports an overflow (both deny). The evaluator model has the panic.
+Found, and since fixed in the contract: `AbiLocation.children` allocated the
+location array before decoding, so an array length above $`2^{64}-1`$
+panicked there. `AbiLocation` now bounds the count by its slice before it
+allocates, and the models transcribe that.
 
 ## Mutation testing
 
@@ -924,7 +939,7 @@ compared with the shape).
 | `TargetDecode/`        | Values read by following offsets, solc's decoder, Roles' walker on any layout, README |
 | `<Lib>/NonVacuity.lean` | Concrete instances where the main theorems' hypotheses hold (`DecoderFaithfulness/Example.lean` for the decoder) |
 | `Diff.lean`            | `roles-model` executable: runs the Lean models on queries from the differential test |
-| `../test/formal/`      | Tests of the Lean models against the Solidity contracts                              |
+| `test/`                | Tests of the Lean models against the Solidity contracts                              |
 
 To add a property, add a `[[lean_lib]]` to `lakefile.toml` and append its name
 to `defaultTargets`. Then add a row to the status table and a section with its

@@ -111,17 +111,19 @@ set_option linter.unusedSimpArgs false
 theorem run_ok : (run env0 dataOk (D [] nc) (maxPluck fs) []).status = sOk := by
   simp (config := {decide := true}) [run, D, nc, orN, eq1, eq2, pass1, toRoles, toRolesL,
     DecoderFaithfulness.annotate_eq, evalC, seqLoop, orLoop, opN, encN, ConditionPacking.opOf?,
-    ConditionPacking.encOf?, cvOf, lbOf, Roles.isInlined, Roles.inlinedSize, leadingCheck, childrenE,
-    depth, depthL, maxPluck, fs, Roles.children, inlinedSizeLoop, wordVal, toBytes, w, allocPanics,
-    dataOk, sel, wb, childrenLoop, input, load, inputB, cvB, Evaluate.compare, result, key, zeros, ok,
+    ConditionPacking.encOf?, cvOf, lbOf, Roles.isInlined, Roles.inlinedSize, leadingCheck, matchesHead,
+    depth, depthL, maxPluck, fs, Roles.children, inlinedSizeLoop, wordVal, toBytes, w, Roles.child,
+    Roles.slotSize, Roles.operand, Roles.slicePayload, Roles.inputLength, Roles.Slice.bytes,
+    dataOk, sel, wb, childrenLoop, input, load, inputB, Evaluate.compare, result, key, zeros, ok,
     violation]
 
 theorem run_bad : (run env0 dataBad (D [] nc) (maxPluck fs) []).status = sOrViolation := by
   simp (config := {decide := true}) [run, D, nc, orN, eq1, eq2, pass1, toRoles, toRolesL,
     DecoderFaithfulness.annotate_eq, evalC, seqLoop, orLoop, opN, encN, ConditionPacking.opOf?,
-    ConditionPacking.encOf?, cvOf, lbOf, Roles.isInlined, Roles.inlinedSize, leadingCheck, childrenE,
-    depth, depthL, maxPluck, fs, Roles.children, inlinedSizeLoop, wordVal, toBytes, w, allocPanics,
-    dataBad, sel, wb, childrenLoop, input, load, inputB, cvB, Evaluate.compare, result, key, zeros, ok,
+    ConditionPacking.encOf?, cvOf, lbOf, Roles.isInlined, Roles.inlinedSize, leadingCheck, matchesHead,
+    depth, depthL, maxPluck, fs, Roles.children, inlinedSizeLoop, wordVal, toBytes, w, Roles.child,
+    Roles.slotSize, Roles.operand, Roles.slicePayload, Roles.inputLength, Roles.Slice.bytes,
+    dataBad, sel, wb, childrenLoop, input, load, inputB, Evaluate.compare, result, key, zeros, ok,
     violation, sOrViolation]
 
 /-! ## `sdk_pipeline` applies, and its conclusion has content -/
@@ -132,21 +134,23 @@ theorem unpack_fs (junk junk' : Mem) :
 
 /-- The reading of the tree as written passes on `dataOk`. -/
 theorem reading_passes (junk junk' : Mem) :
-    (sem (readWorld [] env0 dataOk (maxPluck fs)) c0 (.pos 0) Slots.empty (toMap [])).1 =
+    (sem (readWorld [] env0 dataOk (maxPluck fs)) c0 (.pos ⟨0, dataOk.length⟩) Slots.empty
+        (toMap [])).1 =
       some (toMap (run env0 dataOk (D [] nc) (maxPluck fs) []).cons) := by
   have h := sdk_pipeline [] env0 env0_ok dataOk c0 c0_inv 3 fs fs_packable (fs_nest.trans norm3.symm)
     junk junk' (unpack_fs junk junk') [] (by rw [run_ok]; decide)
   have h2 := h.2
-  rw [if_pos run_ok] at h2
+  rw [ite_eq_left run_ok] at h2
   exact h2
 
 /-- The reading of the tree as written fails on `dataBad`. -/
 theorem reading_fails (junk junk' : Mem) :
-    (sem (readWorld [] env0 dataBad (maxPluck fs)) c0 (.pos 0) Slots.empty (toMap [])).1 = none := by
+    (sem (readWorld [] env0 dataBad (maxPluck fs)) c0 (.pos ⟨0, dataBad.length⟩) Slots.empty
+        (toMap [])).1 = none := by
   have h := sdk_pipeline [] env0 env0_ok dataBad c0 c0_inv 3 fs fs_packable (fs_nest.trans norm3.symm)
     junk junk' (unpack_fs junk junk') [] (by rw [run_bad]; decide)
   have h2 := h.2
-  rw [if_neg (by rw [run_bad]; decide)] at h2
+  rw [ite_eq_right (by rw [run_bad]; decide)] at h2
   exact h2.2
 
 end Bridge.NonVacuity

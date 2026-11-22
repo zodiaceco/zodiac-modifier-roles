@@ -187,7 +187,7 @@ theorem transaction_steps {cons cons' : List Consumption} {e : Entry}
         · rename_i hok
           simp only [Option.some.injEq] at h
           subst h
-          have := evalC_steps (envOf e) e.data _ (hcustom e) _ 0 _ cons Slots.empty hok
+          have := evalC_steps (envOf e) e.data _ (hcustom e) _ _ _ _ cons Slots.empty hok
           rw [hbal] at this
           exact this
         · cases h

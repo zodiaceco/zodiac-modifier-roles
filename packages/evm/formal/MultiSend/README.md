@@ -49,7 +49,7 @@ only Lean's standard axioms, with no `sorry`.
 
 ## Differential test
 
-`test/formal/multisend.spec.ts` (with the Lean driver built;
+`formal/test/multisend.spec.ts` (with the Lean driver built;
 `MULTISEND_CASES`, `MULTISEND_SEED`): random batches, valid and mutated
 (operation `2`+, trailing bytes, wrong data lengths, header edits, empty
 batches, random byte flips).

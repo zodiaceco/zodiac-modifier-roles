@@ -55,7 +55,7 @@ theorem opN_code (o : Operator) : opN (opCode o) = if o = .EqualToAvatar then .E
 theorem toRoles_nest (avatar : Bytes) (fs : List Flat) (i : Nat) :
     toRoles avatar (nest fs i) =
       ⟨encN (encCode (at! fs i).paramType), opN (opCode (at! fs i).operator),
-        (kids fs i).map (fun j => toRoles avatar (nest fs j)), false, 0, lbOf (nest fs i),
+        (kids fs i).map (fun j => toRoles avatar (nest fs j)), 0, lbOf (nest fs i),
         cvOf avatar (nest fs i)⟩ := by
   have he : (nest fs i).enc = encCode (at! fs i).paramType := by rw [nest_eq]
   have ho : (nest fs i).op = opCode (at! fs i).operator := by rw [nest_eq]
@@ -163,7 +163,7 @@ termination_by fs.length - i
 decreasing_by all_goals (have := mem_kids ‹_›; omega)
 
 theorem depth_eq (d : Condition) : depth d = depthL d.children + 1 := by
-  rcases d with ⟨e, o, cs, i, sz, lb, cv⟩; rw [depth]
+  rcases d with ⟨e, o, cs, sz, lb, cv⟩; rw [depth]
 
 theorem depth_D (avatar : Bytes) (c : Cond) : depth (D avatar c) = height c := by
   rw [depth_eq, D_children]
@@ -200,13 +200,14 @@ theorem sdk_pipeline (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List Flat)
     (hu : unpack avatar (bufMem (pack junk fs) junk') = some (tree, mp))
     (cons : List Consumption) (hne : (run env data tree mp cons).status ≠ revert) :
     Rel (run env data tree mp cons)
-      (sem (readWorld avatar env data mp) c0 (.pos 0) Slots.empty (toMap cons)) := by
+      (sem (readWorld avatar env data mp) c0 (.pos ⟨0, data.length⟩) Slots.empty (toMap cons)) := by
   rw [pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, rfl⟩ := hu
   rw [unpacked_eq avatar fs hP 0, hfs] at hne ⊢
   unfold run at hne ⊢
-  exact normalize_meaning avatar env henv data (maxPluck fs) k hc 0 _ (by rw [depth_D]; omega) cons Slots.empty hne
+  exact normalize_meaning avatar env henv data (maxPluck fs) k hc ⟨0, data.length⟩ _
+    (by rw [depth_D]; omega) cons Slots.empty hne
 
 include henv in
 /-- The stored tree and the tree as written, evaluated by the contract,
@@ -217,7 +218,8 @@ theorem sdk_pipeline_agree (c0 : Cond) (hc : inv avatar c0) (k : Nat) (fs : List
     (cons : List Consumption) (hne : (run env data (D avatar c0) mp cons).status ≠ revert)
     (hne' : (run env data tree mp cons).status ≠ revert) :
     Agree (run env data (D avatar c0) mp cons) (run env data tree mp cons) := by
-  have h1 := eval_reading avatar env henv data mp hc 0 _ (by rw [depth_D]; omega) cons Slots.empty hne
+  have h1 := eval_reading avatar env henv data mp hc ⟨0, data.length⟩ _ (by rw [depth_D]; omega) cons
+    Slots.empty hne
   exact h1.agree (sdk_pipeline avatar env henv data c0 hc k fs hP hfs junk junk' hu cons hne')
 
 end

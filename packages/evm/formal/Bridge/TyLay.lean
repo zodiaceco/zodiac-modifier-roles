@@ -172,7 +172,7 @@ theorem classify_lay (s : Bool) : ∀ (r : Condition) (k : K), classify s r = so
       intro k hk
       obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hk
       exact ⟨r.children[i]'(by omega), List.getElem_mem _, hch i (by omega) hi⟩
-    rcases r with ⟨e, op, cs, inl, sz, lb, cv⟩
+    rcases r with ⟨e, op, cs, sz, lb, cv⟩
     simp only at hch hmem hmem' hlen hks hnode ⊢
     unfold classifyNode at hnode
     cases e with
@@ -241,7 +241,7 @@ theorem classify_lay (s : Bool) : ∀ (r : Condition) (k : K), classify s r = so
       obtain ⟨_, ts, _, rfl⟩ := hnode
       unfold KLay; rw [isInlined_eq]; simp [Ty.isStatic]
     | None =>
-      have hmk : ∀ k, KLay ⟨.None, op, cs, inl, sz, lb, cv⟩ k ↔ match k with
+      have hmk : ∀ k, KLay ⟨.None, op, cs, sz, lb, cv⟩ k ↔ match k with
           | .ty t => isInlinedAll cs = t.isStatic ∧
               (t.isStatic = true → inlinedSizeLoop true cs = layS t ∧ 0 < layS t)
           | .ns => isInlinedAll cs = true ∧ inlinedSizeLoop true cs = 0

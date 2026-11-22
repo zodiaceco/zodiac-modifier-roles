@@ -302,8 +302,7 @@ structure URec where
   encoding : Nat
   operator : Nat
   children : List Nat
-  inlined : Bool
-  size : Nat
+  inlineSize : Nat
   leadingBytes : Nat
   compValue : Bytes
 
@@ -341,7 +340,7 @@ def unpackStep (avatar : Bytes) (m : Mem) (st : UState) (_c : Nat) : UState :=
   -- EqualToAvatar: replace with EqualTo + avatar address
   let (operator, compValue) := if operator = 15 then (16, avatar) else (operator, compValue)
   { offset, compValueOffset, childConditionPtr,
-    recs := st.recs ++ [⟨encoding, operator, children, inlinedSz > 0, inlinedSz, leadingBytes, compValue⟩] }
+    recs := st.recs ++ [⟨encoding, operator, children, inlinedSz, leadingBytes, compValue⟩] }
 
 /-- The tree reachable from struct `i`, following child indices (`fuel`
     bounds the depth). `none` where Solidity would panic (`Encoding(7)`,
@@ -353,7 +352,7 @@ def toTree (recs : List URec) : Nat → Nat → Option Condition
     let encoding ← encOf? r.encoding
     let operator ← opOf? r.operator
     let children ← r.children.mapM (toTree recs fuel)
-    pure ⟨encoding, operator, children, r.inlined, r.size, r.leadingBytes, r.compValue⟩
+    pure ⟨encoding, operator, children, r.inlineSize, r.leadingBytes, r.compValue⟩
 
 /-- `ConditionUnpacker.unpack`: the root condition and `maxPluckValue`. -/
 def unpack (avatar : Bytes) (m : Mem) : Option (Condition × Nat) :=
@@ -385,8 +384,7 @@ def rawTree (avatar : Bytes) (fs : List Flat) (i : Nat) : Condition :=
   { encoding := f.paramType
     operator := f.operator
     children := (kids fs i).attach.map fun ⟨j, _⟩ => rawTree avatar fs j
-    inlined := false
-    size := 0
+    inlineSize := 0
     leadingBytes := if f.paramType = .AbiEncoded then wordVal (cv.take 2) else 0
     compValue :=
       if f.operator = .EqualToAvatar then avatar

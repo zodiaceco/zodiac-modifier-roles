@@ -11,7 +11,7 @@ about what a node describes (`_type` and `_zipTypes` in Integrity) are
 
 These rules are not about where `evaluate` reads, so nothing about them is
 proven here. They keep the check at least as strict as Integrity on operator
-arguments; `test/formal/integrity-gaps.spec.ts` (`GAP_CHECK=1`) compares, and
+arguments; `formal/test/integrity-gaps.spec.ts` (`GAP_CHECK=1`) compares, and
 `test/serialization/integrity.spec.ts` asserts every case against both.
 -/
 

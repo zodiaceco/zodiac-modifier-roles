@@ -1,11 +1,10 @@
 import DecoderFaithfulness.Basic
 
 /-!
-# Metadata: `inlined` / `size` after pack/unpack agree with the ABI spec
+# Metadata: `inlineSize` after pack/unpack agrees with the ABI spec
 
-For a tree that describes value `u`, the evaluator's `inlined` flag is
-"`u` is static" and `size` is the length of `u`'s encoding (0 for dynamic
-values).
+For a tree that describes value `u`, the evaluator's `inlineSize` is the
+length of `u`'s encoding if `u` is static, and 0 if it is dynamic.
 -/
 
 namespace DecoderFaithfulness
@@ -33,11 +32,10 @@ theorem annotate_eq (c : Condition) :
       { encoding := if c.encoding = .EtherValue then .None else c.encoding
         operator := if c.operator = .EqualToAvatar then .EqualTo else c.operator
         children := c.children.map annotate
-        inlined := decide ((if isInlined c then inlinedSize c else 0) > 0)
-        size := if isInlined c then inlinedSize c else 0
+        inlineSize := if isInlined c then inlinedSize c else 0
         leadingBytes := if c.encoding = .AbiEncoded then c.leadingBytes else 0
         compValue := c.compValue } := by
-  rcases c with ⟨e, o, cs, i, s, lb, cv⟩
+  rcases c with ⟨e, o, cs, s, lb, cv⟩
   rw [annotate]
   simp
 
@@ -56,12 +54,8 @@ theorem annotate_leadingBytes (c : Condition) :
     (annotate c).leadingBytes = if c.encoding = .AbiEncoded then c.leadingBytes else 0 := by
   rw [annotate_eq]
 
-theorem annotate_size (c : Condition) :
-    (annotate c).size = if isInlined c then inlinedSize c else 0 := by
-  rw [annotate_eq]
-
-theorem annotate_inlined (c : Condition) :
-    (annotate c).inlined = decide ((if isInlined c then inlinedSize c else 0) > 0) := by
+theorem annotate_inlineSize (c : Condition) :
+    (annotate c).inlineSize = if isInlined c then inlinedSize c else 0 := by
   rw [annotate_eq]
 
 theorem annotate_compValue (c : Condition) : (annotate c).compValue = c.compValue := by
@@ -274,22 +268,18 @@ end
 
 /-- The metadata the evaluator reads for a structural node. -/
 theorem DescS.annotate_meta {s : Bool} {c : Condition} {u : Val} (h : DescS s c u) :
-    (annotate c).inlined = u.isStatic ∧
-    (annotate c).size = if u.isStatic then (enc u).length else 0 := by
+    (annotate c).inlineSize = if u.isStatic then (enc u).length else 0 := by
   have m := DescS.meta h
-  have hge := DescS.enc_ge h
-  rw [annotate_inlined, annotate_size, m.1]
+  rw [annotate_inlineSize, m.1]
   cases hst : u.isStatic
   · simp
-  · simp [m.2 hst]; omega
+  · simp [m.2 hst]
 
 theorem Desc.annotate_meta {s : Bool} {c : Condition} {u : Val} (h : Desc s c u) :
-    (annotate c).inlined = u.isStatic ∧
-    (annotate c).size = if u.isStatic then (enc u).length else 0 :=
+    (annotate c).inlineSize = if u.isStatic then (enc u).length else 0 :=
   DescS.annotate_meta (.desc h)
 
-theorem Win.annotate_meta {c : Condition} (h : Win c) :
-    (annotate c).inlined = true ∧ (annotate c).size = 32 := by
-  rw [annotate_inlined, annotate_size, (Win.meta h).1, (Win.meta h).2]; simp
+theorem Win.annotate_meta {c : Condition} (h : Win c) : (annotate c).inlineSize = 32 := by
+  rw [annotate_inlineSize, (Win.meta h).1, (Win.meta h).2]; simp
 
 end DecoderFaithfulness

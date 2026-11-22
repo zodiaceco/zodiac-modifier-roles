@@ -4,7 +4,7 @@
  *
  * For random ABI signatures, condition trees and calldata (well-formed, and
  * corrupted in half of the cases), every `AbiLocation.children` and
- * `AbiLocation.size` result computed on-chain through `MockLocator`
+ * `AbiLocation.sliceEncoded` result computed on-chain through `MockLocator`
  * (Integrity → pack → unpack → AbiLocation) must equal the Lean model's.
  *
  * The pack test compares the Lean packing model
@@ -29,10 +29,10 @@ import {
   Encoding,
   Operator,
   flattenCondition,
-} from "../utils.js";
+} from "../../test/utils.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LEAN_BIN = path.resolve(here, "../../formal/.lake/build/bin/roles-model");
+const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
 const CASES = Number(process.env.LEAN_DIFF_CASES ?? 300);
 const SEED = Number(process.env.LEAN_DIFF_SEED ?? 1);
 
@@ -600,58 +600,33 @@ describe("Lean model of the Roles decoder (differential)", function () {
     const queries: Query[] = [];
     let reverts = 0;
     for (let c = 0; c < CASES * 4; c++) {
-      const data = Buffer.from(bytes(int(200)));
-      const inlined = chance(0.5);
-      let location = int(data.length + 40);
-      let size = 1 + int(32);
-      if (!inlined) {
-        size = int(64);
-        // Usually a plausible length word at the location.
-        if (chance(0.7) && data.length >= 32) {
-          location = int(data.length - 31);
-          const len = int(data.length - location - 32 + 8 + 1);
-          data.fill(0, location, location + 32);
-          data.writeUInt16BE(Math.max(0, len) & 0xffff, location + 30);
-        }
-      } else if (chance(0.7) && data.length > 0) {
-        location = int(data.length);
-      }
-      const start = inlined ? location : location + 32;
-      // The operand length `check` uses: `size`, or the length word.
-      const declared = inlined
-        ? size
-        : location + 32 <= data.length
-          ? Number(BigInt(hexlify(data.subarray(location, location + 32))))
-          : 0;
+      // The operand `check` is given: a Static value or a window of one
+      // (1 to 32 bytes), or the content of a Dynamic value.
+      const operand = Buffer.from(bytes(chance(0.5) ? 1 + int(32) : int(200)));
       let n: number, shift: number;
-      if (chance(0.75) && declared >= 1 && declared < 1000) {
-        // A window inside the declared operand (multi-chunk when long).
-        n = 1 + int(Math.min(declared, 96));
-        shift = int(declared - n + 1);
+      if (chance(0.75) && operand.length >= 1) {
+        // A window inside the operand (multi-chunk when long).
+        n = 1 + int(Math.min(operand.length, 96));
+        shift = int(operand.length - n + 1);
       } else {
         n = chance(0.3) ? 33 + int(60) : 1 + int(32);
-        shift = chance(0.8)
-          ? int(Math.max(1, data.length - start) + 2)
-          : int(70000);
+        shift = chance(0.8) ? int(operand.length + 2) : int(70000);
       }
-      const window = data.subarray(Math.min(start, data.length));
-      const { mask, expected } = randBitmask(window, shift, n);
+      const { mask, expected } = randBitmask(operand, shift, n);
       let cv = bitmaskCv(shift, mask, expected);
       if (chance(0.05)) cv = cv + "ab"; // odd length (Integrity rejects it)
-      const dataHex = hexlify(data);
+      const operandHex = hexlify(operand);
       let sol: string;
       try {
-        sol = String(
-          Number(await mock.check(dataHex, location, cv, inlined, size)),
-        );
+        sol = String(Number(await mock.check(operandHex, cv)));
       } catch {
         reverts++;
         continue;
       }
       queries.push({
-        line: `bm ${dataHex} ${location} ${cv} ${inlined ? 1 : 0} ${size}`,
+        line: `bm ${operandHex} ${cv}`,
         sol,
-        info: `case ${c}: len ${data.length} loc ${location} inlined ${inlined} size ${size} shift ${shift} n ${n}`,
+        info: `case ${c}: len ${operand.length} shift ${shift} n ${n}`,
       });
     }
     await connection.close();
@@ -1105,7 +1080,7 @@ describe("Lean model of the Roles decoder (differential)", function () {
           unpacked
             .map(
               (n: any) =>
-                `${n.parent}:${n.encoding}:${n.operator}:${String(n.compValue).slice(2)}:${n.inlined ? 1 : 0}:${n.size}`,
+                `${n.parent}:${n.encoding}:${n.operator}:${String(n.compValue).slice(2)}:${n.inlineSize > 0n ? 1 : 0}:${n.inlineSize}`,
             )
             .join("|"),
         info: `case ${c} (unpack): ${nodes}`,

@@ -16,7 +16,7 @@
  * Mismatches are grouped by tag set; packages/sdk/INTEGRITY_BACKLOG.md
  * lists the ones found so far, with their status.
  *
- * Off by default. `GAP_CASES=2000 npx hardhat test test/formal/integrity-gaps.spec.ts`.
+ * Off by default. `GAP_CASES=2000 npx hardhat test formal/test/integrity-gaps.spec.ts`.
  * `GAP_CLEAN=1` adds only shapes inside the proof's hypotheses: any mismatch
  * then points at the reference evaluator (or a decoder bug). `GAP_SEED` sets
  * the PRNG seed, `GAP_REPORT=<file>` writes all mismatches as JSON.
@@ -82,7 +82,7 @@ import {
   checkAndPack,
   packConditions,
 } from "../../../sdk/src/main/condition/packConditions.js";
-import { Encoding, Operator, flattenCondition } from "../utils.js";
+import { Encoding, Operator, flattenCondition } from "../../test/utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
 const SEED = Number(process.env.GAP_SEED ?? 1);
@@ -99,7 +99,7 @@ const GAS = BigInt(process.env.GAP_GAS ?? 16_000_000);
 const KEYS = ["0x" + "a1".repeat(32), "0x" + "b2".repeat(32)];
 const LEAN_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../formal/.lake/build/bin/roles-model",
+  "../.lake/build/bin/roles-model",
 );
 
 const OPS = [
@@ -1181,7 +1181,16 @@ function ref(n: Node, t: Ty, v: any, cx: Cx): R {
 function refSliced(n: Node, window: Uint8Array): R {
   if (n.operator === Operator.Pass) return "ok";
   if (n.operator === Operator.Bitmask) return bitmask(window, n.compValue!);
-  return compare(n.operator, BigInt(hexlify(word(window))), n.compValue!);
+  const value = BigInt(hexlify(word(window)));
+  // a signed comparison takes the sign of a window from its top bit
+  return compare(
+    n.operator,
+    n.operator === Operator.SignedIntGreaterThan ||
+      n.operator === Operator.SignedIntLessThan
+      ? BigInt.asIntN(8 * window.length, value)
+      : value,
+    n.compValue!,
+  );
 }
 
 // ---------------------------------------------------------------------------

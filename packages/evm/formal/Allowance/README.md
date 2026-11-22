@@ -76,7 +76,7 @@ tokens.
 
 ## Tests
 
-`test/formal/allowance.spec.ts` runs random allowances through `Roles` itself:
+`formal/test/allowance.spec.ts` runs random allowances through `Roles` itself:
 
 - Configurations: refill, cap and period; a stored timestamp in the past, in
   the future, or set from the current block.

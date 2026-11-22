@@ -135,18 +135,16 @@ Pluck with that index, and `ZipOK` constrains every such Pluck.
 
 ### Comparison operators (`Compare.lean`)
 
-`comparePasses` transcribes the comparison branch of `evaluate` (`__compare`,
-`__compareSigned`) on `__input`'s result. keccak256 is a parameter.
-`__compare` compares a 32-byte value as the word itself and a longer one by
-its hash, so the `EqualTo` theorems take an operand and a compValue of one
-length class (`SameClass`). Within a class, the check passes on a value
-different from the compValue only if the two have the same key
-(`KeyCollides`): never for words (`keyCollides_word`), and for longer values
-a keccak256 collision on exactly these two byte strings. Across classes
-nothing similar holds: a word the caller chooses can equal any hash. The check keeps a static operand and its
-compValue in one class: `EqualTo` on a static tuple needs a compValue of
-exactly the tuple's size (before, a one-field static tuple with a longer
-compValue passed on the word `keccak256(compValue)`).
+`comparePasses` transcribes `ConditionEvaluator._compare` on `_read`'s
+result. keccak256 is a parameter. `_compare` compares an operand of up to 32
+bytes as a word and a longer one by its hash, and for `EqualTo` asks the
+compValue to be as long as the operand (32 bytes for a word). So the check
+passes on a value different from the compValue only if the two are as long
+and have the same key (`KeyCollides`): never for words (`keyCollides_word`),
+and for longer values a keccak256 collision on exactly these two byte
+strings. The check also keeps a static operand and its compValue the same
+size: `EqualTo` on a static tuple needs a compValue of exactly the tuple's
+size.
 
 - `equalTo_iff`: an `EqualTo` on a parameter `u` passes exactly when
   `enc(u)` equals the stored compValue, or the two collide
@@ -157,11 +155,7 @@ compValue passed on the word `keccak256(compValue)`).
 - `compare_word`: `GreaterThan`/`LessThan` compare the 32-byte word as an
   unsigned integer, the signed variants as two's complement (`toInt`).
 - `checked_equalTo`: end to end on a stored array the check accepts, for
-  `EqualTo` nodes whose operand and compValue are of one length class
-  (`SameClass`) and whose compValue has at least 32 bytes. Both are
-  hypotheses: no theorem derives them from `checkStored` (that the check
-  keeps a static operand's compValue at exactly its size is from reading
-  the check).
+  every visited `EqualTo` node that reads a parameter.
 
 Not covered: `Bitmask` (proven in the decoder proof), `Custom` (an external
 contract), `WithinAllowance`/`CallWithinAllowance` (allowance storage),
@@ -219,7 +213,7 @@ rules). The classes, as the check and Integrity decide them:
   such a type description (`exactTy`): a `Matches` listing fewer fields there
   would give a shorter size, and an `Or` of different types has none. Nested
   calldata and `Slice` nodes are allowed there with any checks below them:
-  `AbiLocation.size` reads them as `bytes` or a word.
+  `AbiLocation.sliceRegion` reads them as `bytes` or a word.
 
 **Accepted: read correctly:**
 
@@ -258,7 +252,7 @@ rules). The classes, as the check and Integrity decide them:
 
 `packages/sdk/src/main/condition/checkStored.ts` transcribes `checkStored`
 function by function (exported as `checkStored` / `checkStoredConditions`).
-`test/formal/sdk-check.spec.ts` compares it with the Lean definition through
+`formal/test/sdk-check.spec.ts` compares it with the Lean definition through
 the driver's `ck` query, which prints the verdict and the inferred type. It
 uses random arrays: type-directed trees (nested calldata, variants, slices,
 Plucks with Zips and `WithinRatio`), the same with one node mutated, and
@@ -268,7 +262,7 @@ Last run: 40,000 arrays, about 19,000 accepted per mode, no difference.
 
 ```
 cd packages/evm/formal && lake build roles-model && cd ..
-SDK_CHECK_CASES=40000 npx hardhat test test/formal/sdk-check.spec.ts
+SDK_CHECK_CASES=40000 npx hardhat test formal/test/sdk-check.spec.ts
 ```
 
 The SDK's own unit tests (`checkStored.test.ts`, vitest) cover one case per
@@ -291,7 +285,7 @@ runs `checkStored` first. Tests:
 
 ## Tests
 
-`test/formal/integrity-gaps.spec.ts` with `GAP_CHECK=1` runs `checkStored`
+`formal/test/integrity-gaps.spec.ts` with `GAP_CHECK=1` runs `checkStored`
 through the Lean driver's `ck` query on every fuzzed tree. Each tree it accepts
 is evaluated without Integrity (`MockEvaluator.evaluateUnchecked`, as stored
 by a `...Packed` setter) and must agree with the reference evaluator. It also
@@ -302,7 +296,7 @@ with Integrity's; `GAP_EXAMPLES=1` prints one tree per category.
 
 ```
 cd packages/evm/formal && lake build roles-model && cd ..
-GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity-gaps.spec.ts
+GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test formal/test/integrity-gaps.spec.ts
 ```
 
 ## Proof structure
@@ -325,7 +319,7 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
 - The decoder proof's and the packing proof's trusted bases.
 - `Run` matches `evaluate`'s control flow, and `_pluck` is the only writer of
   `pluckedLocations` (a hand transcription, not differentially tested).
-- `comparePasses` matches `__compare`/`__compareSigned` (hand transcription;
+- `comparePasses` matches `_compare` (hand transcription;
   the fuzzer's reference evaluator agrees with `evaluate` on `EqualTo` and
   comparisons end to end).
 - The `EqualTo` theorems hold up to a keccak256 collision on the operand
@@ -335,7 +329,7 @@ GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity
 - `opsOk` is not proven; it only makes the check stricter.
 - The SDK code is tied to the Lean definitions by tests only: `checkStored.ts`
   equals the Lean `checkStored` by differential testing
-  (`test/formal/sdk-check.spec.ts`, `ck` query), and `packConditions.ts`
+  (`formal/test/sdk-check.spec.ts`, `ck` query), and `packConditions.ts`
   equals `packSpec` by testing (`sdk-check.spec.ts` and
   `sdk-packed-roles.spec.ts`, `pk` query).
 

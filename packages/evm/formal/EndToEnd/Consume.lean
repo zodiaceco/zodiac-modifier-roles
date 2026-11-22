@@ -89,21 +89,25 @@ theorem allowance_steps (env : Env) (cons : List Consumption) (amount : Nat) (cv
       exact ⟨_, consume_steps env cons _ _ h⟩
     · simp [hs] at h
 
-theorem leadingCheck_ne_ok {data : Calldata} {loc : Nat} {cv : Bytes} {s : Nat}
+theorem leadingCheck_ne_ok {data : Calldata} {loc : Slice} {cv : Bytes} {s : Nat}
     (h : leadingCheck data loc cv = some s) : s ≠ sOk := by
   unfold leadingCheck at h
   repeat' split at h
   all_goals (simp at h; try (subst h; decide))
 
-theorem childrenE_ne_ok {data : Calldata} {loc : Nat} {c : Condition} {s : Nat}
-    (h : childrenE data loc c = .inl s) : s ≠ sOk := by
-  unfold childrenE at h; split at h
-  · simp at h; rw [← h]; decide
-  · simp at h
+theorem matchesHead_ne_ok {data : Calldata} {loc : Slice} {c : Condition} {s : Nat}
+    (h : matchesHead data loc c = .inl s) : s ≠ sOk := by
+  unfold matchesHead at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Sum.inl.injEq] at h; subst h; decide)
+    | (rename_i hlc; simp only [Sum.inl.injEq] at h; subst h; exact leadingCheck_ne_ok hlc)
+    | simp at h
 
 theorem zipLocsGo_ne_ok (data : Calldata) (n : Nat) (cv : Bytes) :
-    ∀ (fields : List Condition) (sl : Slots) (f : Nat) (len : Option Nat) (acc : List (List Nat))
-      (s : Nat), zipLocsGo data n cv fields sl f len acc = .inl s → s ≠ sOk
+    ∀ (fields : List Condition) (sl : Slots) (f : Nat) (len : Option Nat)
+      (acc : List (List Slice)) (s : Nat),
+      zipLocsGo data n cv fields sl f len acc = .inl s → s ≠ sOk
   | [], _, _, _, _, _, h => by simp [zipLocsGo] at h
   | fd :: rest, sl, f, len, acc, s, h => by
     unfold zipLocsGo at h
@@ -112,7 +116,6 @@ theorem zipLocsGo_ne_ok (data : Calldata) (n : Nat) (cv : Bytes) :
     · split at h
       · simp at h; rw [← h]; decide
       · split at h
-        · exact childrenE_ne_ok (by rename_i heq; simp at h; rw [← h]; exact heq)
         · simp at h; rw [← h]; decide
         · split at h
           · split at h
@@ -132,10 +135,10 @@ variable (env : Env) (data : Calldata) (n : Nat)
 
 /-- The induction hypothesis: every evaluation at `fuel`. -/
 def EvalSteps (fuel : Nat) : Prop :=
-  ∀ loc c cons sl, StepsOk env cons (evalC env data n fuel loc c cons sl)
+  ∀ loc z c cons sl, StepsOk env cons (evalC env data n fuel loc z c cons sl)
 
 theorem seqLoop_steps {f : Nat} (IH : EvalSteps env data n f) :
-    ∀ (xs : List (Condition × Nat)) (cons : List Consumption) (sl : Slots),
+    ∀ (xs : List (Condition × Slice)) (cons : List Consumption) (sl : Slots),
       StepsOk env cons (seqLoop env data n f xs cons sl)
   | [], cons, sl => by unfold seqLoop; exact ok_steps env cons sl
   | (c, l) :: rest, cons, sl => by
@@ -145,53 +148,53 @@ theorem seqLoop_steps {f : Nat} (IH : EvalSteps env data n f) :
     · rename_i hne; exact fun h => absurd h hne
     · rename_i hok
       intro h
-      obtain ⟨l1, h1⟩ := IH l c cons sl (by simpa using hok)
+      obtain ⟨l1, h1⟩ := IH l _ c cons sl (by simpa using hok)
       obtain ⟨l2, h2⟩ := seqLoop_steps IH rest _ _ h
       exact ⟨_, h1.trans h2⟩
 
 theorem orLoop_steps {f : Nat} (IH : EvalSteps env data n f) :
-    ∀ (cs : List Condition) (loc : Nat) (cons : List Consumption) (sl : Slots),
+    ∀ (cs : List Condition) (loc : Slice) (cons : List Consumption) (sl : Slots),
       StepsOk env cons (orLoop env data n f cs loc cons sl)
   | [], _, cons, sl => by unfold orLoop; exact violation_steps env cons sl (by decide)
   | c :: rest, loc, cons, sl => by
     unfold orLoop
     simp only
     split
-    · exact IH loc c cons sl
+    · exact IH loc _ c cons sl
     · exact orLoop_steps IH rest loc cons _
 
 theorem everyLoop_steps {f : Nat} (IH : EvalSteps env data n f) (c : Condition) :
-    ∀ (locs : List Nat) (cons : List Consumption) (sl : Slots),
+    ∀ (locs : List Slice) (cons : List Consumption) (sl : Slots),
       StepsOk env cons (everyLoop env data n f c locs cons sl)
   | [], cons, sl => by unfold everyLoop; exact ok_steps env cons sl
   | l :: rest, cons, sl => by
     unfold everyLoop
     simp only
     split
-    · exact IH l c cons sl
+    · exact IH l _ c cons sl
     · split
       · intro h; simp [sOk, sNotEveryArrayElementPasses] at h
       · rename_i _ hok
         intro h
-        obtain ⟨l1, h1⟩ := IH l c cons sl (by simpa using hok)
+        obtain ⟨l1, h1⟩ := IH l _ c cons sl (by simpa using hok)
         obtain ⟨l2, h2⟩ := everyLoop_steps IH c rest _ _ h
         exact ⟨_, h1.trans h2⟩
 
 theorem someLoop_steps {f : Nat} (IH : EvalSteps env data n f) (c : Condition) :
-    ∀ (locs : List Nat) (cons : List Consumption) (sl : Slots),
+    ∀ (locs : List Slice) (cons : List Consumption) (sl : Slots),
       StepsOk env cons (someLoop env data n f c locs cons sl)
   | [], cons, sl => by unfold someLoop; exact violation_steps env cons sl (by decide)
   | l :: rest, cons, sl => by
     unfold someLoop
     simp only
     split
-    · exact IH l c cons sl
+    · exact IH l _ c cons sl
     · exact someLoop_steps IH c rest cons _
 
 /-- A Zip passes with consumptions reached from those it started with
     (`base`); `ZipEvery` threads them through the elements. -/
 theorem zipLoop_steps {f : Nat} (IH : EvalSteps env data n f) (every : Bool)
-    (fields : List Condition) (locss : List (List Nat)) :
+    (fields : List Condition) (locss : List (List Slice)) :
     ∀ (k i : Nat) (base cons : List Consumption) (sl : Slots),
       (∃ log, Steps env.balance base log cons) →
       StepsOk env base (zipLoop env data n f every fields locss k i base cons sl)
@@ -202,7 +205,7 @@ theorem zipLoop_steps {f : Nat} (IH : EvalSteps env data n f) (every : Bool)
     · exact violation_steps env base sl (by decide)
   | k + 1, i, base, cons, sl, hb => by
     unfold zipLoop
-    have hseq := seqLoop_steps env data n IH (fields.zip (locss.map fun ls => ls.getD i 0))
+    have hseq := seqLoop_steps env data n IH (fields.zip (locss.map fun ls => ls.getD i default))
       (if every then cons else base) sl
     cases every
     · simp only [Bool.false_eq_true, ite_false] at hseq ⊢
@@ -228,10 +231,10 @@ include hcustom in
     `consume` steps (`hcustom`: a custom checker that fails reports a
     failure status, `EnvOk` in `Bridge`). -/
 theorem evalC_steps : ∀ fuel, EvalSteps env data n fuel
-  | 0 => fun _ _ cons sl => by unfold evalC; exact violation_steps env cons sl (by decide)
+  | 0 => fun _ _ _ cons sl => by unfold evalC; exact violation_steps env cons sl (by decide)
   | f + 1 => by
     have IH := evalC_steps f
-    intro loc c cons sl
+    intro loc z c cons sl
     unfold evalC
     cases hop : c.operator <;> simp only
     all_goals first
@@ -239,36 +242,34 @@ theorem evalC_steps : ∀ fuel, EvalSteps env data n fuel
       | exact violation_steps env cons sl (by decide)
       | skip
     case Matches =>
-      generalize (if loc > 0 ∧ c.encoding = .AbiEncoded then loc + 32 else loc) = L
-      rcases hlc : leadingCheck data L c.compValue with _ | s
+      rcases hmh : matchesHead data loc c with s | body
+      · exact violation_steps env cons sl (matchesHead_ne_ok hmh)
       · dsimp only
-        rcases hce : childrenE data (L + c.leadingBytes) c with s | _ | locs
-        · exact violation_steps env cons sl (childrenE_ne_ok hce)
+        rcases hce : children data body c with _ | locs
         · exact violation_steps env cons sl (by decide)
         · dsimp only
           split
           · exact violation_steps env cons sl (by decide)
           · exact seqLoop_steps env data n IH _ cons sl
-      · exact violation_steps env cons sl (leadingCheck_ne_ok hlc)
     case And => exact seqLoop_steps env data n IH _ cons sl
     case Or => exact orLoop_steps env data n IH _ loc cons sl
     case Slice =>
       rcases cvAt c.compValue 2 with _ | sz
       · exact violation_steps env cons sl (by decide)
       · dsimp only
-        generalize (if c.inlined = true then c.size else load data loc) = len
-        generalize (loc + (if c.inlined = true then 0 else 32) + shiftOf c.compValue) = L
-        by_cases h1 : c.inlined = false ∧ loc + 32 > data.length
-        · rw [if_pos h1]; exact violation_steps env cons sl (by decide)
-        · rw [if_neg h1]
-          by_cases h2 : shiftOf c.compValue + sz > len
-          · rw [if_pos h2]; exact violation_steps env cons sl (by decide)
-          · rw [if_neg h2]
-            rcases c.children with _ | ⟨ch, _⟩
+        rcases slicePayload data loc z with _ | payload
+        · exact violation_steps env cons sl (by decide)
+        · dsimp only
+          split
+          · exact violation_steps env cons sl (by decide)
+          · rcases c.children with _ | ⟨ch, _⟩
             · exact violation_steps env cons sl (by decide)
-            · exact IH _ _ cons sl
+            · dsimp only
+              split
+              · exact violation_steps env cons sl (by decide)
+              · exact IH _ _ _ cons sl
     case Pluck =>
-      generalize input data loc c = v
+      generalize input data loc z c = v
       rcases v with _ | _ | _ | _
       all_goals first
         | exact violation_steps env cons sl (by decide)
@@ -281,8 +282,7 @@ theorem evalC_steps : ∀ fuel, EvalSteps env data n fuel
              · exact ok_steps env cons _)
     case Empty => exact result_steps env _ sl (fun _ => ⟨[], .nil cons⟩)
     case ArraySome | ArrayEvery =>
-      rcases hce : childrenE data loc c with s | _ | locs
-      · exact violation_steps env cons sl (childrenE_ne_ok hce)
+      rcases hce : children data loc c with _ | locs
       · exact violation_steps env cons sl (by decide)
       · dsimp only
         rcases c.children with _ | ⟨ch, _⟩
@@ -297,8 +297,7 @@ theorem evalC_steps : ∀ fuel, EvalSteps env data n fuel
           · exact everyLoop_steps env data n IH _ _ cons sl
           · exact someLoop_steps env data n IH _ _ cons sl
     case ArrayTailMatches =>
-      rcases hce : childrenE data loc c with s | _ | locs
-      · exact violation_steps env cons sl (childrenE_ne_ok hce)
+      rcases hce : children data loc c with _ | locs
       · exact violation_steps env cons sl (by decide)
       · dsimp only
         split
@@ -324,9 +323,11 @@ theorem evalC_steps : ∀ fuel, EvalSteps env data n fuel
     case WithinRatio => exact result_steps env _ sl (fun _ => ⟨[], .nil cons⟩)
     case Custom =>
       split
-      · rename_i s hs
-        exact violation_steps env cons sl (hcustom _ _ _ _ _ hs)
-      · exact result_steps env _ sl (applyCharges_steps env _ cons)
+      · exact violation_steps env cons sl (by decide)
+      · split
+        · rename_i s hs
+          exact violation_steps env cons sl (hcustom _ _ _ _ _ hs)
+        · exact result_steps env _ sl (applyCharges_steps env _ cons)
 
 end
 

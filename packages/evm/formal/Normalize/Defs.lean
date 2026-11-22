@@ -201,7 +201,7 @@ mutual
       match ConditionPacking.encOf? e, ConditionPacking.opOf? o, toCheckL ch with
       | some en, some op, some cs =>
         let bs : DecoderFaithfulness.Bytes := cv.map fun n => ⟨n % 256, Nat.mod_lt _ (by decide)⟩
-        some ⟨en, op, cs, false, 0,
+        some ⟨en, op, cs, 0,
           if e = 5 then (if cv = [] then 4 else DecoderFaithfulness.wordVal (bs.take 2)) else 0,
           if e = 5 then bs.drop 2 else bs⟩
       | _, _, _ => none
