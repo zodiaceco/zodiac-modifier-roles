@@ -567,7 +567,7 @@ describe("Operator - Matches", () => {
         .withArgs(
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          36, // payloadLocation: second param starts at byte 36 (4 + 32)
+          36, // calldataOffset: second param starts at byte 36 (4 + 32)
         );
     });
   });

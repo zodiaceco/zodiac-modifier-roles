@@ -285,7 +285,7 @@ describe("Operator - ArrayEvery", () => {
         .withArgs(
           ConditionViolationStatus.NotEveryArrayElementPasses,
           anyValue,
-          68, // payloadLocation: first element at byte 68 (4 + 32 + 32)
+          68, // calldataOffset: first element at byte 68 (4 + 32 + 32)
         );
     });
   });

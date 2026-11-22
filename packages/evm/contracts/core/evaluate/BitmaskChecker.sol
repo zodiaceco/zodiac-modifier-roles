@@ -22,65 +22,29 @@ import {Status} from "../../types/Types.sol";
  *        - mask      N bytes; selects which bits of the operand are checked.
  *        - expected  N bytes; the required value of the selected bits.
  *
- *      Operand framing (passed via `inlined` and `size`):
- *        - inlined == true   Operand is a Static value (`size` bytes at
- *                            location; normally 32, or 1-32 after Slice)
- *        - inlined == false  Operand is a Dynamic value; `location` points at
- *                            the length-prefix word, content begins at
- *                            `location + 32` and `shift` indexes into content
- *                            (the prefix is not part of the addressable range)
+ *      The operand is the bytes the check applies to, and nothing else: a
+ *      Static value (or the window a Slice narrows it to), or the content of
+ *      a Dynamic value, without its length word or padding. The caller has
+ *      found it within calldata.
  *
- *      Bounds: `shift + N` must not exceed the operand's actual byte length
- *      (`size` for Static, the value of the length prefix for Dynamic). The
- *      window is processed in 32-byte chunks; the trailing chunk is rinsed
- *      so unused tail bits cannot contribute to the comparison.
+ *      Bounds: the window, `shift + N`, must not exceed the operand. It is
+ *      processed in 32-byte chunks; the trailing chunk is rinsed so the bytes
+ *      past the window cannot contribute to the comparison.
  *
  * @author gnosisguild
  */
 library BitmaskChecker {
     function check(
-        bytes calldata data,
-        uint256 location,
-        bytes memory compValue,
-        bool inlined,
-        uint256 size
+        bytes calldata operand,
+        bytes memory compValue
     ) internal pure returns (Status) {
         uint256 shift = uint16(bytes2(compValue));
         uint256 n = (compValue.length - 2) / 2;
 
-        /*
-         * Resolve the operand's encoded byte length so the compare cannot
-         * bleed into trailing zero padding (or, for Dynamic operands sitting
-         * mid-buffer, into the next ABI field).
-         *   - Static (inlined): `size` bytes inline at `location`. We rely on
-         *     the passed `size` because a static node may itself be sliced.
-         *   - Dynamic: length prefix at `location`, content at `location + 32`.
-         */
-        uint256 start = location;
-        uint256 encodedLength = size;
-        if (inlined == false) {
-            if (start + 32 > data.length) {
-                return Status.BitmaskOverflow;
-            }
-
-            assembly {
-                encodedLength := calldataload(add(data.offset, start))
-            }
-
-            start += 32;
-        }
-
-        // mask window must fit within the declared value length
-        if (shift + n > encodedLength) {
+        // the mask window must fit within the operand
+        if (shift + n > operand.length) {
             return Status.BitmaskOverflow;
         }
-
-        // declared value length must be physically present in calldata
-        if (start + encodedLength > data.length) {
-            return Status.CalldataOverflow;
-        }
-
-        bytes calldata value = data[start:];
 
         /*
          * Load actual, expected, and mask in 32-byte chunks. Final chunk
@@ -104,7 +68,7 @@ library BitmaskChecker {
 
             bytes32 actual;
             assembly {
-                actual := calldataload(add(value.offset, add(shift, i)))
+                actual := calldataload(add(operand.offset, add(shift, i)))
             }
 
             bytes32 rinseMask = _rinseMask(n - i);

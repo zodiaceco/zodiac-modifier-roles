@@ -759,7 +759,7 @@ describe("Operator - CallWithinAllowance", async () => {
         .withArgs(
           ConditionViolationStatus.AllowanceExceeded,
           anyValue,
-          0, // payloadLocation: CallWithinAllowance has no payload
+          0, // calldataOffset: CallWithinAllowance has no payload
         );
     });
   });

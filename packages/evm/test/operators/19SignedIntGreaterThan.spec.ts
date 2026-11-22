@@ -148,8 +148,20 @@ describe("Operator - SignedIntGreaterThan", () => {
       .to.be.revertedWithCustomError(roles, "ConditionViolation")
       .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
 
+    // 0x7fffffff = int32 max > 0 passes
+    await expect(invoke("0x7fffffff")).to.not.be.revert(ethers);
+
+    // 0xffffffff = -1 <= 0 fails (the window is sign-extended)
+    await expect(invoke("0xffffffff"))
+      .to.be.revertedWithCustomError(roles, "ConditionViolation")
+      .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
+
+    // 0x80000000 = int32 min <= 0 fails
+    await expect(invoke("0x80000000"))
+      .to.be.revertedWithCustomError(roles, "ConditionViolation")
+      .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
+
     // 2. Slice 32 bytes (full int256) at offset 0, then SignedIntGreaterThan -100
-    // We must use 32 bytes to preserve the sign bit for int256 comparison
     await allowFunction(
       flattenCondition({
         paramType: Encoding.AbiEncoded,
@@ -184,6 +196,48 @@ describe("Operator - SignedIntGreaterThan", () => {
     // -101 (32 bytes) > -100 -> Fail (Less)
     const neg101 = solidityPacked(["int256"], [-101]);
     await expect(invoke(neg101))
+      .to.be.revertedWithCustomError(roles, "ConditionViolation")
+      .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
+
+    // 3. Slice 4 bytes (packed int32) at offset 0, then SignedIntGreaterThan -100
+    await allowFunction(
+      flattenCondition({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children: [
+          {
+            paramType: Encoding.Dynamic,
+            operator: Operator.Slice,
+            compValue: solidityPacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
+            children: [
+              {
+                paramType: Encoding.Static,
+                operator: Operator.SignedIntGreaterThan,
+                compValue: defaultAbiCoder.encode(["int256"], [-100]),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    // -50 (4 bytes) > -100 -> Pass
+    await expect(invoke(solidityPacked(["int32"], [-50]))).to.not.be.revert(
+      ethers,
+    );
+
+    // 50 (4 bytes) > -100 -> Pass
+    await expect(invoke(solidityPacked(["int32"], [50]))).to.not.be.revert(
+      ethers,
+    );
+
+    // -100 (4 bytes) > -100 -> Fail (Equal)
+    await expect(invoke(solidityPacked(["int32"], [-100])))
+      .to.be.revertedWithCustomError(roles, "ConditionViolation")
+      .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
+
+    // -101 (4 bytes) > -100 -> Fail (Less)
+    await expect(invoke(solidityPacked(["int32"], [-101])))
       .to.be.revertedWithCustomError(roles, "ConditionViolation")
       .withArgs(ConditionViolationStatus.ParameterLessThanAllowed, 2, anyValue);
   });
@@ -289,7 +343,7 @@ describe("Operator - SignedIntGreaterThan", () => {
         .withArgs(
           ConditionViolationStatus.ParameterLessThanAllowed,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4
+          4, // calldataOffset: parameter starts at byte 4
         );
     });
   });

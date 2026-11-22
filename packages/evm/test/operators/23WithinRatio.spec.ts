@@ -2231,7 +2231,7 @@ describe("Operator - WithinRatio", () => {
         .withArgs(
           ConditionViolationStatus.RatioAboveMax,
           anyValue,
-          0, // payloadLocation: WithinRatio uses plucked values, no direct payload
+          0, // calldataOffset: WithinRatio uses plucked values, no direct payload
         );
     });
   });

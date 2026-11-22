@@ -25,8 +25,7 @@ struct Condition {
     bytes compValue;
     Condition[] children;
     /* meta fields */
-    bool inlined;
-    uint256 size;
+    uint256 inlineSize;
     uint256 leadingBytes;
 }
 

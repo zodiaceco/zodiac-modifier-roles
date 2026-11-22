@@ -174,16 +174,15 @@ abstract contract Authorization is RolesStorage {
             .load(scopeConfig);
 
         Result memory result = ConditionEvaluator.evaluate(
-            data,
-            0,
             condition,
             consumptions,
             Context(
                 transaction.to,
                 transaction.value,
+                AbiLocation.toSpan(data),
                 transaction.operation,
                 new bytes32[](maxPluckCount),
-                new uint256[](maxPluckCount)
+                new Span[](maxPluckCount)
             )
         );
 
@@ -191,7 +190,7 @@ abstract contract Authorization is RolesStorage {
             revert ConditionViolation(
                 result.status,
                 result.violatedNodeIndex,
-                result.payloadLocation
+                result.calldataOffset
             );
         }
 

@@ -226,7 +226,7 @@ describe("Operator - LessThan", () => {
         .withArgs(
           ConditionViolationStatus.ParameterGreaterThanAllowed,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4
+          4, // calldataOffset: parameter starts at byte 4
         );
     });
   });

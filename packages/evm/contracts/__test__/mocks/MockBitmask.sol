@@ -13,12 +13,9 @@ import "../../types/Types.sol";
  */
 contract MockBitmask {
     function check(
-        bytes calldata data,
-        uint256 location,
-        bytes memory compValue,
-        bool inlined,
-        uint256 size
+        bytes calldata operand,
+        bytes memory compValue
     ) public pure returns (Status) {
-        return BitmaskChecker.check(data, location, compValue, inlined, size);
+        return BitmaskChecker.check(operand, compValue);
     }
 }

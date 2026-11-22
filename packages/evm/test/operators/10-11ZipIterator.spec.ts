@@ -1139,7 +1139,7 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                 children: [
                   {
                     paramType: Encoding.Tuple,
-                    operator: Operator.Pass,
+                    operator: Operator.Matches,
                     children: [
                       { paramType: Encoding.Static, operator: Operator.Pass },
                       { paramType: Encoding.None, operator: Operator.Pass },

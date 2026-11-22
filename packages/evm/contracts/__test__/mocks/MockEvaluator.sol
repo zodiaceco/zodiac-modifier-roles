@@ -25,7 +25,7 @@ contract MockEvaluator {
         return evaluateUnchecked(data, conditions);
     }
 
-    /// @dev For the Lean model of `evaluate` (test/formal/integrity-gaps.spec.ts,
+    /// @dev For the Lean model of `evaluate` (formal/test/integrity-gaps.spec.ts,
     ///      `GAP_EVAL`): sets allowance balances (no refill), then runs
     ///      Integrity → pack → unpack → evaluate with `msg.value` = `value`.
     ///      Call it with `staticCall`.
@@ -77,13 +77,12 @@ contract MockEvaluator {
         Context memory context = Context({
             to: address(this),
             value: value,
+            data: AbiLocation.toSpan(data),
             operation: Operation.Call,
             pluckedValues: new bytes32[](maxPluck),
-            pluckedLocations: new uint256[](maxPluck)
+            pluckedLocations: new Span[](maxPluck)
         });
         Result memory result = ConditionEvaluator.evaluate(
-            data,
-            0,
             root,
             new Consumption[](0),
             context
@@ -110,14 +109,15 @@ contract MockEvaluator {
         Context memory context = Context({
             to: address(this),
             value: 0,
+            data: AbiLocation.toSpan(data),
             operation: Operation.Call,
             pluckedValues: new bytes32[](maxPluck),
-            pluckedLocations: new uint256[](maxPluck)
+            pluckedLocations: new Span[](maxPluck)
         });
 
         return
             ConditionEvaluator
-                .evaluate(data, 0, root, new Consumption[](0), context)
+                .evaluate(root, new Consumption[](0), context)
                 .status;
     }
 }

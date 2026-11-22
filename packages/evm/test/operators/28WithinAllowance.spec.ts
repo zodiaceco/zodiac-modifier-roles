@@ -2206,7 +2206,7 @@ describe("Operator - WithinAllowance", async () => {
         .withArgs(
           ConditionViolationStatus.AllowanceExceeded,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4
+          4, // calldataOffset: parameter starts at byte 4
         );
     });
   });

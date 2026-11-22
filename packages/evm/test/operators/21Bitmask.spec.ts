@@ -349,7 +349,7 @@ describe("Operator - Bitmask", () => {
         .withArgs(
           ConditionViolationStatus.BitmaskNotAllowed,
           anyValue,
-          36, // payloadLocation: dynamic param at byte 36 (4 + 32)
+          36, // calldataOffset: dynamic param at byte 36 (4 + 32)
         );
     });
   });

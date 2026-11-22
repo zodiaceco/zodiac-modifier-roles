@@ -290,7 +290,7 @@ describe("Operator - ArraySome", () => {
         .withArgs(
           ConditionViolationStatus.NoArrayElementPasses,
           anyValue,
-          36, // payloadLocation: array data starts at byte 36
+          36, // calldataOffset: array data starts at byte 36
         );
     });
   });
