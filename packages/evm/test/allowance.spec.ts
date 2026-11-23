@@ -1200,5 +1200,28 @@ describe("AllowanceTracking", () => {
         .to.emit(roles, "ConsumeAllowance")
         .withArgs(ALLOWANCE_KEY, 150, 350);
     });
+
+    it("does not emit ConsumeAllowance when no WithinAllowance condition is used", async () => {
+      const { roles, member, testContractAddress, ROLE_KEY } =
+        await loadFixture(setup);
+
+      await roles.allowTargetPacked(
+        ROLE_KEY,
+        testContractAddress,
+        "0x",
+        ExecutionOptions.None,
+      );
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("oneParamStatic", [100]),
+            0,
+          ),
+      ).to.not.emit(roles, "ConsumeAllowance");
+    });
   });
 });

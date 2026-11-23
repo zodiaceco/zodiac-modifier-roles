@@ -522,6 +522,23 @@ describe("Setup", () => {
           ),
       ).to.not.be.revert(ethers);
     });
+
+    it("reverts with ZeroAddressNotAllowed for address(0)", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+
+      await expect(
+        roles.allowTargetPacked(
+          ROLE_KEY,
+          ZeroAddress,
+          "0x",
+          ExecutionOptions.None,
+        ),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+
+      await expect(
+        roles.allowTarget(ROLE_KEY, ZeroAddress, [], ExecutionOptions.None),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+    });
   });
 
   describe("scopeTarget", () => {
@@ -552,6 +569,14 @@ describe("Setup", () => {
       await expect(roles.scopeTarget(ROLE_KEY, testContractAddress))
         .to.emit(roles, "ScopeTarget")
         .withArgs(ROLE_KEY, testContractAddress);
+    });
+
+    it("reverts with ZeroAddressNotAllowed for address(0)", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+
+      await expect(
+        roles.scopeTarget(ROLE_KEY, ZeroAddress),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
     });
   });
 
@@ -654,6 +679,14 @@ describe("Setup", () => {
       await expect(
         roles.revokeTarget(ROLE_KEY, testContractAddress),
       ).to.not.be.revert(ethers);
+    });
+
+    it("reverts with ZeroAddressNotAllowed for address(0)", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+
+      await expect(
+        roles.revokeTarget(ROLE_KEY, ZeroAddress),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
     });
   });
 
@@ -875,6 +908,31 @@ describe("Setup", () => {
           ),
       ).to.not.be.revert(ethers);
     });
+
+    it("reverts with ZeroAddressNotAllowed for address(0)", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await expect(
+        roles.allowFunctionPacked(
+          ROLE_KEY,
+          ZeroAddress,
+          selector,
+          "0x",
+          ExecutionOptions.None,
+        ),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+
+      await expect(
+        roles.allowFunction(
+          ROLE_KEY,
+          ZeroAddress,
+          selector,
+          [],
+          ExecutionOptions.None,
+        ),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+    });
   });
 
   describe("revokeFunction", () => {
@@ -992,6 +1050,236 @@ describe("Setup", () => {
             iface.encodeFunctionData("doEvenLess"),
             0,
           ),
+      ).to.not.be.revert(ethers);
+    });
+
+    it("reverts with ZeroAddressNotAllowed for address(0)", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await expect(
+        roles.revokeFunction(ROLE_KEY, ZeroAddress, selector),
+      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+    });
+  });
+
+  describe("allowFunctionGlobally", () => {
+    it("stores empty conditions as pass-through", async () => {
+      const { roles, member, testContract, ROLE_KEY, testContractAddress } =
+        await loadFixture(setup);
+
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await roles.grantRole(member.address, ROLE_KEY, 0, 0, 0);
+      await roles.setDefaultRole(member.address, ROLE_KEY);
+      await roles.allowFunctionGlobally(ROLE_KEY, selector, []);
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("doNothing"),
+            0,
+          ),
+      )
+        .to.emit(testContract, "Invoked")
+        .withArgs(selector);
+    });
+
+    it("validates condition tree integrity on pack", async () => {
+      const { roles, evaluator, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await expect(
+        roles.allowFunctionGlobally(ROLE_KEY, selector, [
+          {
+            parent: 5, // Invalid - root node must have parent 0
+            paramType: Encoding.Static,
+            operator: Operator.Pass,
+            compValue: "0x",
+          },
+        ]),
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableRootNode");
+    });
+
+    it("emits AllowFunctionGlobally event", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await expect(roles.allowFunctionGloballyPacked(ROLE_KEY, selector, "0x"))
+        .to.emit(roles, "AllowFunctionGlobally")
+        .withArgs(ROLE_KEY, selector, "0x");
+    });
+
+    it("overwrites existing global function permission", async () => {
+      const { roles, member, ROLE_KEY, testContractAddress } =
+        await loadFixture(setup);
+
+      const selector = iface.getFunction("oneParamStatic")!.selector;
+
+      await roles.grantRole(member.address, ROLE_KEY, 0, 0, 0);
+      await roles.setDefaultRole(member.address, ROLE_KEY);
+
+      const conditionsEq1 = await packConditions(roles, [
+        {
+          parent: 0,
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          compValue: "0x",
+        },
+        {
+          parent: 0,
+          paramType: Encoding.Static,
+          operator: Operator.EqualTo,
+          compValue: ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [1]),
+        },
+      ]);
+      await roles.allowFunctionGloballyPacked(
+        ROLE_KEY,
+        selector,
+        conditionsEq1,
+      );
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("oneParamStatic", [2]),
+            0,
+          ),
+      ).to.be.revertedWithCustomError(roles, "ConditionViolation");
+
+      const conditionsEq2 = await packConditions(roles, [
+        {
+          parent: 0,
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          compValue: "0x",
+        },
+        {
+          parent: 0,
+          paramType: Encoding.Static,
+          operator: Operator.EqualTo,
+          compValue: ethers.AbiCoder.defaultAbiCoder().encode(["uint256"], [2]),
+        },
+      ]);
+      await roles.allowFunctionGloballyPacked(
+        ROLE_KEY,
+        selector,
+        conditionsEq2,
+      );
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("oneParamStatic", [2]),
+            0,
+          ),
+      ).to.not.be.revert(ethers);
+    });
+  });
+
+  describe("revokeFunctionGlobally", () => {
+    it("deletes global scopeConfig for selector", async () => {
+      const { roles, member, testContract, ROLE_KEY, testContractAddress } =
+        await loadFixture(setup);
+
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await roles.grantRole(member.address, ROLE_KEY, 0, 0, 0);
+      await roles.setDefaultRole(member.address, ROLE_KEY);
+      await roles.allowFunctionGloballyPacked(ROLE_KEY, selector, "0x");
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("doNothing"),
+            0,
+          ),
+      )
+        .to.emit(testContract, "Invoked")
+        .withArgs(selector);
+
+      await roles.revokeFunctionGlobally(ROLE_KEY, selector);
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("doNothing"),
+            0,
+          ),
+      ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+    });
+
+    it("emits RevokeFunctionGlobally event", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await roles.allowFunctionGloballyPacked(ROLE_KEY, selector, "0x");
+
+      await expect(roles.revokeFunctionGlobally(ROLE_KEY, selector))
+        .to.emit(roles, "RevokeFunctionGlobally")
+        .withArgs(ROLE_KEY, selector);
+    });
+
+    it("does not affect other global selectors", async () => {
+      const { roles, member, testContract, ROLE_KEY, testContractAddress } =
+        await loadFixture(setup);
+
+      const selector1 = iface.getFunction("doNothing")!.selector;
+      const selector2 = iface.getFunction("doEvenLess")!.selector;
+
+      await roles.grantRole(member.address, ROLE_KEY, 0, 0, 0);
+      await roles.setDefaultRole(member.address, ROLE_KEY);
+      await roles.allowFunctionGloballyPacked(ROLE_KEY, selector1, "0x");
+      await roles.allowFunctionGloballyPacked(ROLE_KEY, selector2, "0x");
+
+      await roles.revokeFunctionGlobally(ROLE_KEY, selector1);
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("doNothing"),
+            0,
+          ),
+      ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+
+      await expect(
+        roles
+          .connect(member)
+          .execTransactionFromModule(
+            testContractAddress,
+            0,
+            iface.encodeFunctionData("doEvenLess"),
+            0,
+          ),
+      )
+        .to.emit(testContract, "Invoked")
+        .withArgs(selector2);
+    });
+
+    it("succeeds even if global function was not allowed", async () => {
+      const { roles, ROLE_KEY } = await loadFixture(setup);
+      const selector = iface.getFunction("doNothing")!.selector;
+
+      await expect(
+        roles.revokeFunctionGlobally(ROLE_KEY, selector),
       ).to.not.be.revert(ethers);
     });
   });
