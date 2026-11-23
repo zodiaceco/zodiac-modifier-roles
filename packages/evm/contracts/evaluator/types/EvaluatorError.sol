@@ -4,61 +4,10 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {Status} from "./Authorization.sol";
-
 /**
- * @title IRolesError - All custom errors emitted by the Roles Mod
+ * @title IEvaluatorError - Integrity and evaluation errors emitted by the Evaluator
  */
-interface IRolesError {
-    /*//////////////////////////////////////////////////////////////
-                            EXECUTION ERRORS
-    //////////////////////////////////////////////////////////////*/
-
-    /// Sender is allowed to make this call, but the internal transaction failed
-    error ModuleTransactionFailed();
-
-    /// Reentrant call detected
-    error Reentrancy();
-
-    /*//////////////////////////////////////////////////////////////
-                          AUTHORIZATION ERRORS
-    //////////////////////////////////////////////////////////////*/
-
-    /// Sender is not a member of the role
-    error NoMembership();
-
-    /// Membership is not yet valid (before start timestamp)
-    error MembershipNotYetValid();
-
-    /// Membership has expired (after end timestamp)
-    error MembershipExpired();
-
-    /// Function signature too short
-    error FunctionSignatureTooShort();
-
-    /// Calldata unwrapping failed
-    error MalformedMultiEntrypoint();
-
-    /// Authorization check failed with violation information
-    error ConditionViolation(
-        Status status,
-        uint256 violatedNodeIndex,
-        uint256 calldataOffset
-    );
-
-    /// No matching permission found for the transaction
-    error TransactionNotAllowed(address to, bytes4 selector);
-
-    /// Sending value is not allowed
-    error SendNotAllowed(address target);
-
-    /// Delegate call is not allowed
-    error DelegateCallNotAllowed(address target);
-
-    /*//////////////////////////////////////////////////////////////
-                           INTEGRITY ERRORS
-    //////////////////////////////////////////////////////////////*/
-
+interface IEvaluatorError {
     /// Root node is invalid or missing
     error UnsuitableRootNode();
 
@@ -112,7 +61,4 @@ interface IRolesError {
 
     /// A Pluck slot is defined more than once in the condition tree
     error DuplicatePluckIndex(uint256 index, uint8 pluckIndex);
-
-    /// address(0) is not allowed
-    error ZeroAddressNotAllowed();
 }

@@ -4,12 +4,11 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {AVATAR_SLOT} from "../StorageSlots.sol";
-
-import "../../types/Types.sol";
+import {IRolesCore} from "../../IEvaluator.sol";
+import {Condition, Encoding, Operator} from "../types/EvaluatorTypes.sol";
 
 /**
- * @title  ConditionUnpacker
+ * @title  Unpacker
  * @notice A library that provides unpacking functions for reconstructing the
  *         Condition tree from a memory-optimized buffer.
  *
@@ -17,15 +16,14 @@ import "../../types/Types.sol";
  *         begins by loading packed conditions from contract storage
  *         (via extcodecopy) and performing tree unpacking. The implementation
  *         is deliberately low-level to minimize execution overhead.
- *
- * @author gnosisguild
  */
-library ConditionUnpacker {
+library Unpacker {
     uint256 private constant HEADER_BYTES = 3;
     uint256 private constant NODE_BYTES = 4;
 
     function unpack(
-        bytes memory buffer
+        bytes memory buffer,
+        address core
     )
         internal
         view
@@ -42,7 +40,7 @@ library ConditionUnpacker {
 
         Condition[] memory conditions = new Condition[]((header >> 8));
 
-        _unpackConditions(buffer, conditions);
+        _unpackConditions(buffer, conditions, core);
 
         condition = conditions[0];
         maxPluckValue = header & 0xFF;
@@ -50,7 +48,8 @@ library ConditionUnpacker {
 
     function _unpackConditions(
         bytes memory buffer,
-        Condition[] memory conditions
+        Condition[] memory conditions,
+        address core
     ) private view {
         uint256 offset;
         uint256 compValueOffset;
@@ -162,14 +161,10 @@ library ConditionUnpacker {
                 }
             }
 
-            // EqualToAvatar: replace with EqualTo + avatar address
+            // EqualToAvatar: replace with EqualTo + avatar address from Core
             if (condition.operator == Operator.EqualToAvatar) {
                 condition.operator = Operator.EqualTo;
-                address avatar;
-                assembly {
-                    avatar := sload(AVATAR_SLOT)
-                }
-                condition.compValue = abi.encode(avatar);
+                condition.compValue = abi.encode(IRolesCore(core).avatar());
             }
         }
     }

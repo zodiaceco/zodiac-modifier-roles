@@ -4,9 +4,9 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../common/AllowanceConsumer.sol";
-import "./serialize/ConditionStorer.sol";
 import "./Storage.sol";
+import "../ImmutableStorage.sol";
+import "../IEvaluator.sol";
 
 /**
  * @title  Setup
@@ -40,7 +40,8 @@ import "./Storage.sol";
  *
  *         Target: one rule covers every call to `target`.
  *           1. target entry
- *           2. if none matches, revert: the call is unauthorized
+ *           2. global function entry for the selector
+ *           3. if none matches, revert: the call is unauthorized
  *
  *         Function: each function of `target` has its own rule.
  *           1. function entry for the selector
@@ -51,13 +52,9 @@ import "./Storage.sol";
  *         never permits sending value or delegatecall, and is skipped for
  *         empty calldata.
  *
- *         Clearance and entries are written independently:
- *         - `allowTarget` sets Target and writes the target entry.
- *         - `scopeTarget` sets Function; `revokeTarget` resets to None.
- *         - `allowFunction` and `revokeFunction` write and delete a function
- *           entry, which applies only under Function.
- *         Changing the clearance deletes no entries: function entries
- *         written earlier apply again once the target is scoped.
+ *         Clearance and `scopeConfig` entries are stored independently:
+ *         changing a target's clearance never deletes existing entries, so
+ *         prior function entries take effect again when re-scoped.
  *
  *         Packed words
  *         ────────────
@@ -70,8 +67,8 @@ import "./Storage.sol";
  *         Validated vs. pre-packed setters
  *         ────────────────────────────────
  *         Validated: `allowTarget`, `allowFunction`, `allowFunctionGlobally`.
- *         Take a `ConditionFlat[]` tree, validate it (`Integrity`) and pack
- *         it on-chain, so the stored buffer is well-formed.
+ *         Take a `ConditionFlat[]` tree and delegate validation and packing
+ *         to the installed `evaluator`, so the stored buffer is well-formed.
  *
  *         Pre-packed: `allowTargetPacked`, `allowFunctionPacked`,
  *         `allowFunctionGloballyPacked`. Store a buffer as-is, with no
@@ -86,17 +83,30 @@ abstract contract Setup is RolesStorage {
     function setUp(
         bytes memory initParams
     ) public virtual override initializer {
-        (address _owner, address _avatar, address _target) = abi.decode(
-            initParams,
-            (address, address, address)
-        );
+        (
+            address _owner,
+            address _avatar,
+            address _target,
+            address _evaluator
+        ) = abi.decode(initParams, (address, address, address, address));
+        _requireNonZeroAddress(_evaluator);
         _transferOwnership(_owner);
         avatar = _avatar;
         target = _target;
+        evaluator = _evaluator;
 
         setupModules();
 
         emit RolesModSetup(msg.sender, _owner, _avatar, _target, VERSION);
+        emit SetEvaluator(_evaluator);
+    }
+
+    /// @dev Sets the stateless condition evaluator contract used by this mod.
+    /// @param _evaluator Address of the Evaluator contract.
+    function setEvaluator(address _evaluator) external onlyOwner {
+        _requireNonZeroAddress(_evaluator);
+        evaluator = _evaluator;
+        emit SetEvaluator(_evaluator);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -223,8 +233,8 @@ abstract contract Setup is RolesStorage {
         bytes32 key = bytes32(bytes20(targetAddress)) | (~bytes32(0) >> 160);
 
         roles[roleKey].clearance[targetAddress] = Clearance.Target;
-        roles[roleKey].scopeConfig[key] = ConditionStorer.store(
-            _conditionsOrPass(packedConditions),
+        roles[roleKey].scopeConfig[key] = _storeScopeConfig(
+            packedConditions,
             options
         );
 
@@ -306,7 +316,7 @@ abstract contract Setup is RolesStorage {
         _requireNonZeroAddress(targetAddress);
         roles[roleKey].scopeConfig[
             _key(targetAddress, selector)
-        ] = ConditionStorer.store(_conditionsOrPass(packedConditions), options);
+        ] = _storeScopeConfig(packedConditions, options);
 
         emit AllowFunction(
             roleKey,
@@ -351,8 +361,9 @@ abstract contract Setup is RolesStorage {
         bytes4 selector,
         bytes memory packedConditions
     ) public onlyOwner {
-        roles[roleKey].scopeConfig[_key(address(0), selector)] = ConditionStorer
-            .store(_conditionsOrPass(packedConditions), ExecutionOptions.None);
+        roles[roleKey].scopeConfig[
+            _key(address(0), selector)
+        ] = _storeScopeConfig(packedConditions, ExecutionOptions.None);
 
         emit AllowFunctionGlobally(roleKey, selector, packedConditions);
     }
@@ -429,16 +440,6 @@ abstract contract Setup is RolesStorage {
         emit SetAllowance(key, balance, maxRefill, refill, period, timestamp);
     }
 
-    /// @dev Returns the accrued allowance balance at current block.timestamp.
-    /// @param allowanceKey The allowance key.
-    /// @return balance The accrued balance.
-    /// @return timestamp The timestamp of the last accrual point.
-    function accruedAllowance(
-        bytes32 allowanceKey
-    ) external view returns (uint128 balance, uint64 timestamp) {
-        return AllowanceConsumer.accrue(allowanceKey, uint64(block.timestamp));
-    }
-
     /*//////////////////////////////////////////////////////////////
                               ADAPTERS
     //////////////////////////////////////////////////////////////*/
@@ -457,16 +458,16 @@ abstract contract Setup is RolesStorage {
     //////////////////////////////////////////////////////////////*/
 
     /// @dev Read-only entrypoint for packing conditions: permission authors
-    ///      can eth_call this to validate and pack, then pass the buffer to
-    ///      a *Packed setter. An empty array packs to empty bytes - no
-    ///      payload restrictions (pass-through).
+    ///      can eth_call this to validate and pack via the installed Evaluator,
+    ///      then pass the buffer to a *Packed setter. An empty array packs to
+    ///      empty bytes - no payload restrictions (pass-through).
     /// @param conditions The conditions to pack, in flat BFS order.
     /// @return buffer The packed condition buffer.
     function packConditions(
         ConditionFlat[] memory conditions
-    ) public pure returns (bytes memory buffer) {
+    ) public view returns (bytes memory buffer) {
         if (conditions.length > 0) {
-            buffer = ConditionStorer.pack(conditions);
+            buffer = IEvaluator(evaluator).pack(conditions);
         }
     }
 
@@ -474,15 +475,14 @@ abstract contract Setup is RolesStorage {
                                INTERNALS
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev If buffer is empty, returns packed single Pass condition;
-    ///      otherwise returns the buffer unchanged.
-    function _conditionsOrPass(
-        bytes memory buffer
-    ) private pure returns (bytes memory) {
-        if (buffer.length == 0) {
-            return ConditionStorer.pack(new ConditionFlat[](1));
-        }
-        return buffer;
+    /// @dev Stores opaque packed condition bytes in immutable storage and packs
+    ///      the resulting pointer with `options` into a `scopeConfig` word.
+    function _storeScopeConfig(
+        bytes memory packedConditions,
+        ExecutionOptions options
+    ) private returns (uint256) {
+        address pointer = ImmutableStorage.store(packedConditions);
+        return (uint256(options) << 160) | uint160(pointer);
     }
 
     function _requireNonZeroAddress(address targetAddress) private pure {

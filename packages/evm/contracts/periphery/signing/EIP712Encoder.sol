@@ -4,7 +4,7 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.21 <0.9.0;
 
-import {Encoding} from "../../types/Condition.sol";
+import {Encoding} from "../../evaluator/types/EvaluatorTypes.sol";
 
 /**
  * @dev EIP-712 has two recursive layers:

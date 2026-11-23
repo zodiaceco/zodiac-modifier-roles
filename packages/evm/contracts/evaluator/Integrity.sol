@@ -4,7 +4,9 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../types/Types.sol";
+import {ConditionFlat} from "../IEvaluator.sol";
+import "./types/EvaluatorError.sol";
+import "./types/EvaluatorTypes.sol";
 
 /**
  * @title Integrity
@@ -101,28 +103,28 @@ library Integrity {
     ) private pure returns (Node[] memory nodes) {
         uint256 count = conditions.length;
         if (count > MAX_CONDITION_COUNT) {
-            revert IRolesError.ConditionNodeCountExceedsMax();
+            revert IEvaluatorError.ConditionNodeCountExceedsMax();
         }
         if (count == 0 || conditions[0].parent != 0) {
-            revert IRolesError.UnsuitableRootNode();
+            revert IEvaluatorError.UnsuitableRootNode();
         }
 
         nodes = new Node[](count);
-        nodes[0].encoding = conditions[0].paramType;
-        nodes[0].operator = conditions[0].operator;
+        nodes[0].encoding = _decodeEncoding(conditions[0].paramType, 0);
+        nodes[0].operator = _decodeOperator(conditions[0].operator, 0);
 
         for (uint256 i = 1; i < count; ++i) {
             uint256 parent = conditions[i].parent;
             if (parent == i) {
-                revert IRolesError.UnsuitableRootNode();
+                revert IEvaluatorError.UnsuitableRootNode();
             }
             // Parents come first, and children are grouped by parent
             if (parent < conditions[i - 1].parent || parent > i) {
-                revert IRolesError.NotBFS();
+                revert IEvaluatorError.NotBFS();
             }
 
-            nodes[i].encoding = conditions[i].paramType;
-            nodes[i].operator = conditions[i].operator;
+            nodes[i].encoding = _decodeEncoding(conditions[i].paramType, i);
+            nodes[i].operator = _decodeOperator(conditions[i].operator, i);
 
             Node memory parentNode = nodes[parent];
             if (parentNode.childCount == 0) parentNode.childStart = i;
@@ -131,10 +133,10 @@ library Integrity {
 
         for (uint256 i; i < count; ++i) {
             if (conditions[i].compValue.length > MAX_COMP_VALUE_LENGTH) {
-                revert IRolesError.UnsuitableCompValue(i);
+                revert IEvaluatorError.UnsuitableCompValue(i);
             }
             if (nodes[i].childCount > MAX_CHILD_COUNT) {
-                revert IRolesError.ConditionChildCountExceedsMax(i);
+                revert IEvaluatorError.ConditionChildCountExceedsMax(i);
             }
         }
 
@@ -175,7 +177,7 @@ library Integrity {
 
             if (encoding == Encoding.Static) size = 32;
             if (size > MAX_INLINED_SIZE) {
-                revert IRolesError.ConditionInlinedSizeExceedsMax(i);
+                revert IEvaluatorError.ConditionInlinedSizeExceedsMax(i);
             }
             node.inlined = true;
             node.inlinedSize = size;
@@ -208,7 +210,7 @@ library Integrity {
                 encoding != Encoding.EtherValue &&
                 encoding != Encoding.Array
             ) {
-                revert IRolesError.UnsuitableParameterType(i);
+                revert IEvaluatorError.UnsuitableParameterType(i);
             }
 
             /*
@@ -217,12 +219,12 @@ library Integrity {
              */
             bytes memory compValue = conditions[i].compValue;
             if (compValue.length != 1 || uint8(compValue[0]) == 255) {
-                revert IRolesError.UnsuitableCompValue(i);
+                revert IEvaluatorError.UnsuitableCompValue(i);
             }
 
             uint8 slot = uint8(compValue[0]);
             if (plucks[slot] != 0) {
-                revert IRolesError.DuplicatePluckIndex(i, slot);
+                revert IEvaluatorError.DuplicatePluckIndex(i, slot);
             }
             plucks[slot] = i + 1;
         }
@@ -254,7 +256,7 @@ library Integrity {
             _requireEncoding(encoding == Encoding.None, index);
             _requireNoCompValue(compValue, index);
             if (node.childCount == 0) {
-                revert IRolesError.UnsuitableChildCount(index);
+                revert IEvaluatorError.UnsuitableChildCount(index);
             }
         } else if (op == Operator.Empty) {
             _requireEncoding(encoding == Encoding.None, index);
@@ -266,7 +268,7 @@ library Integrity {
             _requireEncoding(encoding == Encoding.Array, index);
             _requireNoCompValue(compValue, index);
             if (node.childCount != 1) {
-                revert IRolesError.UnsuitableChildCount(index);
+                revert IEvaluatorError.UnsuitableChildCount(index);
             }
         } else if (op == Operator.ArrayTailMatches) {
             _requireEncoding(encoding == Encoding.Array, index);
@@ -320,7 +322,7 @@ library Integrity {
             _requireCompValue(compValue.length == 32, index);
             _requireNoChildren(node, index);
         } else {
-            revert IRolesError.UnsupportedOperator(index);
+            revert IEvaluatorError.UnsupportedOperator(index);
         }
 
         /*
@@ -362,7 +364,7 @@ library Integrity {
          */
         uint256 length = compValue.length;
         if (length == 0 || length == 2) return;
-        if (length < 2) revert IRolesError.UnsuitableCompValue(index);
+        if (length < 2) revert IEvaluatorError.UnsuitableCompValue(index);
 
         uint256 leadingBytes = (uint256(uint8(compValue[0])) << 8) |
             uint8(compValue[1]);
@@ -386,18 +388,18 @@ library Integrity {
 
         // One child: a Tuple with one field per zipped array
         if (node.childCount != 1) {
-            revert IRolesError.UnsuitableChildCount(index);
+            revert IEvaluatorError.UnsuitableChildCount(index);
         }
         Node memory fields = nodes[node.childStart];
         if (fields.encoding != Encoding.Tuple) {
-            revert IRolesError.UnsuitableChildTypeTree(index);
+            revert IEvaluatorError.UnsuitableChildTypeTree(index);
         }
         _requireCompValue(fields.childCount == compValue.length, index);
 
         // Only the fields are evaluated: an operator on the Tuple itself
         // would never run
         if (fields.operator != Operator.Matches) {
-            revert IRolesError.UnsupportedOperator(node.childStart);
+            revert IEvaluatorError.UnsupportedOperator(node.childStart);
         }
 
         // Distinct slots, each written by an Array Pluck
@@ -436,7 +438,7 @@ library Integrity {
         // One child, checking the extracted bytes as a word. It must be a
         // leaf: a Slice of a Slice would index into the word, not the value
         if (node.childCount != 1) {
-            revert IRolesError.UnsuitableChildCount(index);
+            revert IEvaluatorError.UnsuitableChildCount(index);
         }
         Node memory child = nodes[node.childStart];
         if (
@@ -444,7 +446,7 @@ library Integrity {
             child.childCount != 0 ||
             _navigates(child.operator)
         ) {
-            revert IRolesError.SliceChildNotStatic(index);
+            revert IEvaluatorError.SliceChildNotStatic(index);
         }
     }
 
@@ -506,7 +508,7 @@ library Integrity {
             uint8(compValue[1]) > MAX_DECIMALS ||
             uint8(compValue[3]) > MAX_DECIMALS
         ) {
-            revert IRolesError.AllowanceDecimalsExceedMax(index);
+            revert IEvaluatorError.AllowanceDecimalsExceedMax(index);
         }
 
         // Both slots hold a word. A slot no Pluck writes is rejected by the
@@ -514,17 +516,17 @@ library Integrity {
         for (uint256 i; i <= 2; i += 2) {
             uint256 pluck = plucks[uint8(compValue[i])];
             if (pluck != 0 && !_isWord(nodes[pluck - 1].encoding)) {
-                revert IRolesError.WithinRatioTargetNotStatic(index);
+                revert IEvaluatorError.WithinRatioTargetNotStatic(index);
             }
         }
 
         uint256 minRatio = _uint32(compValue, 4);
         uint256 maxRatio = _uint32(compValue, 8);
         if (minRatio == 0 && maxRatio == 0) {
-            revert IRolesError.WithinRatioNoRatioProvided(index);
+            revert IEvaluatorError.WithinRatioNoRatioProvided(index);
         }
         if (minRatio != 0 && maxRatio != 0 && minRatio > maxRatio) {
-            revert IRolesError.WithinRatioMinExceedsMax(index);
+            revert IEvaluatorError.WithinRatioMinExceedsMax(index);
         }
 
         _requireNoChildren(node, index);
@@ -560,7 +562,7 @@ library Integrity {
             (uint8(compValue[32]) > MAX_DECIMALS ||
                 uint8(compValue[33]) > MAX_DECIMALS)
         ) {
-            revert IRolesError.AllowanceDecimalsExceedMax(index);
+            revert IEvaluatorError.AllowanceDecimalsExceedMax(index);
         }
     }
 
@@ -611,7 +613,7 @@ library Integrity {
          * in particular), or a leaf that reads no calldata.
          */
         if (index == 0 && !node.rootOk && !readsNothing) {
-            revert IRolesError.UnsuitableRootNode();
+            revert IEvaluatorError.UnsuitableRootNode();
         }
 
         if (readsNothing) {
@@ -626,7 +628,7 @@ library Integrity {
              * that reads no calldata, or a Zip, has no place in it.
              */
             if (node.childCount == 0 || !children.allTypes) {
-                revert IRolesError.UnsuitableChildCount(index);
+                revert IEvaluatorError.UnsuitableChildCount(index);
             }
 
             /*
@@ -639,7 +641,7 @@ library Integrity {
                 ? op != Operator.Matches
                 : !navigates;
             if (whole && !children.allExact) {
-                revert IRolesError.UnsuitableChildTypeTree(index);
+                revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
 
             node.kind = TYPE_OF + index;
@@ -655,7 +657,7 @@ library Integrity {
              */
             uint256 below = nodes[node.childStart].pluck;
             if (below != 0) {
-                revert IRolesError.UnsupportedOperator(below - 1);
+                revert IEvaluatorError.UnsupportedOperator(below - 1);
             }
             node.kind = ZIP;
         } else {
@@ -715,7 +717,7 @@ library Integrity {
         for (uint256 i = 1; i < node.childCount; ++i) {
             uint256 other = nodes[node.childStart + i].kind;
             if (!_isSubtype(nodes, element, other)) {
-                revert IRolesError.UnsuitableChildTypeTree(index);
+                revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
         }
     }
@@ -747,7 +749,7 @@ library Integrity {
             uint256 kind = nodes[i].kind;
             if (kind == ZIP) {
                 if (!hasType) {
-                    revert IRolesError.UnsuitableChildTypeTree(index);
+                    revert IEvaluatorError.UnsuitableChildTypeTree(index);
                 }
                 hasZip = true;
             } else if (kind >= STATIC) {
@@ -769,11 +771,11 @@ library Integrity {
             if (fits) result = candidate;
         }
         if (result == 0) {
-            revert IRolesError.UnsuitableChildTypeTree(index);
+            revert IEvaluatorError.UnsuitableChildTypeTree(index);
         }
 
         if (hasZip && _isStatic(nodes, result)) {
-            revert IRolesError.UnsuitableChildTypeTree(index);
+            revert IEvaluatorError.UnsuitableChildTypeTree(index);
         }
         return result;
     }
@@ -805,7 +807,7 @@ library Integrity {
                 uint256 element = nodes[pluck.childStart].kind;
                 uint256 field = nodes[fieldStart + j].kind;
                 if (!_isSubtype(nodes, element, field)) {
-                    revert IRolesError.UnsuitableChildTypeTree(i);
+                    revert IEvaluatorError.UnsuitableChildTypeTree(i);
                 }
             }
         }
@@ -1039,16 +1041,36 @@ library Integrity {
         }
     }
 
+    function _decodeEncoding(
+        uint8 raw,
+        uint256 index
+    ) private pure returns (Encoding) {
+        if (raw > uint8(type(Encoding).max)) {
+            revert IEvaluatorError.UnsuitableParameterType(index);
+        }
+        return Encoding(raw);
+    }
+
+    function _decodeOperator(
+        uint8 raw,
+        uint256 index
+    ) private pure returns (Operator) {
+        if (raw > uint8(type(Operator).max)) {
+            revert IEvaluatorError.UnsupportedOperator(index);
+        }
+        return Operator(raw);
+    }
+
     function _isWord(Encoding encoding) private pure returns (bool) {
         return encoding == Encoding.Static || encoding == Encoding.EtherValue;
     }
 
     function _requireEncoding(bool suitable, uint256 index) private pure {
-        if (!suitable) revert IRolesError.UnsuitableParameterType(index);
+        if (!suitable) revert IEvaluatorError.UnsuitableParameterType(index);
     }
 
     function _requireCompValue(bool suitable, uint256 index) private pure {
-        if (!suitable) revert IRolesError.UnsuitableCompValue(index);
+        if (!suitable) revert IEvaluatorError.UnsuitableCompValue(index);
     }
 
     function _requireNoCompValue(
@@ -1056,12 +1078,12 @@ library Integrity {
         uint256 index
     ) private pure {
         if (compValue.length != 0)
-            revert IRolesError.UnsuitableCompValue(index);
+            revert IEvaluatorError.UnsuitableCompValue(index);
     }
 
     function _requireNoChildren(Node memory node, uint256 index) private pure {
         if (node.childCount != 0) {
-            revert IRolesError.LeafNodeCannotHaveChildren(index);
+            revert IEvaluatorError.LeafNodeCannotHaveChildren(index);
         }
     }
 
@@ -1071,7 +1093,7 @@ library Integrity {
         uint256 index
     ) private pure {
         if ((assigned & (1 << slot)) == 0) {
-            revert IRolesError.PluckNotVisitedBeforeRef(index, slot);
+            revert IEvaluatorError.PluckNotVisitedBeforeRef(index, slot);
         }
     }
 }

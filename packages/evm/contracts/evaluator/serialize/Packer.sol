@@ -4,17 +4,16 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../types/Types.sol";
+import {ConditionFlat} from "../../IEvaluator.sol";
+import {Encoding, Operator} from "../types/EvaluatorTypes.sol";
 
 /**
- * @title  ConditionPacker
+ * @title  Packer
  * @notice A library that provides packing functions for conditions,
- *         transforming ConditionsFlat[] into a memory-optimized buffer.
+ *         transforming ConditionFlat[] into a memory-optimized buffer.
  *
  * @dev    A first pass computes every node's child count and inlined size,
  *         so that packing does not rescan the tree for each node.
- *
- * @author gnosisguild
  *
  * ╔════════════════════════════════ BUFFER ═════════════════════════════════╗
  * ║ ┌─────────────────────────────────────────────────────────────────────┐ ║
@@ -43,7 +42,7 @@ import "../../types/Types.sol";
  * ╚═════════════════════════════════════════════════════════════════════════╝
  *
  */
-library ConditionPacker {
+library Packer {
     uint256 private constant HEADER_BYTES = 3;
     uint256 private constant NODE_BYTES = 4;
 
@@ -81,7 +80,7 @@ library ConditionPacker {
         for (uint256 i; i < conditions.length; ++i) {
             ConditionFlat memory condition = conditions[i];
 
-            Encoding encoding = condition.paramType;
+            uint8 encoding = condition.paramType;
             uint256 childCount = nodes[i].childCount;
             uint256 inlinedSize = nodes[i].inlinedSize;
 
@@ -133,7 +132,7 @@ library ConditionPacker {
         ConditionFlat[] memory conditions
     ) private pure returns (uint256 compValuesSize, uint256 maxPluckCount) {
         for (uint256 i; i < conditions.length; ++i) {
-            if (conditions[i].operator == Operator.Pluck) {
+            if (conditions[i].operator == uint8(Operator.Pluck)) {
                 uint8 pluckIndex = uint8(conditions[i].compValue[0]);
                 if (pluckIndex + 1 > maxPluckCount) {
                     maxPluckCount = pluckIndex + 1;
@@ -164,7 +163,7 @@ library ConditionPacker {
              * (function selector size). Store as 2-byte big-endian value.
              */
             if (
-                conditions[i].paramType == Encoding.AbiEncoded &&
+                conditions[i].paramType == uint8(Encoding.AbiEncoded) &&
                 conditions[i].compValue.length == 0
             ) {
                 conditions[i].compValue = hex"0004";
@@ -183,7 +182,7 @@ library ConditionPacker {
              * Inlined values are encoded without an offset and stay as is.
              */
             if (
-                conditions[i].operator == Operator.EqualTo &&
+                conditions[i].operator == uint8(Operator.EqualTo) &&
                 nodes[i].notInlined
             ) {
                 bytes memory compValue = conditions[i].compValue;
@@ -229,19 +228,19 @@ library ConditionPacker {
         for (uint256 next = count; next > 0; --next) {
             uint256 i = next - 1;
             LayoutNode memory node = nodes[i];
-            Encoding encoding = conditions[i].paramType;
+            uint8 encoding = conditions[i].paramType;
 
             if (
-                encoding == Encoding.Dynamic ||
-                encoding == Encoding.Array ||
-                encoding == Encoding.AbiEncoded
+                encoding == uint8(Encoding.Dynamic) ||
+                encoding == uint8(Encoding.Array) ||
+                encoding == uint8(Encoding.AbiEncoded)
             ) {
                 node.notInlined = true;
             }
 
             if (node.notInlined) {
                 node.inlinedSize = 0;
-            } else if (encoding == Encoding.Static) {
+            } else if (encoding == uint8(Encoding.Static)) {
                 node.inlinedSize = 32;
             }
 
@@ -252,7 +251,9 @@ library ConditionPacker {
             ++parent.childCount;
             if (node.notInlined) {
                 parent.notInlined = true;
-            } else if (conditions[parentIndex].paramType != Encoding.None) {
+            } else if (
+                conditions[parentIndex].paramType != uint8(Encoding.None)
+            ) {
                 parent.inlinedSize += node.inlinedSize;
             } else if (node.inlinedSize > 0) {
                 // And / Or are transparent: the size of the value they sit

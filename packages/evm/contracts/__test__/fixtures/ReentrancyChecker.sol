@@ -5,7 +5,7 @@
 pragma solidity >=0.8.0;
 
 import "../../Roles.sol";
-import {IRolesError} from "../../types/RolesError.sol";
+import {ICoreError} from "../../core/types/CoreError.sol";
 
 contract ReentrancyChecker {
     Roles public roles;
@@ -37,8 +37,7 @@ contract ReentrancyChecker {
             caughtReentrancy = false;
         } catch (bytes memory reason) {
             // Check if it's the Reentrancy error
-            caughtReentrancy =
-                bytes4(reason) == IRolesError.Reentrancy.selector;
+            caughtReentrancy = bytes4(reason) == ICoreError.Reentrancy.selector;
         }
     }
 

@@ -15,7 +15,8 @@ contract TestCustomChecker is ICustomCondition {
         uint256 location,
         uint256 size,
         bytes calldata,
-        bytes32[] calldata
+        bytes32[] calldata,
+        address
     )
         public
         pure
@@ -41,7 +42,8 @@ contract TestCustomCheckerConsuming is ICustomCondition {
         uint256 location,
         uint256 size,
         bytes calldata extra,
-        bytes32[] calldata
+        bytes32[] calldata,
+        address
     )
         external
         pure
@@ -75,7 +77,8 @@ contract TestCustomCheckerReverting is ICustomCondition {
         uint256,
         uint256,
         bytes calldata,
-        bytes32[] calldata
+        bytes32[] calldata,
+        address
     ) public pure returns (bool, AllowanceConsumption[] memory) {
         revert("CustomChecker: intentional revert");
     }
@@ -90,7 +93,8 @@ contract TestCustomCheckerWrongReturn {
         uint256,
         uint256,
         bytes calldata,
-        bytes32[] memory
+        bytes32[] memory,
+        address
     ) public pure returns (uint256, uint256) {
         return (999, 0);
     }
@@ -106,7 +110,8 @@ contract TestCustomCheckerMalformed {
         uint256,
         uint256,
         bytes calldata extra,
-        bytes32[] calldata
+        bytes32[] calldata,
+        address
     ) external pure {
         uint8 mode = uint8(extra[0]);
         assembly {

@@ -4,13 +4,13 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../common/AllowanceConsumer.sol";
+import {Consumption} from "../../IEvaluator.sol";
 import "../../periphery/interfaces/ICustomCondition.sol";
-
-import "../../types/Types.sol";
+import "../AllowanceConsumer.sol";
+import {Status} from "../types/EvaluatorTypes.sol";
 
 /**
- * @title CustomConditionChecker
+ * @title CustomChecker
  * @notice Validates transactions against external custom condition adapters.
  *
  * @dev Safely invokes ICustomCondition.check via staticcall. A passing adapter
@@ -29,9 +29,10 @@ import "../../types/Types.sol";
  *
  * @author gnosisguild
  */
-library CustomConditionChecker {
+library CustomChecker {
     /**
      * @notice Evaluates a custom condition against an external adapter.
+     * @param core Roles Core contract (passed to the adapter and queried for allowances)
      * @param compValue Packed config: adapter address (20 bytes) + optional extra data
      * @param to Target address of the transaction
      * @param value ETH value of the transaction
@@ -45,7 +46,8 @@ library CustomConditionChecker {
      * @return The updated consumption list when the adapter passes
      */
     function check(
-        bytes calldata compValue,
+        address core,
+        bytes memory compValue,
         address to,
         uint256 value,
         bytes calldata data,
@@ -53,12 +55,21 @@ library CustomConditionChecker {
         uint256 location,
         uint256 size,
         Consumption[] memory consumptions,
-        bytes32[] calldata pluckedValues
-    ) external view returns (Status, Consumption[] memory) {
+        bytes32[] memory pluckedValues
+    ) internal view returns (Status, Consumption[] memory) {
         address adapter = address(bytes20(compValue));
 
         if (adapter.code.length == 0) {
             return (Status.CustomConditionNotAContract, consumptions);
+        }
+
+        uint256 extraLength = compValue.length - 20;
+        bytes memory extra = new bytes(extraLength);
+        if (extraLength > 0) {
+            assembly {
+                // 0x34 = 0x20 (memory length prefix) + 20 (adapter address)
+                mcopy(add(extra, 0x20), add(compValue, 0x34), extraLength)
+            }
         }
 
         (bool success, bytes memory result) = adapter.staticcall(
@@ -71,8 +82,9 @@ library CustomConditionChecker {
                     operation,
                     location,
                     size,
-                    compValue[20:],
-                    pluckedValues
+                    extra,
+                    pluckedValues,
+                    core
                 )
             )
         );
@@ -88,7 +100,7 @@ library CustomConditionChecker {
             return (status, consumptions);
         }
 
-        return _applyConsumptions(consumptions, usedConsumptions);
+        return _applyConsumptions(core, consumptions, usedConsumptions);
     }
 
     /**
@@ -151,12 +163,14 @@ library CustomConditionChecker {
      *      consumptions.
      */
     function _applyConsumptions(
+        address core,
         Consumption[] memory consumptions,
         AllowanceConsumption[] memory allowanceConsumptions
     ) private view returns (Status, Consumption[] memory) {
         for (uint256 i; i < allowanceConsumptions.length; ++i) {
             Status status;
             (status, consumptions) = AllowanceConsumer.consume(
+                core,
                 consumptions,
                 allowanceConsumptions[i].allowanceKey,
                 allowanceConsumptions[i].amount
