@@ -4,6 +4,7 @@ import { network } from "hardhat";
 
 import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
 import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
+import { linkIntegrity } from "../setup.js";
 import { Encoding as E, Operator as O } from "../utils.js";
 
 const connection = await network.create();
@@ -152,7 +153,10 @@ describe("ConditionPacker / ConditionUnpacker", () => {
   let mock: any;
 
   before(async () => {
-    const Mock = await ethers.getContractFactory("MockPackerUnpacker");
+    const Mock = await ethers.getContractFactory(
+      "MockPackerUnpacker",
+      await linkIntegrity(ethers),
+    );
     mock = await Mock.deploy();
     await mock.setAvatar(AVATAR);
   });

@@ -188,10 +188,9 @@ library AbiLocation {
             if (_wordAt(body, head) != cursor) return (data, false);
             head += 32;
 
-            bytes calldata childRegion;
-            (childRegion, ok) = sliceEncoded(_bytesAt(body, cursor), child);
+            (result, ok) = sliceEncoded(_bytesAt(body, cursor), child);
             if (!ok) return (data, false);
-            cursor += childRegion.length;
+            cursor += result.length;
         }
 
         // Bounded by construction: `cursor <= body.length` holds initially and

@@ -26,10 +26,24 @@ export async function buildMastercopyDeployments(
   hre: HardhatRuntimeEnvironment,
   connection: NetworkConnection,
 ): Promise<MastercopyDeployment[]> {
-  const evaluator = await readArtifact({
+  const integrity = await readArtifact({
     hre,
+    contractName: "Integrity",
+    contract: "contracts/evaluator/Integrity.sol:Integrity",
+  });
+  // Evaluator links Integrity: its bytecode, and so its address, depend on
+  // where Integrity is deployed.
+  const evaluatorLibraries = { Integrity: integrity.address };
+  const evaluatorFactory = await connection.ethers.getContractFactory(
+    "Evaluator",
+    { libraries: evaluatorLibraries },
+  );
+  const evaluator = buildDeployment({
     contractName: "Evaluator",
     contract: "contracts/evaluator/Evaluator.sol:Evaluator",
+    bytecode: evaluatorFactory.bytecode,
+    constructorArgs: { types: [], values: [] },
+    libraries: evaluatorLibraries,
   });
   const avatarIsOwnerOfERC721 = await readArtifact({
     hre,
@@ -61,7 +75,9 @@ export async function buildMastercopyDeployments(
     },
   });
 
+  // In deployment order: a library before the contract that links it.
   return [
+    integrity,
     evaluator,
     avatarIsOwnerOfERC721,
     multiSendUnwrapper,

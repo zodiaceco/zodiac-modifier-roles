@@ -102,8 +102,13 @@ type RoleTx = {
 /* ------------------------------------------------------------------ setup */
 
 async function deployRoles(owner: string, avatar: string) {
+  const integrity = await (
+    await ethers.getContractFactory("Integrity")
+  ).deploy()
   const evaluator = await (
-    await ethers.getContractFactory("Evaluator")
+    await ethers.getContractFactory("Evaluator", {
+      libraries: { Integrity: await integrity.getAddress() },
+    })
   ).deploy()
   const factory = await ethers.getContractFactory("Roles")
   return factory.deploy(owner, avatar, avatar, await evaluator.getAddress())

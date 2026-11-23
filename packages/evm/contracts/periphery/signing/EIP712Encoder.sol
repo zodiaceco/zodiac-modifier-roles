@@ -111,15 +111,15 @@ library EIP712Encoder {
      *      - arrays hash as keccak256(encoded elements)
      *
      * @param data     Encoded input data.
-     * @param layout   The type node for the field.
+     * @param node     The type node for the field.
      * @param location Absolute ABI location of the field value.
      */
     function _hashField(
         bytes calldata data,
-        TypeNode memory layout,
+        TypeNode memory node,
         uint256 location
     ) private pure returns (bytes32) {
-        Encoding encoding = layout.encoding;
+        Encoding encoding = node.encoding;
 
         if (encoding == Encoding.Static) {
             return _word(data, location);
@@ -140,7 +140,7 @@ library EIP712Encoder {
             return
                 _hashBlock(
                     data,
-                    layout,
+                    node,
                     location + 32,
                     uint256(_word(data, location)),
                     true
@@ -151,9 +151,9 @@ library EIP712Encoder {
             return
                 _hashBlock(
                     data,
-                    layout,
+                    node,
                     location,
-                    layout.children.length,
+                    node.children.length,
                     false
                 );
         }
@@ -171,12 +171,12 @@ library EIP712Encoder {
      */
     function _hashBlock(
         bytes calldata data,
-        TypeNode memory layout,
+        TypeNode memory node,
         uint256 blockLocation,
         uint256 childCount,
         bool isArray
     ) private pure returns (bytes32) {
-        if (isArray && layout.children.length != 1) {
+        if (isArray && node.children.length != 1) {
             revert InvalidEIP712Encoding();
         }
 
@@ -184,7 +184,7 @@ library EIP712Encoder {
         uint256 headOffset;
 
         for (uint256 i = 0; i < childCount; ++i) {
-            TypeNode memory child = layout.children[isArray ? 0 : i];
+            TypeNode memory child = node.children[isArray ? 0 : i];
             (uint256 childLocation, uint256 childInlineSize) = _childLocation(
                 data,
                 blockLocation,
@@ -198,8 +198,8 @@ library EIP712Encoder {
 
         return
             keccak256(
-                layout.typeHash != bytes32(0)
-                    ? abi.encodePacked(layout.typeHash, result)
+                node.typeHash != bytes32(0)
+                    ? abi.encodePacked(node.typeHash, result)
                     : abi.encodePacked(result)
             );
     }
@@ -287,9 +287,9 @@ library EIP712Encoder {
     function _toTree(
         TypeNodeFlat[] calldata types,
         uint256 index
-    ) private pure returns (TypeNode memory layout) {
-        layout.encoding = types[index].encoding;
-        layout.typeHash = types[index].typeHash;
+    ) private pure returns (TypeNode memory node) {
+        node.encoding = types[index].encoding;
+        node.typeHash = types[index].typeHash;
 
         // Count children (nodes where parent == index)
         uint256 childCount = 0;
@@ -301,11 +301,11 @@ library EIP712Encoder {
         }
 
         if (childCount > 0) {
-            layout.children = new TypeNode[](childCount);
+            node.children = new TypeNode[](childCount);
             uint256 childIndex = 0;
             for (uint256 i = index + 1; childIndex < childCount; ++i) {
                 if (types[i].parent == index) {
-                    layout.children[childIndex++] = _toTree(types, i);
+                    node.children[childIndex++] = _toTree(types, i);
                 }
             }
         }

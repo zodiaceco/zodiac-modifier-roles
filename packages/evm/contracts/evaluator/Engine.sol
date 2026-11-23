@@ -692,16 +692,11 @@ library Engine {
 
         return
             CustomChecker.check(
-                context.core,
                 condition.compValue,
-                context.to,
-                context.value,
-                AbiLocation.fromSpan(context.data),
-                context.operation,
                 AbiLocation.offsetOf(context.data, dataSlice),
                 length,
                 consumptions,
-                context.pluckedValues
+                context
             );
     }
 

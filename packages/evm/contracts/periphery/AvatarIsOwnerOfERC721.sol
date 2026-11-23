@@ -39,9 +39,8 @@ contract AvatarIsOwnerOfERC721 is ICustomCondition {
         view
         returns (bool success, AllowanceConsumption[] memory consumptions)
     {
-        address avatar = IModifier(roles).avatar();
         uint256 tokenId = uint256(bytes32(data[location:location + size]));
-        success = IERC721(to).ownerOf(tokenId) == avatar;
+        success = IERC721(to).ownerOf(tokenId) == IModifier(roles).avatar();
         consumptions = new AllowanceConsumption[](0);
     }
 }
