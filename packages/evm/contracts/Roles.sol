@@ -200,7 +200,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         bytes32 roleKey,
         bool shouldRevert
     ) private returns (bool success) {
-        (address module, uint256 nextMembership) = _authenticate(roleKey);
+        address module = _authenticate(roleKey);
         Consumption[] memory consumptions = _authorize(
             roleKey,
             to,
@@ -218,7 +218,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
             revert ModuleTransactionFailed();
         }
         if (success) {
-            _settle(module, roleKey, nextMembership, consumptions);
+            _settle(module, roleKey, consumptions);
         }
     }
 
@@ -230,7 +230,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         bytes32 roleKey,
         bool shouldRevert
     ) private returns (bool success, bytes memory returnData) {
-        (address module, uint256 nextMembership) = _authenticate(roleKey);
+        address module = _authenticate(roleKey);
         Consumption[] memory consumptions = _authorize(
             roleKey,
             to,
@@ -244,7 +244,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
             revert ModuleTransactionFailed();
         }
         if (success) {
-            _settle(module, roleKey, nextMembership, consumptions);
+            _settle(module, roleKey, consumptions);
         }
     }
 }

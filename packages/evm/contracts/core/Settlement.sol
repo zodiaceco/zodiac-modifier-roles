@@ -57,13 +57,11 @@ abstract contract Settlement is RolesStorage {
      *
      * @param sender The address that initiated the transaction
      * @param roleKey The role key used for execution
-     * @param nextMembership Packed membership data. uint256.max skips membership update
      * @param consumptions Allowance consumption records to settle
      */
     function _settle(
         address sender,
         bytes32 roleKey,
-        uint256 nextMembership,
         Consumption[] memory consumptions
     ) internal {
         uint256 count = consumptions.length;
@@ -82,8 +80,17 @@ abstract contract Settlement is RolesStorage {
             );
         }
 
-        // uint256.max == noop
-        if (nextMembership == type(uint256).max) return;
+        /*
+         * Re-read membership after execution, in case the call revoked,
+         * renounced or updated it.
+         *
+         * Nothing to settle if it was cleared or has unlimited uses.
+         */
+        uint256 membership = roles[roleKey].members[sender];
+        if (membership == 0 || (~membership << 128) == 0) return;
+
+        uint128 usesLeft = uint128(membership);
+        uint256 nextMembership = usesLeft <= 1 ? 0 : membership - 1;
 
         roles[roleKey].members[sender] = nextMembership;
         if (nextMembership != 0) {

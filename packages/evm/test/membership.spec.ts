@@ -55,6 +55,8 @@ describe("Membership", () => {
 
     return {
       roles: roles.connect(owner),
+      avatar,
+      avatarAddress,
       owner,
       member,
       other,
@@ -440,6 +442,349 @@ describe("Membership", () => {
               .connect(member)
               .execTransactionFromModule(testContractAddress, 0, "0x", 0),
           ).to.be.revertedWithCustomError(roles, "NoMembership");
+        });
+      });
+
+      describe("membership modified during execution", () => {
+        it("does not resurrect membership revoked during execution", async () => {
+          const {
+            avatar,
+            avatarAddress,
+            member,
+            testContractAddress,
+            ROLE_KEY,
+          } = await loadFixture(setup);
+
+          const roles = await deployRolesMod(
+            avatarAddress,
+            avatarAddress,
+            avatarAddress,
+          );
+          const rolesAddress = await roles.getAddress();
+
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("grantRole", [
+              member.address,
+              ROLE_KEY,
+              0,
+              0,
+              3,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("setDefaultRole", [
+              member.address,
+              ROLE_KEY,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              rolesAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              testContractAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+
+          const revokeData = roles.interface.encodeFunctionData("revokeRole", [
+            member.address,
+            ROLE_KEY,
+          ]);
+
+          await expect(
+            roles
+              .connect(member)
+              .execTransactionFromModule(rolesAddress, 0, revokeData, 0),
+          )
+            .to.emit(roles, "RevokeRole")
+            .withArgs(ROLE_KEY, member.address)
+            .and.to.not.emit(roles, "UpdateRole");
+
+          expect(await roles.isMember(ROLE_KEY, member.address)).to.be.false;
+
+          await expect(
+            roles
+              .connect(member)
+              .execTransactionFromModule(testContractAddress, 0, "0x", 0),
+          ).to.be.revertedWithCustomError(roles, "NoMembership");
+        });
+
+        it("does not emit duplicate RevokeRole when last use is revoked during execution", async () => {
+          const { avatar, avatarAddress, member, ROLE_KEY } =
+            await loadFixture(setup);
+
+          const roles = await deployRolesMod(
+            avatarAddress,
+            avatarAddress,
+            avatarAddress,
+          );
+          const rolesAddress = await roles.getAddress();
+
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("grantRole", [
+              member.address,
+              ROLE_KEY,
+              0,
+              0,
+              1,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("setDefaultRole", [
+              member.address,
+              ROLE_KEY,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              rolesAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+
+          const revokeData = roles.interface.encodeFunctionData("revokeRole", [
+            member.address,
+            ROLE_KEY,
+          ]);
+
+          const tx = await roles
+            .connect(member)
+            .execTransactionFromModule(rolesAddress, 0, revokeData, 0);
+          const receipt = await tx.wait();
+          const revokeEvents = receipt!.logs
+            .map((log) => {
+              try {
+                return roles.interface.parseLog(log);
+              } catch {
+                return null;
+              }
+            })
+            .filter((parsed) => parsed?.name === "RevokeRole");
+
+          expect(revokeEvents).to.have.lengthOf(1);
+          expect(await roles.isMember(ROLE_KEY, member.address)).to.be.false;
+        });
+
+        it("does not resurrect membership renounced during execution", async () => {
+          const {
+            roles,
+            avatar,
+            avatarAddress,
+            testContractAddress,
+            ROLE_KEY,
+          } = await loadFixture(setup);
+          const rolesAddress = await roles.getAddress();
+
+          await roles.grantRole(avatarAddress, ROLE_KEY, 0, 0, 3);
+          await roles.setDefaultRole(avatarAddress, ROLE_KEY);
+          await roles.allowTargetPacked(ROLE_KEY, rolesAddress, "0x", 0);
+          await roles.allowTargetPacked(ROLE_KEY, testContractAddress, "0x", 0);
+
+          const renounceData = roles.interface.encodeFunctionData(
+            "renounceRole",
+            [ROLE_KEY],
+          );
+          const execData = roles.interface.encodeFunctionData(
+            "execTransactionFromModule",
+            [rolesAddress, 0, renounceData, 0],
+          );
+
+          await expect(avatar.exec(rolesAddress, 0, execData, 0))
+            .to.emit(roles, "RevokeRole")
+            .withArgs(ROLE_KEY, avatarAddress)
+            .and.to.not.emit(roles, "UpdateRole");
+
+          expect(await roles.isMember(ROLE_KEY, avatarAddress)).to.be.false;
+
+          const followUpExec = roles.interface.encodeFunctionData(
+            "execTransactionFromModule",
+            [testContractAddress, 0, "0x", 0],
+          );
+          await expect(
+            avatar.exec(rolesAddress, 0, followUpExec, 0),
+          ).to.be.revertedWithCustomError(roles, "NoMembership");
+        });
+
+        it("does not overwrite an upgrade to unlimited uses during execution", async () => {
+          const {
+            avatar,
+            avatarAddress,
+            member,
+            testContractAddress,
+            ROLE_KEY,
+          } = await loadFixture(setup);
+
+          const roles = await deployRolesMod(
+            avatarAddress,
+            avatarAddress,
+            avatarAddress,
+          );
+          const rolesAddress = await roles.getAddress();
+
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("grantRole", [
+              member.address,
+              ROLE_KEY,
+              0,
+              0,
+              2,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("setDefaultRole", [
+              member.address,
+              ROLE_KEY,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              rolesAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              testContractAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+
+          const upgradeData = roles.interface.encodeFunctionData("grantRole", [
+            member.address,
+            ROLE_KEY,
+            0,
+            0,
+            0,
+          ]);
+
+          await expect(
+            roles
+              .connect(member)
+              .execTransactionFromModule(rolesAddress, 0, upgradeData, 0),
+          ).to.not.emit(roles, "UpdateRole");
+
+          // Should now be unlimited: more than 2 follow-up calls succeed
+          for (let i = 0; i < 3; i++) {
+            await expect(
+              roles
+                .connect(member)
+                .execTransactionFromModule(testContractAddress, 0, "0x", 0),
+            ).to.not.emit(roles, "UpdateRole");
+          }
+          expect(await roles.isMember(ROLE_KEY, member.address)).to.be.true;
+        });
+
+        it("decrements updated finite membership instead of writing stale pre-execution state", async () => {
+          const { avatar, avatarAddress, member, ROLE_KEY } =
+            await loadFixture(setup);
+
+          const roles = await deployRolesMod(
+            avatarAddress,
+            avatarAddress,
+            avatarAddress,
+          );
+          const rolesAddress = await roles.getAddress();
+
+          const now = await time.latest();
+          const oldEnd = now + 1000;
+          const newStart = now - 50;
+          const newEnd = now + 5000;
+
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("grantRole", [
+              member.address,
+              ROLE_KEY,
+              0,
+              oldEnd,
+              3,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("setDefaultRole", [
+              member.address,
+              ROLE_KEY,
+            ]),
+            0,
+          );
+          await avatar.exec(
+            rolesAddress,
+            0,
+            roles.interface.encodeFunctionData("allowTargetPacked", [
+              ROLE_KEY,
+              rolesAddress,
+              "0x",
+              0,
+            ]),
+            0,
+          );
+
+          const updateData = roles.interface.encodeFunctionData("grantRole", [
+            member.address,
+            ROLE_KEY,
+            newStart,
+            newEnd,
+            5,
+          ]);
+
+          await expect(
+            roles
+              .connect(member)
+              .execTransactionFromModule(rolesAddress, 0, updateData, 0),
+          )
+            .to.emit(roles, "UpdateRole")
+            .withArgs(ROLE_KEY, member.address, newStart, newEnd, 4);
         });
       });
     });

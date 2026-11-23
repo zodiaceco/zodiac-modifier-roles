@@ -23,12 +23,9 @@ import "./Storage.sol";
  */
 
 abstract contract Membership is RolesStorage {
-    uint256 private constant _MEMBERSHIP_NOOP = type(uint256).max;
-    uint256 private constant _MEMBERSHIP_REVOKE = 0;
-
     function _authenticate(
         bytes32 roleKey
-    ) internal view returns (address module, uint256 nextMembership) {
+    ) internal view returns (address module) {
         // Never authorize the zero role
         if (roleKey == 0) {
             revert NoMembership();
@@ -59,19 +56,6 @@ abstract contract Membership is RolesStorage {
         if (block.timestamp > uint64(membership >> 128)) {
             revert MembershipExpired();
         }
-        if (~membership << 128 == 0) {
-            // unlimited uses
-            return (module, _MEMBERSHIP_NOOP);
-        }
-
-        uint256 usesLeft = (membership << 128) >> 128;
-
-        return (
-            module,
-            usesLeft <= 1
-                ? _MEMBERSHIP_REVOKE
-                : ((membership >> 128) << 128) | (usesLeft - 1)
-        );
     }
 
     function _hasActiveMembership(
