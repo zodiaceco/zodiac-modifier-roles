@@ -87,9 +87,9 @@ write-up of the resolved items is in this file's git history.
 
 ```
 cd packages/evm
-GAP_CASES=2000 npx hardhat test test/formal/integrity-gaps.spec.ts
-GAP_CASES=300 GAP_CLEAN=1 npx hardhat test test/formal/integrity-gaps.spec.ts  # reference sanity check
-GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test test/formal/integrity-gaps.spec.ts  # the SDK check vs Integrity
+GAP_CASES=2000 npx hardhat test formal/test/integrity-gaps.spec.ts
+GAP_CASES=300 GAP_CLEAN=1 npx hardhat test formal/test/integrity-gaps.spec.ts  # reference sanity check
+GAP_CASES=2000 GAP_CHECK=1 GAP_MUTATE=0.5 npx hardhat test formal/test/integrity-gaps.spec.ts  # the SDK check vs Integrity
 ```
 
 Mismatches are grouped by the tags of the shapes the generator added. In clean

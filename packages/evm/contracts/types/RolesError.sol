@@ -43,7 +43,7 @@ interface IRolesError {
     error ConditionViolation(
         Status status,
         uint256 violatedNodeIndex,
-        uint256 location
+        uint256 calldataOffset
     );
 
     /// No matching permission found for the transaction

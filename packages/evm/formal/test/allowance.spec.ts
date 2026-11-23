@@ -24,8 +24,8 @@ import { network } from "hardhat";
 import { existsSync } from "node:fs";
 import { Interface, hexlify, randomBytes, solidityPacked } from "ethers";
 import { LEAN_BIN, lean, makeGen } from "./eip712-gen";
-import { createSetup } from "../setup";
-import { ConditionViolationStatus, Encoding, Operator } from "../utils";
+import { createSetup } from "../../test/setup";
+import { ConditionViolationStatus, Encoding, Operator } from "../../test/utils";
 import {
   accrueAllowance,
   accrueThenUpdate,

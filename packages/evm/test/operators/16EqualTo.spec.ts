@@ -4357,7 +4357,7 @@ describe("Operator - EqualTo", () => {
         .withArgs(
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4 (after selector)
+          4, // calldataOffset: parameter starts at byte 4 (after selector)
         );
     });
   });

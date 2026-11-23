@@ -391,7 +391,7 @@ describe("Operator - ArrayTailMatches", () => {
         .withArgs(
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          132, // payloadLocation: last element at byte 132
+          132, // calldataOffset: last element at byte 132
         );
     });
   });

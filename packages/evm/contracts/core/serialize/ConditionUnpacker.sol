@@ -93,15 +93,13 @@ library ConditionUnpacker {
              *   0x40 operator
              *   0x60 compValue     (set via assembly below)
              *   0x80 children      (set via assembly below)
-             *   0xa0 inlined
-             *   0xc0 size
-             *   0xe0 leadingBytes  (set when parsing compValue)
+             *   0xa0 size
+             *   0xc0 leadingBytes  (set when parsing compValue)
              */
             condition.index = c;
             condition.encoding = Encoding(encoding);
             condition.operator = Operator((packed >> 24) & 0x1F);
-            condition.inlined = inlinedSize > 0;
-            condition.size = inlinedSize;
+            condition.inlineSize = inlinedSize;
 
             // hasCompValue
             if ((packed & 1) != 0) {

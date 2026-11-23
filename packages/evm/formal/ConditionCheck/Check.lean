@@ -277,7 +277,7 @@ def classifyNode (s : Bool) (e : Encoding) (op : Operator) (cs : List Condition)
 mutual
   /-- `none`: rejected. -/
   def classify (s : Bool) : Condition → Option K
-    | ⟨e, op, cs, _, _, lb, cv⟩ => (classifyAll s cs).bind (classifyNode s e op cs lb cv)
+    | ⟨e, op, cs, _, lb, cv⟩ => (classifyAll s cs).bind (classifyNode s e op cs lb cv)
 
   def classifyAll (s : Bool) : List Condition → Option (List K)
     | [] => some []
@@ -288,7 +288,7 @@ mutual
   /-- The root is `AbiEncoded`, or an `And`/`Or` over such roots,
       non-structural nodes and Zips. -/
   def rootOk (s : Bool) : Condition → Bool
-    | ⟨e, op, cs, _, _, _, _⟩ =>
+    | ⟨e, op, cs, _, _, _⟩ =>
       e == .AbiEncoded || (e == .None && (op == .And || op == .Or) && rootOkAll s cs)
 
   def rootOkAll (s : Bool) : List Condition → Bool

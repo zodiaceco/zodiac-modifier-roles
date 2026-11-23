@@ -48,14 +48,14 @@ def MS : Nat := 0xCCCC
 def K : Bytes := word 0x4b
 
 def leaf (op : Operator) (enc : Encoding := .None) (cv : Bytes := []) : Condition :=
-  ⟨enc, op, [], false, 0, 0, cv⟩
+  ⟨enc, op, [], 0, 0, cv⟩
 
 def condA : Condition :=
   ⟨.None, .And,
     [leaf .WithinAllowance .None K,
      ⟨.None, .Or,
-       [⟨.None, .And, [leaf .CallWithinAllowance .None K, leaf .Empty], false, 0, 0, []⟩,
-        leaf .Pass], false, 0, 0, []⟩], false, 0, 0, []⟩
+       [⟨.None, .And, [leaf .CallWithinAllowance .None K, leaf .Empty], 0, 0, []⟩,
+        leaf .Pass], 0, 0, []⟩], 0, 0, []⟩
 
 def condB : Condition := leaf .CallWithinAllowance .None K
 
@@ -173,15 +173,17 @@ def data : Bytes := [b 0x85, b 0xa5, b 0xaf, b 0xfe] ++ word 32 ++ word 32 ++ D
 
 theorem dec_ok : solDecodeBytes data = some D := by decide +kernel
 
-def pin : Condition := ⟨.Dynamic, .EqualTo, [], false, 0, 0, word 32 ++ D⟩
-def root : Condition := ⟨.AbiEncoded, .Matches, [pin], false, 0, 4, []⟩
+def pin : Condition := ⟨.Dynamic, .EqualTo, [], 0, 0, word 32 ++ D⟩
+def root : Condition := ⟨.AbiEncoded, .Matches, [pin], 0, 4, []⟩
 
 theorem pins : pinsArg leafBytes 0 3 root = true := by decide +kernel
 
-theorem run_ok (env : Env) : (evalC env data 0 5 0 root [] Slots.empty).status = sOk := by
-  simp (config := {decide := true}) [evalC, root, pin, leadingCheck, childrenE, children,
-    childrenLoop, seqLoop, input, Roles.size, tailLocation, inputB, cvB, Evaluate.compare,
-    result, Evaluate.ok, sOk]
+theorem run_ok (env : Env) :
+    (evalC env data 0 5 ⟨0, data.length⟩ root.inlineSize root [] Slots.empty).status = sOk := by
+  simp (config := {decide := true}) [evalC, root, pin, leadingCheck, matchesHead, children,
+    childrenLoop, child, slotSize, seqLoop, input, inputLength, operand, sliceRegion,
+    DecoderFaithfulness.region_eq, slicePayload, Slice.bytes, loadBytes, inputB,
+    Evaluate.compare, result, Evaluate.ok, sOk]
 
 /-- `route_bytes`: the hypotheses hold, and the pinned message is `D`. -/
 example (env : Env) : ∃ e, PinUnder 0 root e ∧ pinnedLeaf leafBytes e = true ∧

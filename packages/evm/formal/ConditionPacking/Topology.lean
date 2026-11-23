@@ -57,8 +57,7 @@ theorem rawTree_eq (avatar : Bytes) (fs : List Flat) (i : Nat) :
       { encoding := f.paramType
         operator := f.operator
         children := (kids fs i).map (rawTree avatar fs)
-        inlined := false
-        size := 0
+        inlineSize := 0
         leadingBytes := if f.paramType = .AbiEncoded then wordVal (cv.take 2) else 0
         compValue :=
           if f.operator = .EqualToAvatar then avatar

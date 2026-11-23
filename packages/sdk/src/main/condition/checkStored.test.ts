@@ -183,8 +183,8 @@ suite("checkStored()", () => {
       cv: "0x001f01",
       ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
     }
-    // AbiLocation.size reads nested calldata as bytes and a Slice as its
-    // word, whatever checks sit below them
+    // AbiLocation.sliceEncoded reads nested calldata as bytes and a Slice
+    // as its word, whatever checks sit below them
     const plucked = call([
       pluck(Enc.Array, 0, [call([pass(Enc.Static)], "0x0004aabbccdd")]),
     ])

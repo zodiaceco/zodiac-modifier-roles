@@ -37,7 +37,7 @@ import { flattenCondition } from "../../../sdk/src/main/condition/flattenConditi
 import { checkStoredConditions } from "../../../sdk/src/main/condition/checkStored.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LEAN_BIN = path.resolve(here, "../../formal/.lake/build/bin/roles-model");
+const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
 const CASES = Number(process.env.SDK_NORMALIZE_CASES ?? 3000);
 const SEED = Number(process.env.SDK_NORMALIZE_SEED ?? 1);
 
@@ -478,13 +478,12 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
     expect(bad.length).to.equal(0);
   });
 
-  it("documents: a reordered Or can avoid a panic of the tree as written", function () {
+  it("a reordered Or decides alike on an array count the calldata cannot hold", function () {
     // Or[call(ArrayEvery[EqualTo(1)]), call(Pass)] on f(uint256[]): sorting
     // puts the Pass branch first. On calldata claiming 2^64 elements the
-    // tree as written panics in AbiLocation.children (it allocates before
-    // reading), the normalized one passes. Accepted: the reference is the
-    // contract's reading, where the panicking branch fails and the Pass
-    // branch allows the call (normalize_meaning); the calldata is malformed.
+    // ArrayEvery branch fails (AbiLocation bounds the count by the calldata
+    // before it allocates) and the Pass branch allows the call, in the tree
+    // as written and in the normalized one.
     const tree: C = node(E.None, O.Or, undefined, [
       node(E.Abi, O.Matches, undefined, [
         node(E.Array, O.ArrayEvery, undefined, [
@@ -506,9 +505,6 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
         [tree, normalized].map((t) => `ev 0 - ${cd} ${flat(t)}`).join("\n") +
         "\n",
     });
-    expect(String(res.stdout).trim().split("\n")).to.deep.equal([
-      "255 -",
-      "0 -",
-    ]);
+    expect(String(res.stdout).trim().split("\n")).to.deep.equal(["0 -", "0 -"]);
   });
 });

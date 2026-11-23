@@ -21,16 +21,19 @@ Reads one query per line on stdin:
 
 `<nodes>` is the flat BFS tree as `parent:encoding:operator:compValueHex`
 entries joined by `|` (`ConditionFlat[]`, enum values as in Solidity).
-For the node at `<node index>` (BFS order, after pack/unpack) it prints
+For the node at `<node index>` (BFS order, after pack/unpack) and the slice
+of the calldata from `<location>` on it prints
 
     <children result> <size result>
 
-where the children result is `none` (overflow) or comma-separated locations
-(`-` for an empty list).
+where the children result is `none` (overflow) or the comma-separated
+locations the child slices start at (`-` for an empty list), and the size
+result is the length of the region `sliceRegion` finds, or the length of
+the calldata plus one if it finds none.
 
-A line `bm <calldata hex> <location> <compValue hex> <inlined 0|1> <size>`
-runs `bitmaskCheck` instead and prints the `Status` number it returns
-(0 `Ok`, 8 `BitmaskOverflow`, 9 `BitmaskNotAllowed`, 20 `CalldataOverflow`).
+A line `bm <operand hex> <compValue hex>` runs `bitmaskCheck` on the operand
+instead and prints the `Status` number it returns (0 `Ok`, 8
+`BitmaskOverflow`, 9 `BitmaskNotAllowed`).
 
 A line `pk <nodes>` prints the buffer `ConditionPacker.pack` produces in the
 packing model (`packL` in `ConditionPacking/Layout.lean`, the packer with its
@@ -83,7 +86,7 @@ the first node (BFS index) that fails and which clauses of `invP` fail
 children that read nothing, `td` type descriptions, `st` children read a
 parameter, `sz` inlined size).
 
-Used by `test/formal/lean-model.spec.ts` and `test/formal/integrity-gaps.spec.ts`.
+Used by `formal/test/lean-model.spec.ts` and `formal/test/integrity-gaps.spec.ts`.
 -/
 
 open DecoderFaithfulness DecoderFaithfulness.Roles
@@ -131,7 +134,7 @@ def build (nodes : Array Flat) : Nat → Nat → Condition
     { encoding := toEncoding n.encoding
       operator := toOperator n.operator
       children := kids.map (build nodes fuel)
-      inlined := false, size := 0
+      inlineSize := 0
       leadingBytes := lb
       compValue := n.compValue }
 
@@ -171,7 +174,7 @@ def showUnpacked (buf : Bytes) : String :=
       | 0, _, _ => []
       | _, _, [] => []
       | fuel + 1, idx, (p, c) :: queue =>
-        s!"{p}:{ConditionPacking.encCode c.encoding}:{ConditionPacking.opCode c.operator}:{(hexOf c.compValue).drop 2}:{if c.inlined then 1 else 0}:{c.size}"
+        s!"{p}:{ConditionPacking.encCode c.encoding}:{ConditionPacking.opCode c.operator}:{(hexOf c.compValue).drop 2}:{if c.inlineSize > 0 then 1 else 0}:{c.inlineSize}"
           :: go fuel (idx + 1) (queue ++ c.children.map fun ch => (idx, ch))
     s!"{maxPluck} " ++ "|".intercalate (go 100000 0 [(0, root)])
 
@@ -333,7 +336,7 @@ def runAuthorize (value op toHex hex allowances unwrappers perms : String) : Str
         | some i => ((ents.getD i (none, none, 0, "")).2.2.1) * 2 ^ 160 + i + 1
         | none => 0
       load := fun sc => ((trees.getD (sc % 2 ^ 160 - 1) none).getD
-        (⟨.None, .Or, [], false, 0, 0, []⟩, 0))
+        (⟨.None, .Or, [], 0, 0, []⟩, 0))
       unwrapper := fun k => uw.contains k }
   let envOf (e : MultiSend.Entry) : Evaluate.Env :=
     { value := e.value
@@ -672,9 +675,9 @@ def runLine (line : String) : String :=
     hexOf (SafeSigning.safeMessageHash EIP712.Keccak.keccak256 (parseHex th) (parseHex ds) (parseHex m))
   | ["ms", hex] => runMultiSend hex
   | ["et", defs, name] => EIP712.encodeType (parseDefs defs) name
-  | ["bm", hex, loc, cv, inl, sz] =>
-    toString (statusCode
-      (bitmaskCheck (parseHex hex) loc.toNat! (parseHex cv) (inl == "1") sz.toNat! []))
+  | ["bm", hex, cv] =>
+    let operand := parseHex hex
+    toString (statusCode (bitmaskCheck operand ⟨0, operand.length⟩ (parseHex cv) []))
   | [hex, loc, idx, nodesStr] =>
     let data := parseHex hex
     let nodes := (nodesStr.splitOn "|").toArray.map fun e =>
@@ -686,7 +689,10 @@ def runLine (line : String) : String :=
     let order := bfs root (nodes.size + 1) [root]
     let node := order.getD idx.toNat! default
     let l := loc.toNat!
-    s!"{showLocs (children data l node)} {size data l node}"
+    let sl : Slice := ⟨l, data.length - l⟩
+    let found := if l > data.length then none else children data sl node
+    let size := if l > data.length then none else region data sl node
+    s!"{showLocs (found.map (·.map (·.offset)))} {size.getD (data.length + 1)}"
   | _ => "bad-input"
 
 def main : IO Unit := do

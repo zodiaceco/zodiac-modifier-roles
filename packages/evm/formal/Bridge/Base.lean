@@ -8,8 +8,8 @@ import ConditionPacking.Model
 Consumptions as a map (`CM`, charges commute: `consumeM_comm`), the thunk
 helpers, and the SDK trees as the evaluator sees them: `D avatar c` is the
 node `ConditionPacker`/`ConditionUnpacker` hand `evaluate` for tree `c`.
-`TyEq`: two nodes are read as the same type by `AbiLocation.size` and
-`__input`. `TD`: a type description (the children of a check on a whole
+`TyEq`: two nodes are read as the same type by `AbiLocation.sliceRegion`
+and `_read`. `TD`: a type description (the children of a check on a whole
 value).
 -/
 
@@ -79,9 +79,6 @@ abbrev T := Thunk Slots CM
 
 def failT : T := fun sl _ => (none, sl)
 
-/-- `evaluate` moves the location of nested calldata past its length word. -/
-def adjust (e : Nat) (l : Nat) : Nat := if l > 0 ∧ e = 5 then l + 32 else l
-
 def toOp (o : Nat) : Operator := if o = 15 then .EqualTo else (ConditionPacking.opOf? o).getD .Pass
 
 /-- An allowance charge of `n` (scaled when the compValue has conversion
@@ -90,7 +87,7 @@ def charge (env : Env) (cv : Bytes) (n : Nat) : Option (Bytes × Nat) :=
   if cv.length = 32 then some (key cv, n)
   else if (env.scale cv n).1 = sOk then some (key cv, (env.scale cv n).2) else none
 
-/-- The amount `__input` gives `WithinAllowance` (a hash only for values
+/-- The amount `_read` gives `WithinAllowance` (a hash only for values
     longer than a word, which Integrity excludes). -/
 def amountOf (env : Env) : Input → Nat
   | .etherValue => env.value
@@ -101,7 +98,7 @@ def amountOf (env : Env) : Input → Nat
 def chargesT (bal : Bytes → Nat) (g : Slots → Option (List (Bytes × Nat))) : T :=
   fun sl cs => ((g sl).bind (applyL (consumeM bal) cs), sl)
 
-def writeSlot (sl : Slots) (k : Nat) (v : Input) (l : Nat) : Slots :=
+def writeSlot (sl : Slots) (k : Nat) (v : Input) (l : Slice) : Slots :=
   ⟨fun j => if j = k then v else sl.values j, fun j => if j = k then l else sl.locations j⟩
 
 /-- A thunk that passes or fails on a condition of the slots. -/
@@ -135,7 +132,7 @@ def lbOf (c : Cond) : Nat :=
 mutual
   /-- The tree before `annotate` (as `ConditionPacking.rawTree` builds it). -/
   def toRoles (avatar : Bytes) : Cond → Condition
-    | c@⟨e, o, _, ch⟩ => ⟨encN e, opN o, toRolesL avatar ch, false, 0, lbOf c, cvOf avatar c⟩
+    | c@⟨e, o, _, ch⟩ => ⟨encN e, opN o, toRolesL avatar ch, 0, lbOf c, cvOf avatar c⟩
   def toRolesL (avatar : Bytes) : List Cond → List Condition
     | [] => []
     | x :: xs => toRoles avatar x :: toRolesL avatar xs
@@ -151,12 +148,11 @@ def D (avatar : Bytes) (c : Cond) : Condition := annotate (toRoles avatar c)
 
 /-! ## Layouts -/
 
-/-- `inlined` and `size`: all a parent's `AbiLocation.children` reads of a
-    child. -/
-def LayEq (d m : Condition) : Prop := d.inlined = m.inlined ∧ d.size = m.size
+/-- `inlineSize`: all a parent's `AbiLocation.children` reads of a child. -/
+def LayEq (d m : Condition) : Prop := d.inlineSize = m.inlineSize
 
 mutual
-  /-- Same type: everything `AbiLocation.size` and `__input` read. They read
+  /-- Same type: everything `AbiLocation.sliceRegion` and `_read` read. They read
       no children of a word, `bytes` or nested calldata. -/
   inductive TyEq : Condition → Condition → Prop
     | mk {d m : Condition} : d.encoding = m.encoding → LayEq d m →
@@ -202,7 +198,7 @@ def navOp (o : Nat) : Bool :=
   o == 1 || o == 2 || o == 5 || o == 6 || o == 7 || o == 8 || o == 10 || o == 11 || o == 13
 
 /-- A type description, as the children of a check that reads its whole
-    value are (the SDK check's `exactTy`): `AbiLocation.size` reads them
+    value are (the SDK check's `exactTy`): `AbiLocation.sliceRegion` reads them
     through their encodings and sizes. Nodes that do not navigate, nested
     calldata (read as `bytes`, whatever sits below) and a `Slice` (a word or
     `bytes`; its window is a word). -/
@@ -212,10 +208,6 @@ inductive TD : Cond → Prop
       (c.enc = 1 → AllN winEnc w) → TD c
   | node {c : Cond} : navOp c.op = false → (c.enc = 1 ∨ c.enc = 2 ∨ c.enc = 3 ∨ c.enc = 4) →
       (∀ x ∈ c.ch, TD x) → TD c
-
-/-- `d` is the node of `c`, up to its `size` (which `_slice` sets on its
-    child). -/
-def Node (avatar : Bytes) (c : Cond) (d : Condition) : Prop := d = { D avatar c with size := d.size }
 
 /-- The slots the Pluck nodes of a subtree write. -/
 def plucks : Cond → List Nat

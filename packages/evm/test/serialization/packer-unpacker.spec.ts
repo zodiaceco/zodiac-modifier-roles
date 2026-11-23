@@ -38,8 +38,7 @@ type Unpacked = {
   operator: number;
   compValue: string;
   leadingBytes: number;
-  size: number;
-  inlined: boolean;
+  inlineSize: number;
 };
 
 const hex = (...bytes: number[]) =>
@@ -135,8 +134,7 @@ const model = (root: N): Unpacked[] =>
             ? "0x" + leading.slice(6)
             : stripped,
       leadingBytes: isCall ? parseInt(leading.slice(2, 6), 16) : 0,
-      size: size(n),
-      inlined: size(n) > 0,
+      inlineSize: size(n),
     };
   });
 
@@ -182,8 +180,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
           operator: Number(n.operator),
           compValue: n.compValue,
           leadingBytes: Number(n.leadingBytes),
-          size: Number(n.size),
-          inlined: n.inlined,
+          inlineSize: Number(n.inlineSize),
         }),
       ) as Unpacked[],
     };
@@ -409,11 +406,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
     for (const [name, tree, sizes] of cases) {
       it(`${name}: ${sizes[0]}`, async () => {
         const { nodes } = await roundtrip(tree);
-        expect(nodes.map((n) => n.size)).to.deep.equal(sizes);
-        // inlined is not stored: it is whether a size is
-        expect(nodes.map((n) => n.inlined)).to.deep.equal(
-          sizes.map((s) => s > 0),
-        );
+        expect(nodes.map((n) => n.inlineSize)).to.deep.equal(sizes);
       });
     }
   });
@@ -453,7 +446,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
     it("the largest inlined size, 8160 bytes", async () => {
       const tree = call(tuple(...repeat(255, S)));
       const { nodes } = await roundtrip(tree);
-      expect(nodes[1].size).to.equal(8160);
+      expect(nodes[1].inlineSize).to.equal(8160);
     });
   });
 

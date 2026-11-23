@@ -18,12 +18,12 @@ lake build TargetDecode
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LP.det` (`Loose.lean`)        | **A value is determined by its location and shape.** `LP data l u` says following offsets from `l` (as a decoder does, with no assumption on the layout) reads `u`; two such values of one ABI shape are equal. |
 | `canon_LP` (`Canon.lean`)      | The spec encoding is one of these layouts: a value whose spec encoding sits at `l` is read there.                                                                                                              |
-| `region_det`                   | **A region holding the spec encoding of `v` is read as `v`**, whatever the rest of the calldata holds. For `EqualTo` on a dynamic value (Roles hashes the bytes it measured at the value's location): if they equal the pinned encoding, the target decoded exactly the pinned value. |
+| `region_det`                   | **A region holding the spec encoding of `v` is read as `v`**, whatever the rest of the calldata holds. For `EqualTo` on a dynamic value (Roles hashes the one canonical region it finds at the value's location): if they equal the pinned encoding, the target decoded exactly the pinned value. |
 | `decodeCall_LP` (`Decoder.lean`) | **What solc accepts is loosely placed.** `decode` transcribes solc's parameter decoder (ABI coder v2, `memory` parameters): head and bounds checks, offsets up to `2^64 - 1`, length words, per-type word validation. When it accepts, each argument is `LP`-placed with its type's shape. |
 | `decodeCall_LPCall` (`Walk.lean`) | What solc's decoder accepts is the calldata of a call in this sense (`LPCall`). |
-| `target_locations` (`Walk.lean`) | **Roles' walker on any such layout.** The setting of decoder faithfulness (a tree that describes the call, Integrity's Zip rules), but the calldata is anything `LPCall` accepts. Every node the evaluator visits, Zip jumps included, is one of: a node describing component `u` (same index path) at the location the target reads `u` from; below a `Slice`, a window of the bytes the target decodes for `u`; non-structural; or (only with `s = true`, `InStrayL`) inside a variant branch that does not fit the `bytes` value it is evaluated on, where the branch itself is reached where the target reads that value; nothing more is promised below it. Soundness only: where Roles' `children` succeeds it is right; it may fail on layouts the target accepts (a tail at or before its head slot), which only makes Roles stricter. |
+| `target_locations` (`Walk.lean`) | **Roles' walker on any such layout.** The setting of decoder faithfulness (a tree that describes the call, Integrity's Zip rules), but the calldata is anything `LPCall` accepts. Every node the evaluator visits, Zip jumps included, is one of: a node describing component `u` (same index path) in a slice that starts where the target reads `u` from; below a `Slice`, a window of the bytes the target decodes for `u`; non-structural; or (only with `s = true`, `InStrayL`) inside a variant branch that does not fit the `bytes` value it is evaluated on, where the branch itself is reached where the target reads that value; nothing more is promised below it. Soundness only: where Roles' `children` succeeds it is right; it may fail on layouts the target accepts (a tail before the end of its own head slot, a child or an array that does not fit the slice Roles narrowed to), which only makes Roles stricter. |
 | `target_input` | **Comparison operands.** For a visited `EqualTo`, `GreaterThan`, `LessThan`, signed comparison, `WithinAllowance` or `Pluck`: on a static component the operand is exactly its spec encoding (or Roles reports overflow); on any component, **if the operand equals the spec operand of a value `v` of the component's shape, the target decoded `v`**. "Of the component's shape" is a hypothesis (`HasSh` of the same shape for `u` and `v`): encode `v` with the parameter's type. On a dynamic component the operand is a hash, modelled by its preimage (`expectInput_inj`), so this step trusts keccak256 collision resistance. So an `EqualTo` whose compValue is the spec encoding of `v` passes only when the target decoded `v`. Below a `Slice`: a window of the bytes the target decodes. |
-| `target_bitmask` | `BitmaskChecker.check` returns `bitmaskSpec` of the bytes the target decodes: the word, the content of a `bytes` value (for nested calldata, the raw `bytes` the target receives), or a window of them below a `Slice`. |
+| `target_bitmask` | `_bitmask` finds no payload in its slice (`CalldataOverflow`), or `BitmaskChecker.check` returns `bitmaskSpec` of the bytes the target decodes: the word, or the content of a `bytes` value (for nested calldata, the raw `bytes` the target receives). Below a `Slice` it returns `bitmaskSpec` of a window of them. |
 | `ex_LPCall` | Non-vacuity: `f(bytes, bytes)` with the tails in reverse order satisfies the hypothesis, and is not the spec encoding. |
 | `ex_full` (`NonVacuity.lean`) | Non-vacuity of the whole chain: on that layout solc's decoder model accepts, a strict (`s = false`) tree describes the arguments, the evaluator visits the second leaf at its tail, and `target_input` applies to it. |
 
@@ -36,13 +36,13 @@ get only case (iv).
 
 Below a `Slice`, the theorems give *some* window of the decoded bytes
 (`IsWindow`), not which one. That it is `[shift, shift + size)` is tested
-(the Slice end-to-end tests in `test/formal/lean-model.spec.ts`).
+(the Slice end-to-end tests in `formal/test/lean-model.spec.ts`).
 
 ## Trusted base
 
 - The transcriptions: solc's parameter decoder (`Decoder.lean`) and Roles'
   walker (shared with decoder faithfulness, `Roles.lean`). Both are tested
-  (below, and `test/formal/lean-model.spec.ts`).
+  (below, and `formal/test/lean-model.spec.ts`).
 - keccak256 collision resistance, for `target_input` on dynamic values:
   Roles compares hashes, the model compares their preimages
   (`expectInput_inj`).
@@ -51,7 +51,7 @@ Below a `Slice`, the theorems give *some* window of the decoded bytes
 
 ## Tested
 
-`test/formal/integrity-gaps.spec.ts`, `GAP_TARGET=<n>` (needs the Lean
+`formal/test/integrity-gaps.spec.ts`, `GAP_TARGET=<n>` (needs the Lean
 driver and the solc binary Hardhat caches; `GAP_SOLC` overrides its path):
 
 - Random signatures (words of every width, `bytes`, tuples, arrays,
@@ -108,7 +108,7 @@ branch choices.
 `Or` takes its first passing branch, and its allowance charges. A branch
 fails when Roles reads a non-canonical layout more strictly than the
 target (for example `EqualTo` on `bytes` with non-zero padding: Roles
-compares the padded region, solc ignores padding). So the caller can make
+finds no canonical region there, solc ignores padding). So the caller can make
 an earlier branch fail and a later one apply, on values for which the
 earlier branch holds. No operator negates, so the later branch's own
 checks still hold for the decoded values: what the caller gains is the
@@ -131,7 +131,7 @@ don't rely on an earlier branch's allowance being charged.
   requires a node of the tree that does not describe the bytes value, which
   the walk from the root reaches where the target reads that value, by the
   same index path; `d` is reached from it. `ReachedL` takes the top node's
-  location (`root 0` in the theorems).
+  slice (the whole calldata in the theorems).
 
 ## Not covered (yet)
 
@@ -160,6 +160,6 @@ don't rely on an earlier branch's allowance being charged.
   calldata; for those the theorems take `LPCall` as a hypothesis.
 - Targets not compiled by solc (Vyper, hand-written decoders) and
   fallback functions that decode by hand.
-- Custom checkers: they receive `(location, size)` of the raw bytes, not
-  the decoded value; on a non-canonical layout these bytes need not be a
-  spec encoding.
+- Custom checkers: they receive the location and the length of the region
+  Roles finds for the value, not the decoded value. That this region is the
+  spec encoding of what the target decodes is not proven here.

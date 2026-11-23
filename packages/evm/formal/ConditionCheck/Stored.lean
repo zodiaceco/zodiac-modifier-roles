@@ -54,7 +54,7 @@ theorem checkStored_sound {s : Bool} {fs : List Flat} {v : Verdict}
     | .typed t => RootOK root ∧ ZipOK s root ∧
         ∀ pre args, HasT s (.call pre args) t → Strict s (.call pre args) t →
           Desc s root (.call pre args)
-    | .noCalldata => ∀ data p d l, Eval data (annotate root) p d l → input data l d = .etherValue := by
+    | .noCalldata => ∀ data p d l y, Eval data (annotate root) p d l y → input data l y d = .etherValue := by
   intro root
   unfold checkStored at h
   split at h
@@ -76,7 +76,7 @@ theorem checkStored_sound {s : Bool} {fs : List Flat} {v : Verdict}
       · rename_i hns
         simp only [Option.some.injEq] at h; subst h
         rw [treeOf, ← classify_avatar s avatar] at hns
-        exact fun data p d l hv => ns_root_input hns hv
+        exact fun data p d l y hv => ns_root_input hns hv
       · cases h
   · cases h
 

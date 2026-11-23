@@ -61,43 +61,43 @@ theorem Rel.eq {r : Res} {x : Option CM × Slots} (h : Rel r x) :
 
 
 section
-variable (env : Env) (data : Calldata) (n f l : Nat) (d : Condition) (cons : List Consumption)
-  (sl : Slots)
+variable (env : Env) (data : Calldata) (n f : Nat) (l : Slice) (z : Nat) (d : Condition)
+  (cons : List Consumption) (sl : Slots)
 
 /-! ## `evaluate` by operator -/
 
 theorem evalC_cmp {op : Operator} (hd : d.operator = op)
     (hop : op = .EqualTo ∨ op = .GreaterThan ∨ op = .LessThan ∨ op = .SignedIntGreaterThan ∨
       op = .SignedIntLessThan) :
-    evalC env data n (f + 1) l d cons sl =
-      match input data l d with
+    evalC env data n (f + 1) l z d cons sl =
+      match input data l z d with
       | .overflow => violation sCalldataOverflow sl
-      | v => result (compare op (inputB env v) d.compValue) cons sl := by
+      | v => result (compare op (inputB env v) (inputLength data l z d) d.compValue) cons sl := by
   rw [evalC, hd]
   rcases hop with rfl | rfl | rfl | rfl | rfl <;> rfl
 
 theorem evalC_bitmask (hd : d.operator = .Bitmask) :
-    evalC env data n (f + 1) l d cons sl =
-      result (bitmaskStatus (bitmaskCheck data l d.compValue d.inlined d.size [])) cons sl := by
+    evalC env data n (f + 1) l z d cons sl =
+      result (bitmaskStatus (bitmask data l z d.compValue [])) cons sl := by
   rw [evalC, hd]
 
 theorem evalC_empty (hd : d.operator = .Empty) :
-    evalC env data n (f + 1) l d cons sl =
+    evalC env data n (f + 1) l z d cons sl =
       result (if data.length = 0 then sOk else sCalldataNotEmpty) cons sl := by
   rw [evalC, hd]
 
 theorem evalC_ratio (hd : d.operator = .WithinRatio) :
-    evalC env data n (f + 1) l d cons sl = result (env.ratio d.compValue sl.values) cons sl := by
+    evalC env data n (f + 1) l z d cons sl = result (env.ratio d.compValue sl.values) cons sl := by
   rw [evalC, hd]
 
 theorem evalC_cwa (hd : d.operator = .CallWithinAllowance) :
-    evalC env data n (f + 1) l d cons sl =
+    evalC env data n (f + 1) l z d cons sl =
       result (allowance env cons 1 d.compValue).1 (allowance env cons 1 d.compValue).2 sl := by
   rw [evalC, hd]
 
 theorem evalC_wa (hd : d.operator = .WithinAllowance) :
-    evalC env data n (f + 1) l d cons sl =
-      match input data l d with
+    evalC env data n (f + 1) l z d cons sl =
+      match input data l z d with
       | .overflow => violation sCalldataOverflow sl
       | v => result (allowance env cons (match inputB env v with
           | .w x => x
@@ -108,16 +108,18 @@ theorem evalC_wa (hd : d.operator = .WithinAllowance) :
   rw [evalC, hd]; rfl
 
 theorem evalC_custom (hd : d.operator = .Custom) :
-    evalC env data n (f + 1) l d cons sl =
-      match env.customCall d.compValue l (if d.size ≠ 0 then d.size else size data l d)
-          sl.values with
-      | .inl s => violation s sl
-      | .inr chs => result (applyCharges env cons chs).1 (applyCharges env cons chs).2 sl := by
+    evalC env data n (f + 1) l z d cons sl =
+      match (if d.encoding = .None then some ⟨l.offset, 0⟩ else operand data l z d) with
+      | none => violation sCalldataOverflow sl
+      | some op =>
+        match env.customCall d.compValue op.offset op.length sl.values with
+        | .inl s => violation s sl
+        | .inr chs => result (applyCharges env cons chs).1 (applyCharges env cons chs).2 sl := by
   rw [evalC, hd]; rfl
 
 theorem evalC_pluck (hd : d.operator = .Pluck) :
-    evalC env data n (f + 1) l d cons sl =
-      match input data l d with
+    evalC env data n (f + 1) l z d cons sl =
+      match input data l z d with
       | .overflow => violation sCalldataOverflow sl
       | v =>
         match cvAt d.compValue 0 with
@@ -127,7 +129,8 @@ theorem evalC_pluck (hd : d.operator = .Pluck) :
           ok cons ⟨fun j => if j = k then (match v with
                       | .etherValue => .word env.value
                       | v => v) else sl.values j,
-                   fun j => if j = k then l else sl.locations j⟩ := by
+                   fun j => if j = k then (pluckSpan data l z d).getD default
+                     else sl.locations j⟩ := by
   rw [evalC, hd]; rfl
 
 end
@@ -197,8 +200,8 @@ theorem allowance_toMap (env : Env) (cons : List Consumption) (v : Nat)
 
 /-! ## Each operator -/
 
-theorem compare_ne_revert (op : Operator) (v : B32) (cv : Bytes) :
-    Evaluate.compare op v cv ≠ revert := by
+theorem compare_ne_revert (op : Operator) (v : B32) (len : Nat) (cv : Bytes) :
+    Evaluate.compare op v len cv ≠ revert := by
   unfold Evaluate.compare
   repeat' split
   all_goals decide
@@ -217,17 +220,11 @@ variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n f 
 /-- The reading of `c` at `v`, for an operator `ext` covers. -/
 abbrev RX := readExt avatar env data n c ss v sl (toMap cons)
 /-- The evaluator on the same node. -/
-abbrev EX := evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl
-
-theorem nodeAt_operator : (nodeAt avatar c v).operator = opN c.op := by
-  cases v <;> simp [nodeAt, D_operator]
-
-theorem nodeAt_compValue : (nodeAt avatar c v).compValue = cvOf avatar c := by
-  cases v <;> simp [nodeAt, D_compValue]
+abbrev EX := evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl
 
 theorem cmp_rel (ho : 15 ≤ c.op ∧ c.op ≤ 20) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hext : readExt avatar env data n c ss v = checkT fun _ => cmpOk env data (nodeAt avatar c v) v.loc := by
+  have hext : readExt avatar env data n c ss v = checkT fun _ => cmpOk env data (D avatar c) v.loc (szAt avatar c v) := by
     unfold readExt
     obtain ⟨h1, h2⟩ := ho
     have : c.op = 15 ∨ c.op = 16 ∨ c.op = 17 ∨ c.op = 18 ∨ c.op = 19 ∨ c.op = 20 := by omega
@@ -237,33 +234,33 @@ theorem cmp_rel (ho : 15 ≤ c.op ∧ c.op ≤ 20) :
     obtain ⟨h1, h2⟩ := ho
     have : c.op = 15 ∨ c.op = 16 ∨ c.op = 17 ∨ c.op = 18 ∨ c.op = 19 ∨ c.op = 20 := by omega
     rcases this with h | h | h | h | h | h <;> simp [h, opN, ConditionPacking.opOf?]
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [hext, checkT_apply, evalC_cmp env data n f v.loc _ cons sl (nodeAt_operator avatar c v) hopc]
+  rw [hext, checkT_apply, evalC_cmp env data n f v.loc _ _ cons sl (D_operator avatar c) hopc]
   unfold cmpOk
-  rw [nodeAt_operator]
-  cases input data v.loc (nodeAt avatar c v) with
+  rw [D_operator]
+  cases input data v.loc (szAt avatar c v) (D avatar c) with
   | overflow => exact Rel.violation (by decide) (by decide) sl
   | etherValue | word _ | hash _ =>
-    simpa using Rel.result (compare_ne_revert _ _ _) cons sl
+    simpa using Rel.result (compare_ne_revert _ _ _ _) cons sl
 
 theorem bitmask_rel (ho : c.op = 21) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .Bitmask := by
-    rw [nodeAt_operator, ho]; rfl
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .Bitmask := by
+    rw [D_operator, ho]; rfl
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_bitmask env data n f v.loc _ cons sl hop]
+  rw [evalC_bitmask env data n f v.loc _ _ cons sl hop]
   unfold readExt; simp only [ho]
   rw [checkT_apply]
   simpa using Rel.result (bitmaskStatus_ne_revert _) cons sl
 
 theorem empty_rel (ho : c.op = 4) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .Empty := by rw [nodeAt_operator, ho]; rfl
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .Empty := by rw [D_operator, ho]; rfl
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_empty env data n f v.loc _ cons sl hop]
+  rw [evalC_empty env data n f v.loc _ _ cons sl hop]
   unfold readExt; simp only [ho]
   unfold emptyT
   rw [checkT_apply]
@@ -274,11 +271,11 @@ theorem empty_rel (ho : c.op = 4) :
 
 theorem ratio_rel (ho : c.op = 23) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .WithinRatio := by rw [nodeAt_operator, ho]; rfl
-  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .WithinRatio := by rw [D_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert at hne
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_ratio env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [evalC_ratio env data n f v.loc _ _ cons sl hop] at hne ⊢
   rw [result_status] at hne
   unfold readExt; simp only [ho]
   rw [checkT_apply]
@@ -286,68 +283,71 @@ theorem ratio_rel (ho : c.op = 23) (hne : (EX avatar env data n f c v cons sl).s
 
 theorem cwa_rel (ho : c.op = 30) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .CallWithinAllowance := by rw [nodeAt_operator, ho]; rfl
-  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .CallWithinAllowance := by rw [D_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert at hne
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_cwa env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [evalC_cwa env data n f v.loc _ _ cons sl hop] at hne ⊢
   rw [result_status] at hne
   unfold readExt; simp only [ho]
   unfold chargesT
-  rw [← allowance_toMap env cons 1 (nodeAt avatar c v).compValue hne]
+  rw [← allowance_toMap env cons 1 (D avatar c).compValue hne]
   exact Rel.result hne _ sl
 
 theorem wa_rel (ho : c.op = 28) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .WithinAllowance := by rw [nodeAt_operator, ho]; rfl
-  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .WithinAllowance := by rw [D_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert at hne
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_wa env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [evalC_wa env data n f v.loc _ _ cons sl hop] at hne ⊢
   unfold readExt; simp only [ho]
   unfold chargesT allowanceCharge
-  cases hi : input data v.loc (nodeAt avatar c v) with
+  cases hi : input data v.loc (szAt avatar c v) (D avatar c) with
   | overflow => exact Rel.violation (by decide) (by decide) sl
   | etherValue | word _ | hash _ =>
     simp only [hi, result_status] at hne ⊢
     simp only [inputB, amountOf] at hne ⊢
-    rw [← allowance_toMap env cons _ (nodeAt avatar c v).compValue hne]
+    rw [← allowance_toMap env cons _ (D avatar c).compValue hne]
     exact Rel.result hne _ sl
 
 include henv in
 theorem custom_rel (ho : c.op = 22) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .Custom := by rw [nodeAt_operator, ho]; rfl
-  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .Custom := by rw [D_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert at hne
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_custom env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [evalC_custom env data n f v.loc _ _ cons sl hop] at hne ⊢
   unfold readExt; simp only [ho]
   unfold chargesT customCharges
-  rcases hc : env.customCall (nodeAt avatar c v).compValue v.loc
-      (if (nodeAt avatar c v).size ≠ 0 then (nodeAt avatar c v).size
-       else size data v.loc (nodeAt avatar c v)) sl.values with s | chs
-  · simp only [hc, Evaluate.violation] at hne
-    simp only [Option.bind_none]
-    exact Rel.violation (henv.custom _ _ _ _ s hc) hne sl
-  · simp only [Option.bind_some]
-    rw [applyCharges_toMap]
-    exact Rel.result (applyCharges_status env cons chs) _ sl
+  rcases ho' : (if (D avatar c).encoding = .None then some (⟨v.loc.offset, 0⟩ : Slice)
+      else operand data v.loc (szAt avatar c v) (D avatar c)) with _ | op
+  · simp only [Option.bind_none]
+    exact Rel.violation (by decide) (by decide) sl
+  · simp only [ho'] at hne ⊢
+    rcases hc : env.customCall (D avatar c).compValue op.offset op.length sl.values with s | chs
+    · simp only [hc, Evaluate.violation] at hne
+      simp only [Option.bind_none]
+      exact Rel.violation (henv.custom _ _ _ _ s hc) hne sl
+    · simp only [Option.bind_some]
+      rw [applyCharges_toMap]
+      exact Rel.result (applyCharges_status env cons chs) _ sl
 
 theorem pluck_rel (ho : c.op = 14) (hne : (EX avatar env data n f c v cons sl).status ≠ revert) :
     Rel (EX avatar env data n f c v cons sl) (RX avatar env data n c ss v cons sl) := by
-  have hop : (nodeAt avatar c v).operator = .Pluck := by rw [nodeAt_operator, ho]; rfl
-  change (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl).status ≠ revert at hne
-  show Rel (evalC env data n (f + 1) v.loc (nodeAt avatar c v) cons sl)
+  have hop : (D avatar c).operator = .Pluck := by rw [D_operator, ho]; rfl
+  change (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert at hne
+  show Rel (evalC env data n (f + 1) v.loc (szAt avatar c v) (D avatar c) cons sl)
     (readExt avatar env data n c ss v sl (toMap cons))
-  rw [evalC_pluck env data n f v.loc _ cons sl hop] at hne ⊢
+  rw [evalC_pluck env data n f v.loc _ _ cons sl hop] at hne ⊢
   unfold readExt; simp only [ho]
   unfold pluckT
-  rcases hi : input data v.loc (nodeAt avatar c v) with _ | _ | x | p
+  rcases hi : input data v.loc (szAt avatar c v) (D avatar c) with _ | _ | x | p
   all_goals simp only [hi] at hne ⊢
   all_goals first
     | exact Rel.violation (by decide) (by decide) sl
-    | (rcases hk : cvAt (nodeAt avatar c v).compValue 0 with _ | k
+    | (rcases hk : cvAt (D avatar c).compValue 0 with _ | k
        · simp [hk, Evaluate.violation] at hne
        · by_cases hn : k ≥ n
          · simp [hk, hn, Evaluate.violation] at hne

@@ -19,7 +19,7 @@
  * inlined drops its first word (the offset of `abi.encode`).
  *
  * Tested byte for byte against the Lean model of the packer and against
- * `ConditionPacker.pack` (packages/evm/test/formal/sdk-check.spec.ts).
+ * `ConditionPacker.pack` (packages/evm/formal/test/sdk-check.spec.ts).
  */
 import {
   type ConditionFlatInput,
@@ -105,7 +105,7 @@ export const checkAndPack = (
  * This is the pipeline `sdk_pipeline` (packages/evm/formal/Bridge) covers:
  * the stored tree enforces what the tree as written means. The proof needs
  * the tree as written to be well-typed, which the first check enforces
- * (tested: every tree it accepts is, `test/formal/sdk-check.spec.ts`).
+ * (tested: every tree it accepts is, `formal/test/sdk-check.spec.ts`).
  * Throws if either check rejects.
  */
 export const checkAndPackCondition = (

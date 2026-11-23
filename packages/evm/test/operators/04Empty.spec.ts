@@ -119,7 +119,7 @@ describe("Operator - Empty", () => {
         .withArgs(
           ConditionViolationStatus.CalldataNotEmpty,
           anyValue,
-          0, // payloadLocation: Empty checks entire calldata
+          0, // calldataOffset: Empty checks entire calldata
         );
     });
   });

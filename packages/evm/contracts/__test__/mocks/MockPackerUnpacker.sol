@@ -14,8 +14,7 @@ contract MockPackerUnpacker {
         Operator operator;
         bytes compValue;
         Encoding encoding;
-        bool inlined;
-        uint256 size;
+        uint256 inlineSize;
         uint256 leadingBytes;
     }
 
@@ -37,7 +36,7 @@ contract MockPackerUnpacker {
     }
 
     /// @dev Integrity + pack, as `packConditions` does. Used by the Lean
-    ///      differential test (test/formal/lean-model.spec.ts).
+    ///      differential test (formal/test/lean-model.spec.ts).
     function pack(
         ConditionFlat[] memory conditions
     ) public pure returns (bytes memory) {
@@ -93,8 +92,7 @@ contract MockPackerUnpacker {
                 operator: node.operator,
                 compValue: node.compValue,
                 encoding: node.encoding,
-                inlined: node.inlined,
-                size: node.size,
+                inlineSize: node.inlineSize,
                 leadingBytes: node.leadingBytes
             });
 

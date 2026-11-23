@@ -56,7 +56,7 @@ variable (avatar : Bytes) (env : Env) (data : Calldata) (n : Nat)
 
 theorem iterT_ok (Q : T → Prop) (hf : Q failT) (hp : Q passT)
     (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l)) (hor : ∀ l : List T, (∀ t ∈ l, Q t) → Q (orT l))
-    (every : Bool) (d : Condition) (l : Nat) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
+    (every : Bool) (d : Condition) (l : Slice) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
     Q (iterT data every d l ss) := by
   have kid : ∀ w, Q ((ss.headD fun _ => passT) w) := fun w =>
     headD_mem_or (P := fun s => Q (s w)) hp (fun s hs => hss s hs w)
@@ -69,7 +69,7 @@ theorem iterT_ok (Q : T → Prop) (hf : Q failT) (hp : Q passT)
 
 theorem iterT_true_ok (Q : T → Prop) (hf : Q failT) (hp : Q passT)
     (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l))
-    (d : Condition) (l : Nat) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
+    (d : Condition) (l : Slice) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
     Q (iterT data true d l ss) := by
   have kid : ∀ w, Q ((ss.headD fun _ => passT) w) := fun w =>
     headD_mem_or (P := fun s => Q (s w)) hp (fun s hs => hss s hs w)
@@ -81,7 +81,7 @@ theorem iterT_true_ok (Q : T → Prop) (hf : Q failT) (hp : Q passT)
     | simp at *
 
 theorem tailT_ok (Q : T → Prop) (hf : Q failT) (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l))
-    (d : Condition) (l : Nat) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
+    (d : Condition) (l : Slice) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
     Q (tailT data d l ss) := by
   unfold tailT
   repeat' split
@@ -92,8 +92,8 @@ theorem tailT_ok (Q : T → Prop) (hf : Q failT) (hseq : ∀ l : List T, (∀ t 
         exact hss s hs _
 
 theorem marrT_ok (Q : T → Prop) (hf : Q failT) (hseq : ∀ l : List T, (∀ t ∈ l, Q t) → Q (seqT l))
-    (e : Nat) (d : Condition) (l : Nat) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
-    Q (marrT data e d l ss) := by
+    (d : Condition) (l : Slice) (ss : List (RV → T)) (hss : ∀ s ∈ ss, ∀ w, Q (s w)) :
+    Q (marrT data d l ss) := by
   unfold marrT
   repeat' split
   all_goals first
@@ -102,8 +102,8 @@ theorem marrT_ok (Q : T → Prop) (hf : Q failT) (hseq : ∀ l : List T, (∀ t 
         obtain ⟨s, hs, l, rfl⟩ := mem_zipWith' ht
         exact hss s hs _
 
-theorem sliceT_ok (Q : T → Prop) (hf : Q failT) (d : Condition) (l : Nat) (kid : RV → T)
-    (hk : ∀ w, Q (kid w)) : Q (sliceT data d l kid) := by
+theorem sliceT_ok (Q : T → Prop) (hf : Q failT) (d : Condition) (l : Slice) (z : Nat)
+    (kid : RV → T) (hk : ∀ w, Q (kid w)) : Q (sliceT data d l z kid) := by
   unfold sliceT
   repeat' split
   all_goals first | exact hf | exact hk _
@@ -156,8 +156,8 @@ theorem readWorld_keeps (c : Cond) (ss : List (RV → T)) (h14 : c.op ≠ 14)
     | exact hf
     | exact iterT_ok data KeepsT hf hp (fun _ h => seqT_keeps h) (fun _ h => orT_keeps h) _ _ _ _ hss
     | exact tailT_ok data KeepsT hf (fun _ h => seqT_keeps h) _ _ _ hss
-    | exact marrT_ok data KeepsT hf (fun _ h => seqT_keeps h) _ _ _ _ hss
-    | exact sliceT_ok data KeepsT hf _ _ _ kid
+    | exact marrT_ok data KeepsT hf (fun _ h => seqT_keeps h) _ _ _ hss
+    | exact sliceT_ok data KeepsT hf _ _ _ _ kid
     | exact zipT_ok data n KeepsT hf (fun _ h => seqT_keeps h) (fun _ h => orT_keeps h)
         (fun h => keeps_pick h) _ _ _ kid
 
@@ -180,8 +180,8 @@ theorem readWorld_pure (c : Cond) (ss : List (RV → T))
     | exact iterT_ok data PureT failT_pure passT_pure (fun _ h => seqT_pure h) (fun _ h => orT_pure h)
         _ _ _ _ hss
     | exact tailT_ok data PureT failT_pure (fun _ h => seqT_pure h) _ _ _ hss
-    | exact marrT_ok data PureT failT_pure (fun _ h => seqT_pure h) _ _ _ _ hss
-    | exact sliceT_ok data PureT failT_pure _ _ _ kid
+    | exact marrT_ok data PureT failT_pure (fun _ h => seqT_pure h) _ _ _ hss
+    | exact sliceT_ok data PureT failT_pure _ _ _ _ kid
     | exact zipT_ok data n PureT failT_pure (fun _ h => seqT_pure h) (fun _ h => orT_pure h)
         (fun h => pure_pick h) _ _ _ kid
 
@@ -206,8 +206,8 @@ theorem readWorld_charger (c : Cond) (ss : List (RV → T))
     | exact iterT_true_ok data (ChargerT (consumeM env.balance)) hf hp (fun _ h => seqT_charger h)
         _ _ _ hss
     | exact tailT_ok data (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h) _ _ _ hss
-    | exact marrT_ok data (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h) _ _ _ _ hss
-    | exact sliceT_ok data (ChargerT (consumeM env.balance)) hf _ _ _ kid
+    | exact marrT_ok data (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h) _ _ _ hss
+    | exact sliceT_ok data (ChargerT (consumeM env.balance)) hf _ _ _ _ kid
     | exact zipT_every_ok data n (ChargerT (consumeM env.balance)) hf (fun _ h => seqT_charger h)
         (fun h => charger_pick h) _ _ kid
 

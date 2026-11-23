@@ -9,7 +9,7 @@
  * Pluck slot, and is read by `evaluate` at the ABI spec location of every
  * parameter (`checkStored_sound`). Each function below mirrors the Lean
  * definition of the same name; the differential test
- * packages/evm/test/formal/sdk-check.spec.ts compares the two.
+ * packages/evm/formal/test/sdk-check.spec.ts compares the two.
  *
  * Operators and encodings are taken as their numeric codes (`Operator.sol`,
  * `Encoding` in `Condition.sol`), including the v3 ones (`Pluck`, `ZipSome`,

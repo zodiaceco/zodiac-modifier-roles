@@ -13,7 +13,7 @@ import { AbiCoder, ContractFactory, concat, hexlify } from "ethers";
 import hre, { network } from "hardhat";
 
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
-import { Encoding, Operator, flattenCondition } from "../utils.js";
+import { Encoding, Operator, flattenCondition } from "../../test/utils.js";
 
 const abi = AbiCoder.defaultAbiCoder();
 const word = (n: number) => abi.encode(["uint256"], [n]);

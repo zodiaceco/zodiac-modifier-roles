@@ -26,7 +26,7 @@ unsigned ones.
 `decode_LP`: when it accepts, the decoded value is what following offsets
 reads (`LP`), with the type's shape. Parameters in `calldata` are decoded
 lazily, field by field, with the same arithmetic; the differential test
-(`test/formal/integrity-gaps.spec.ts`, `GAP_TARGET`) compiles both kinds and
+(`formal/test/integrity-gaps.spec.ts`, `GAP_TARGET`) compiles both kinds and
 compares them with this model.
 -/
 

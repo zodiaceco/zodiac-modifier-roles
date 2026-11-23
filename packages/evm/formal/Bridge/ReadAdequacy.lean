@@ -32,21 +32,23 @@ theorem opKnown_cases {o : Nat} (h : (ConditionPacking.opOf? o).isSome = true) :
   unfold ConditionPacking.opOf? at h
   split at h <;> first | omega | simp at h
 
-theorem leadingCheck_ne_ok {data : Calldata} {loc : Nat} {cv : Bytes} {s : Nat}
+theorem leadingCheck_ne_ok {data : Calldata} {loc : Slice} {cv : Bytes} {s : Nat}
     (h : leadingCheck data loc cv = some s) : s ≠ sOk := by
   unfold leadingCheck at h
   repeat' split at h
   all_goals first | (subst h; decide) | (simp only [Option.some.injEq] at h; subst h; decide) | simp at h
 
-theorem childrenE_inl {data : Calldata} {loc : Nat} {d : Condition} {s : Nat}
-    (h : childrenE data loc d = .inl s) : s = revert := by
-  unfold childrenE at h
-  split at h
-  · simp only [Sum.inl.injEq] at h; exact h.symm
-  · simp at h
+theorem matchesHead_ne_ok {data : Calldata} {loc : Slice} {d : Condition} {s : Nat}
+    (h : matchesHead data loc d = .inl s) : s ≠ sOk := by
+  unfold matchesHead at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Sum.inl.injEq] at h; subst h; decide)
+    | (rename_i hlc; simp only [Sum.inl.injEq] at h; subst h; exact leadingCheck_ne_ok hlc)
+    | simp at h
 
 theorem zipLocsGo_spec (data : Calldata) (n : Nat) (cv : Bytes) :
-    ∀ (fields : List Condition) (sl : Slots) (f : Nat) (len : Option Nat) (acc : List (List Nat)),
+    ∀ (fields : List Condition) (sl : Slots) (f : Nat) (len : Option Nat) (acc : List (List Slice)),
     (∀ s, zipLocsGo data n cv fields sl f len acc = .inl s → s ≠ sOk) ∧
     (∀ locss m, zipLocsGo data n cv fields sl f len acc = .inr (locss, m) →
       locss.length = acc.length + fields.length)
@@ -60,7 +62,6 @@ theorem zipLocsGo_spec (data : Calldata) (n : Nat) (cv : Bytes) :
       all_goals first
         | (simp only [Sum.inl.injEq] at h; subst h; decide)
         | exact (ih _ _).1 s h
-        | (rename_i hc; have := childrenE_inl hc; simp only [Sum.inl.injEq] at h; subst h; rw [this]; decide)
         | simp at h
     · intro locss m h
       unfold zipLocsGo at h
@@ -75,9 +76,11 @@ variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : 
 local notation "RW" => readWorld avatar env data n
 
 theorem Corr.of_zip {f : Nat}
-    {cs0 : List Cond} (hx : ∀ x ∈ cs0, ∀ l cons sl, (evalC env data n f l (D avatar x) cons sl).status ≠ revert →
-      Rel (evalC env data n f l (D avatar x) cons sl) (sem RW x (.pos l) sl (toMap cons))) :
-    ∀ (cs : List Cond), (∀ x ∈ cs, x ∈ cs0) → ∀ (locs : List Nat),
+    {cs0 : List Cond} (hx : ∀ x ∈ cs0, ∀ l cons sl,
+      (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl).status ≠ revert →
+      Rel (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl)
+        (sem RW x (.pos l) sl (toMap cons))) :
+    ∀ (cs : List Cond), (∀ x ∈ cs, x ∈ cs0) → ∀ (locs : List Slice),
     Corr env data n f ((cs.map (D avatar)).zip locs) ((cs.zip (locs.map RV.pos)).map fun p => sem RW p.1 p.2)
   | [], _, _ => by simp; exact .nil
   | _ :: _, _, [] => by simp; exact .nil
@@ -87,9 +90,11 @@ theorem Corr.of_zip {f : Nat}
       (Corr.of_zip hx xs (fun y hy => hm y (by simp [hy])) ls)
 
 theorem Corr.of_zipWith {f : Nat}
-    {cs0 : List Cond} (hx : ∀ x ∈ cs0, ∀ l cons sl, (evalC env data n f l (D avatar x) cons sl).status ≠ revert →
-      Rel (evalC env data n f l (D avatar x) cons sl) (sem RW x (.pos l) sl (toMap cons))) :
-    ∀ (cs : List Cond), (∀ x ∈ cs, x ∈ cs0) → ∀ (locs : List Nat),
+    {cs0 : List Cond} (hx : ∀ x ∈ cs0, ∀ l cons sl,
+      (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl).status ≠ revert →
+      Rel (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl)
+        (sem RW x (.pos l) sl (toMap cons))) :
+    ∀ (cs : List Cond), (∀ x ∈ cs, x ∈ cs0) → ∀ (locs : List Slice),
     Corr env data n f ((cs.map (D avatar)).zip locs)
       (List.zipWith (fun s l => s (RV.pos l)) (cs.map (sem RW)) locs)
   | [], _, _ => by simp; exact .nil
@@ -98,8 +103,6 @@ theorem Corr.of_zipWith {f : Nat}
     simp only [List.map_cons, List.zip_cons_cons, List.zipWith_cons_cons]
     exact .cons (fun cons sl h => hx x (hm x (by simp)) l cons sl h)
       (Corr.of_zipWith hx xs (fun y hy => hm y (by simp [hy])) ls)
-
-theorem nodeAt_at (c : Cond) (l : Nat) : nodeAt avatar c (.pos l) = D avatar c := rfl
 
 theorem D_enc_abi (c : Cond) : (D avatar c).encoding = .AbiEncoded ↔ c.enc = 5 := by
   rw [D_encoding]
@@ -110,12 +113,8 @@ theorem D_enc_abi (c : Cond) : (D avatar c).encoding = .AbiEncoded ↔ c.enc = 5
     · unfold encN ConditionPacking.encOf? at h; split at h <;> simp_all
   · intro h; simp [h, encN, ConditionPacking.encOf?]
 
-theorem adjust_eq (c : Cond) (l : Nat) :
-    (if l > 0 ∧ (D avatar c).encoding = .AbiEncoded then l + 32 else l) = adjust c.enc l := by
-  unfold adjust; simp only [D_enc_abi]
-
 theorem sem_matchesT_el (t : Cond) (ht5 : t.op = 5) (ht3 : t.enc = 3) (hs : ∀ y ∈ t.ch, isStruct y = true)
-    (ls : List Nat) (hl : t.ch.length ≤ ls.length) :
+    (ls : List Slice) (hl : t.ch.length ≤ ls.length) :
     sem RW t (.el ls) = seqT ((t.ch.zip (ls.map RV.pos)).map fun p => sem RW p.1 p.2) := by
   funext sl cs
   rw [sem_eq, if_neg (by omega), if_neg (by omega), if_neg (by omega), if_pos ⟨ht5, Or.inl ht3⟩]
@@ -129,12 +128,13 @@ variable (avatar : Bytes) (env : Env) (henv : EnvOk env) (data : Calldata) (n : 
 local notation "RW" => readWorld avatar env data n
 
 include henv in
-/-- **Adequacy**, at a location or a `Slice` window (where only a leaf is
+/-- **Adequacy**, at a slice or a `Slice` window (where only a leaf is
     evaluated). -/
 theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN adOk c →
-    (∀ l sz, v = .win l sz → c.ch = [] ∧ navOp c.op = false) → (∀ ls, v ≠ .el ls) →
-    ∀ cons sl, (evalC env data n f v.loc (nodeAt avatar c v) cons sl).status ≠ revert →
-    Rel (evalC env data n f v.loc (nodeAt avatar c v) cons sl) (sem RW c v sl (toMap cons))
+    (∀ l, v = .win l → c.ch = [] ∧ navOp c.op = false) → (∀ ls, v ≠ .el ls) →
+    ∀ cons sl, (evalC env data n f v.loc (szAt avatar c v) (D avatar c) cons sl).status ≠ revert →
+    Rel (evalC env data n f v.loc (szAt avatar c v) (D avatar c) cons sl)
+      (sem RW c v sl (toMap cons))
   | 0, c, _, h, _, _, _, _, _, _ => absurd h (by omega)
   | f + 1, c, v, hh, hinv, hv, hel, cons, sl, hne => by
     have hok : adOk c := AllN.self _ hinv
@@ -142,32 +142,34 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     have hhx : ∀ x ∈ c.ch, height x < f := fun x hx => by have := height_mem hx; omega
     have IH := adequacy_gen f
     -- a child at a location
-    have IHat : ∀ x ∈ c.ch, ∀ l cons sl, (evalC env data n f l (D avatar x) cons sl).status ≠ revert →
-        Rel (evalC env data n f l (D avatar x) cons sl) (sem RW x (.pos l) sl (toMap cons)) :=
-      fun x hx l cons sl h => IH x (.pos l) (hhx x hx) (hchI x hx) (fun _ _ h => by cases h)
+    have IHat : ∀ x ∈ c.ch, ∀ l cons sl,
+        (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl).status ≠ revert →
+        Rel (evalC env data n f l (D avatar x).inlineSize (D avatar x) cons sl)
+          (sem RW x (.pos l) sl (toMap cons)) :=
+      fun x hx l cons sl h => IH x (.pos l) (hhx x hx) (hchI x hx) (fun _ h => by cases h)
         (fun _ h => by cases h) cons sl h
-    have hop := nodeAt_operator avatar c v
+    have hop := D_operator avatar c
     -- navigating operators run at a location
     have hat : navOp c.op = true → ∃ l, v = .pos l := by
       intro hn
       cases v with
       | pos l => exact ⟨l, rfl⟩
-      | win l sz => have := (hv l sz rfl).2; rw [hn] at this; cases this
+      | win l => have := (hv l rfl).2; rw [hn] at this; cases this
       | el ls => exact absurd rfl (hel ls)
     rw [sem_eq]
     by_cases h0 : c.op = 0
     · rw [if_pos h0]
-      have hd : (nodeAt avatar c v).operator = .Pass := by rw [hop, h0]; rfl
-      rw [evalC_pass env data n f _ _ cons sl hd]
+      have hd : (D avatar c).operator = .Pass := by rw [hop, h0]; rfl
+      rw [evalC_pass env data n f _ _ _ cons sl hd]
       exact Rel.ok cons sl
     rw [if_neg h0]
     by_cases h1 : c.op = 1
     · rw [if_pos h1]
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h1])
       have hd : (D avatar c).operator = .And := by rw [D_operator, h1]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
-      rw [evalC_and env data n f l _ cons sl hd, D_children, List.map_map] at hne ⊢
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
+      rw [evalC_and env data n f l _ _ cons sl hd, D_children, List.map_map] at hne ⊢
       exact seqLoop_rel env data n (Corr.of_map env data n (fun x => (D avatar x, l))
         (fun x => sem RW x (.pos l)) fun x hx cons sl h => IHat x hx l cons sl h) cons sl hne
     rw [if_neg h1]
@@ -175,9 +177,9 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     · rw [if_pos h2]
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h2])
       have hd : (D avatar c).operator = .Or := by rw [D_operator, h2]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
-      rw [evalC_or env data n f l _ cons sl hd, D_children] at hne ⊢
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
+      rw [evalC_or env data n f l _ _ cons sl hd, D_children] at hne ⊢
       refine orLoop_rel env data n l ?_ cons sl hne
       rw [List.map_map]
       exact Corr.of_map env data n (fun x => (D avatar x, l))
@@ -190,16 +192,16 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
       have hcm : (⟨c.enc, 5, c.cv, c.ch⟩ : Cond) = c := by
         rcases c with ⟨e, o, cv, ch⟩; simp only at h5 ⊢; rw [h5.1]
       have hs := hok.2.1 h5.1 h5.2
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl)
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl)
         (matchesT RW c.enc c.cv c.ch (.pos l) sl (toMap cons))
-      rw [evalC_matches env data n f l _ cons sl hd, adjust_eq] at hne ⊢
+      rw [evalC_matches env data n f l _ _ cons sl hd] at hne ⊢
       simp only [matchesT, readWorld, matchLocs, RV.loc, hcm]
-      rcases hlc : leadingCheck data (adjust c.enc l) (D avatar c).compValue with _ | s
-      · simp only [hlc] at hne ⊢
-        rcases hce : childrenE data (adjust c.enc l + (D avatar c).leadingBytes) (D avatar c) with s | _ | locs
-        · simp only [hce, Evaluate.violation] at hne
-          exact absurd (childrenE_inl hce) hne
+      rcases hmh : matchesHead data l (D avatar c) with s | body
+      · simp only [hmh, Evaluate.violation] at hne ⊢
+        exact Rel.violation (matchesHead_ne_ok hmh) hne sl
+      · simp only [hmh] at hne ⊢
+        rcases hce : children data body (D avatar c) with _ | locs
         · simp only [hce]
           exact Rel.violation (by decide) (by decide) sl
         · simp only [hce] at hne ⊢
@@ -212,8 +214,6 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
               (fun x hx l cons sl h => IHat x hx l cons sl h) c.ch (fun _ h => h) locs) cons sl hne
           · simp only [hlen, ne_eq, not_false_eq_true, ite_true, ite_false, Option.isSome_none]
             exact Rel.violation (by decide) (by decide) sl
-      · simp only [hlc, Evaluate.violation] at hne ⊢
-        exact Rel.violation (leadingCheck_ne_ok hlc) hne sl
     rw [if_neg h5]
     show Rel _ (readExt avatar env data n c (c.ch.map (sem RW)) v sl (toMap cons))
     rcases opKnown_cases hok.1 with h | h | h | h | h | h | h | h | h | h | h | h | h | h | h | h | h | h
@@ -224,17 +224,17 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     · -- `Matches` on an array (or another encoding)
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h])
       have hd : (D avatar c).operator = .Matches := by rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
       unfold marrT arrLocs
-      simp only [RV.loc, nodeAt_at]
-      rw [evalC_matches env data n f l _ cons sl hd, adjust_eq] at hne ⊢
-      rcases hlc : leadingCheck data (adjust c.enc l) (D avatar c).compValue with _ | s
-      · simp only [hlc] at hne ⊢
-        rcases hce : childrenE data (adjust c.enc l + (D avatar c).leadingBytes) (D avatar c) with s | _ | locs
-        · simp only [hce, Evaluate.violation] at hne
-          exact absurd (childrenE_inl hce) hne
+      simp only [RV.loc]
+      rw [evalC_matches env data n f l _ _ cons sl hd] at hne ⊢
+      rcases hmh : matchesHead data l (D avatar c) with s | body
+      · simp only [hmh, Evaluate.violation] at hne ⊢
+        exact Rel.violation (matchesHead_ne_ok hmh) hne sl
+      · simp only [hmh] at hne ⊢
+        rcases hce : children data body (D avatar c) with _ | locs
         · simp only [hce]
           exact Rel.violation (by decide) (by decide) sl
         · simp only [hce] at hne ⊢
@@ -245,21 +245,17 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
               (fun x hx l cons sl h => IHat x hx l cons sl h) c.ch (fun _ h => h) locs) cons sl hne
           · simp only [hlen, List.length_map, ne_eq, not_false_eq_true, ite_true]
             exact Rel.violation (by decide) (by decide) sl
-      · simp only [hlc, Evaluate.violation] at hne ⊢
-        exact Rel.violation (leadingCheck_ne_ok hlc) hne sl
     · -- `ArraySome` / `ArrayEvery`
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h])
       have hd : (D avatar c).operator = if false then .ArrayEvery else .ArraySome := by
         rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
       unfold iterT arrLocs
-      simp only [RV.loc, nodeAt_at]
-      rw [evalC_iter env data n f l _ cons sl false hd] at hne ⊢
-      rcases hce : childrenE data l (D avatar c) with s | _ | locs
-      · simp only [hce, Evaluate.violation] at hne
-        exact absurd (childrenE_inl hce) hne
+      simp only [RV.loc]
+      rw [evalC_iter env data n f l _ _ cons sl false hd] at hne ⊢
+      rcases hce : children data l (D avatar c) with _ | locs
       · simp only [hce]
         exact Rel.violation (by decide) (by decide) sl
       · simp only [hce] at hne ⊢
@@ -285,15 +281,13 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h])
       have hd : (D avatar c).operator = if true then .ArrayEvery else .ArraySome := by
         rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
       unfold iterT arrLocs
-      simp only [RV.loc, nodeAt_at]
-      rw [evalC_iter env data n f l _ cons sl true hd] at hne ⊢
-      rcases hce : childrenE data l (D avatar c) with s | _ | locs
-      · simp only [hce, Evaluate.violation] at hne
-        exact absurd (childrenE_inl hce) hne
+      simp only [RV.loc]
+      rw [evalC_iter env data n f l _ _ cons sl true hd] at hne ⊢
+      rcases hce : children data l (D avatar c) with _ | locs
       · simp only [hce]
         exact Rel.violation (by decide) (by decide) sl
       · simp only [hce] at hne ⊢
@@ -318,15 +312,13 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     · -- `ArrayTailMatches`
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h])
       have hd : (D avatar c).operator = .ArrayTailMatches := by rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
       unfold tailT arrLocs
-      simp only [RV.loc, nodeAt_at]
-      rw [evalC_tail env data n f l _ cons sl hd] at hne ⊢
-      rcases hce : childrenE data l (D avatar c) with s | _ | locs
-      · simp only [hce, Evaluate.violation] at hne
-        exact absurd (childrenE_inl hce) hne
+      simp only [RV.loc]
+      rw [evalC_tail env data n f l _ _ cons sl hd] at hne ⊢
+      rcases hce : children data l (D avatar c) with _ | locs
       · simp only [hce]
         exact Rel.violation (by decide) (by decide) sl
       · simp only [hce] at hne ⊢
@@ -344,12 +336,11 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
       have ht : t ∈ c.ch := by rw [hch]; simp
       have hd : (D avatar c).operator = if false then .ZipEvery else .ZipSome := by
         rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
-      rw [show nodeAt avatar c (RV.pos l) = D avatar c from rfl]
       unfold zipT
-      rw [evalC_zip env data n f l _ cons sl false hd] at hne ⊢
+      rw [evalC_zip env data n f l _ _ cons sl false hd] at hne ⊢
       rw [D_children, hch] at hne ⊢
       simp only [List.map_cons, List.headD_cons] at hne ⊢
       unfold zipF
@@ -359,17 +350,19 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
         exact Rel.violation this hne sl
       · simp only [hz] at hne ⊢
         have hlen := (zipLocsGo_spec data n _ _ sl 0 none []).2 locss len (by unfold zipLocs at hz; exact hz)
-        have hyI : ∀ y ∈ t.ch, ∀ l cons sl, (evalC env data n f l (D avatar y) cons sl).status ≠ revert →
-            Rel (evalC env data n f l (D avatar y) cons sl) (sem RW y (.pos l) sl (toMap cons)) := by
+        have hyI : ∀ y ∈ t.ch, ∀ l cons sl,
+            (evalC env data n f l (D avatar y).inlineSize (D avatar y) cons sl).status ≠ revert →
+            Rel (evalC env data n f l (D avatar y).inlineSize (D avatar y) cons sl)
+              (sem RW y (.pos l) sl (toMap cons)) := by
           intro y hy l cons sl h'
           have h1 := height_mem hy
           have h2 := hhx t ht
-          exact IH y (.pos l) (by omega) (AllN.ch _ (hchI t ht) y hy) (fun _ _ h => by cases h)
+          exact IH y (.pos l) (by omega) (AllN.ch _ (hchI t ht) y hy) (fun _ h => by cases h)
             (fun _ h => by cases h) cons sl h'
         have hel : ElemCorr env data n f (D avatar t).children locss
-            (fun i => sem RW t (.el (locss.map fun ls => ls.getD i 0))) := by
+            (fun i => sem RW t (.el (locss.map fun ls => ls.getD i default))) := by
           intro i cons sl hne'
-          show Rel _ (sem RW t (RV.el (locss.map fun ls => ls.getD i 0)) sl (toMap cons))
+          show Rel _ (sem RW t (RV.el (locss.map fun ls => ls.getD i default)) sl (toMap cons))
           rw [sem_matchesT_el avatar env data n t ht5 ht3 hts _
             (by rw [List.length_map, hlen, D_children, List.length_map]; simp)]
           rw [D_children] at hne' ⊢
@@ -383,12 +376,11 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
       have ht : t ∈ c.ch := by rw [hch]; simp
       have hd : (D avatar c).operator = if true then .ZipEvery else .ZipSome := by
         rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
-      rw [show nodeAt avatar c (RV.pos l) = D avatar c from rfl]
       unfold zipT
-      rw [evalC_zip env data n f l _ cons sl true hd] at hne ⊢
+      rw [evalC_zip env data n f l _ _ cons sl true hd] at hne ⊢
       rw [D_children, hch] at hne ⊢
       simp only [List.map_cons, List.headD_cons] at hne ⊢
       unfold zipF
@@ -398,17 +390,19 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
         exact Rel.violation this hne sl
       · simp only [hz] at hne ⊢
         have hlen := (zipLocsGo_spec data n _ _ sl 0 none []).2 locss len (by unfold zipLocs at hz; exact hz)
-        have hyI : ∀ y ∈ t.ch, ∀ l cons sl, (evalC env data n f l (D avatar y) cons sl).status ≠ revert →
-            Rel (evalC env data n f l (D avatar y) cons sl) (sem RW y (.pos l) sl (toMap cons)) := by
+        have hyI : ∀ y ∈ t.ch, ∀ l cons sl,
+            (evalC env data n f l (D avatar y).inlineSize (D avatar y) cons sl).status ≠ revert →
+            Rel (evalC env data n f l (D avatar y).inlineSize (D avatar y) cons sl)
+              (sem RW y (.pos l) sl (toMap cons)) := by
           intro y hy l cons sl h'
           have h1 := height_mem hy
           have h2 := hhx t ht
-          exact IH y (.pos l) (by omega) (AllN.ch _ (hchI t ht) y hy) (fun _ _ h => by cases h)
+          exact IH y (.pos l) (by omega) (AllN.ch _ (hchI t ht) y hy) (fun _ h => by cases h)
             (fun _ h => by cases h) cons sl h'
         have hel : ElemCorr env data n f (D avatar t).children locss
-            (fun i => sem RW t (.el (locss.map fun ls => ls.getD i 0))) := by
+            (fun i => sem RW t (.el (locss.map fun ls => ls.getD i default))) := by
           intro i cons sl hne'
-          show Rel _ (sem RW t (RV.el (locss.map fun ls => ls.getD i 0)) sl (toMap cons))
+          show Rel _ (sem RW t (RV.el (locss.map fun ls => ls.getD i default)) sl (toMap cons))
           rw [sem_matchesT_el avatar env data n t ht5 ht3 hts _
             (by rw [List.length_map, hlen, D_children, List.length_map]; simp)]
           rw [D_children] at hne' ⊢
@@ -419,21 +413,21 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
     · -- `Slice`: the leaf child at the window
       obtain ⟨l, rfl⟩ := hat (by simp [navOp, h])
       have hd : (D avatar c).operator = .Slice := by rw [D_operator, h]; rfl
-      change (evalC env data n (f + 1) l (D avatar c) cons sl).status ≠ revert at hne
-      change Rel (evalC env data n (f + 1) l (D avatar c) cons sl) _
+      change (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl).status ≠ revert at hne
+      change Rel (evalC env data n (f + 1) l (D avatar c).inlineSize (D avatar c) cons sl) _
       unfold readExt; simp only [h]
-      rw [show nodeAt avatar c (RV.pos l) = D avatar c from rfl, show (RV.pos l).loc = l from rfl]
+      rw [show (RV.pos l).loc = l from rfl,
+        show szAt avatar c (RV.pos l) = (D avatar c).inlineSize from rfl]
       unfold sliceT
-      rw [evalC_slice env data n f l _ cons sl hd] at hne ⊢
+      rw [evalC_slice env data n f l _ _ cons sl hd] at hne ⊢
       rcases hsz : cvAt (D avatar c).compValue 2 with _ | sz
       · simp [hsz, Evaluate.violation] at hne
       · simp only [hsz] at hne ⊢
-        by_cases h1' : (D avatar c).inlined = false ∧ l + 32 > data.length
-        · simp only [h1', and_self, ↓reduceIte]
+        rcases hpl : slicePayload data l (D avatar c).inlineSize with _ | payload
+        · simp only [hpl]
           exact Rel.violation (s := sCalldataOverflow) (by decide) (by decide) sl
-        · simp only [h1', ↓reduceIte] at hne ⊢
-          by_cases h2' : shiftOf (D avatar c).compValue + sz >
-              (if (D avatar c).inlined = true then (D avatar c).size else load data l)
+        · simp only [hpl] at hne ⊢
+          by_cases h2' : shiftOf (D avatar c).compValue + sz > payload.length
           · simp only [h2', ↓reduceIte]
             exact Rel.violation (s := sCalldataOverflow) (by decide) (by decide) sl
           · simp only [h2', ↓reduceIte] at hne ⊢
@@ -443,8 +437,12 @@ theorem adequacy_gen : ∀ (f : Nat) (c : Cond) (v : RV), height c < f → AllN 
             · have hx : x ∈ c.ch := by rw [hch]; simp
               simp only [hch, List.map_cons, List.headD_cons] at hne ⊢
               have hw := hok.2.2.1 h x hx
-              exact IH x (.win _ sz) (hhx x hx) (hchI x hx)
-                (fun l' sz' he => by cases he; exact hw) (fun _ h => by cases h) cons sl hne
+              by_cases hnav : navigates (D avatar x).operator = true
+              · simp [hnav, Evaluate.violation] at hne
+              · simp only [hnav, Bool.false_eq_true, ↓reduceIte] at hne ⊢
+                exact IH x (.win ⟨payload.offset + shiftOf (D avatar c).compValue, sz⟩) (hhx x hx)
+                  (hchI x hx) (fun l' he => by cases he; exact hw) (fun _ h => by cases h)
+                  cons sl hne
     · exact pluck_rel avatar env data n f c _ v cons sl h hne
     · exact cmp_rel avatar env data n f c _ v cons sl h
     · exact bitmask_rel avatar env data n f c _ v cons sl h

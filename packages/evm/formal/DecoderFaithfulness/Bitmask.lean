@@ -219,40 +219,32 @@ theorem bitmaskLoop_spec {data : Bytes} {start : Nat} {bs cv junk : Bytes}
     (by unfold bmN; omega) hat.1 hbs (by simp; omega) (bmN cv) 0 (by omega)]
   simp only [List.drop_zero]; rfl
 
-/-- Static operand (`inlined`): `size` bytes at `location`. -/
-theorem bitmaskCheck_inlined {data : Bytes} {l : Nat} {bs : Bytes} (cv junk : Bytes)
-    (hat : At data l bs) :
-    bitmaskCheck data l cv true bs.length junk = bitmaskSpec bs cv := by
-  have hb := hat.bound
+/-- `check` on the operand `bs`: the spec's verdict. -/
+theorem bitmaskCheck_eq {data : Bytes} {o : Nat} {bs : Bytes} (cv junk : Bytes)
+    (hat : At data o bs) :
+    bitmaskCheck data ⟨o, bs.length⟩ cv junk = bitmaskSpec bs cv := by
   unfold bitmaskCheck bitmaskSpec
-  simp only [Bool.true_eq_false, false_and, ite_false, ite_true]
+  simp only
   by_cases hov : sliceShift cv + bmN cv > bs.length
   · rw [show (cv.length - 2) / 2 = bmN cv from rfl, ite_eq_left hov, ite_eq_left hov]
   · rw [show (cv.length - 2) / 2 = bmN cv from rfl, ite_eq_right hov, ite_eq_right hov,
-      ite_eq_right (by omega), bitmaskLoop_spec hat (by omega)]
+      bitmaskLoop_spec hat (by omega)]
 
-/-- Dynamic operand: a length word at `location`, the content after it. -/
-theorem bitmaskCheck_dynamic {data : Bytes} (hlen : data.length < 2 ^ 255) {l : Nat}
-    {b : Bytes} (cv junk : Bytes) (size : Nat) (hat : At data l (encBytes b)) :
-    bitmaskCheck data l cv false size junk = bitmaskSpec b cv := by
-  have hb := hat.bound
-  rw [length_encBytes] at hb
-  have hcl : b.length < 2 ^ 256 := by
-    have : (2 : Nat) ^ 255 < 2 ^ 256 := by decide
-    have := ceil32_ge b.length
-    omega
-  have hload : load data l = b.length := by
-    have h := hat
-    unfold encBytes at h; rw [List.append_assoc] at h
-    exact load_of_At_append h hcl
-  have hc := At_content hat
-  have hcb := hc.bound
-  unfold bitmaskCheck bitmaskSpec
-  simp only [Bool.false_eq_true, ite_false, hload, true_and]
-  rw [ite_eq_right (by omega), show (cv.length - 2) / 2 = bmN cv from rfl]
-  by_cases hov : sliceShift cv + bmN cv > b.length
-  · rw [ite_eq_left hov, ite_eq_left hov]
-  · rw [ite_eq_right hov, ite_eq_right hov, ite_eq_right (by omega), bitmaskLoop_spec hc (by omega)]
+/-- Operand read in place (a static value, or the window of a `Slice`). -/
+theorem bitmask_inlined {data : Bytes} {l : Slice} {bs : Bytes} (cv junk : Bytes)
+    (hfit : Fits data l bs) (h1 : 1 ≤ bs.length) :
+    bitmask data l bs.length cv junk = bitmaskSpec bs cv := by
+  unfold bitmask
+  rw [slicePayload_inline (by omega) hfit.2]
+  exact bitmaskCheck_eq cv junk hfit.1
+
+/-- Dynamic operand: the content after the length word. -/
+theorem bitmask_dynamic {data : Bytes} (hlen : data.length < 2 ^ 255) {l : Slice}
+    {b : Bytes} (cv junk : Bytes) (hfit : Fits data l (encBytes b)) :
+    bitmask data l 0 cv junk = bitmaskSpec b cv := by
+  unfold bitmask
+  rw [slicePayload_bytes hlen hfit]
+  exact bitmaskCheck_eq cv junk (At_content hfit.1)
 
 /-! ## Top-level statement -/
 
@@ -261,29 +253,31 @@ section Top
 variable (root : Condition) (pre : Bytes) (args : List Val) (suffix : Bytes)
 
 /-- **Bitmask.** For every visited `Bitmask` node (Integrity: on a `Static`
-    or `Dynamic` parameter), `BitmaskChecker.check` returns exactly
-    `bitmaskSpec` on the spec bytes of the described component: its word,
-    its content for `bytes`/`string`, or below a `Slice` a window of the
-    content. This holds for any memory contents after the compValue
-    (`junk`). Or the node is inside a variant branch that does not fit the
-    bytes value it is evaluated on (`InStray`, only with `s = true`). -/
+    or `Dynamic` parameter), `_bitmask` (`BitmaskChecker.check` on the
+    payload) returns exactly `bitmaskSpec` on the spec bytes of the described
+    component: its word, its content for `bytes`/`string`, or below a `Slice`
+    a window of the content. This holds for any memory contents after the
+    compValue (`junk`). Or the node is inside a variant branch that does not
+    fit the bytes value it is evaluated on (`InStray`, only with
+    `s = true`). -/
 theorem decoder_bitmask {s : Bool}
     (hD : Desc s root (.call pre args)) (hR : RootOK root) (hZ : ZipOK s root)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
-    {p : List Nat} {d : Condition} {l : Nat}
-    (hv : Eval (calldata pre args suffix) (annotate root) p d l)
+    {p : List Nat} {d : Condition} {l : Slice} {y : Nat}
+    (hv : Eval (calldata pre args suffix) (annotate root) p d l y)
     (hop : d.operator = .Bitmask) (henc : d.encoding = .Static ∨ d.encoding = .Dynamic)
     (junk : Bytes) :
     (∃ u, (Val.call pre args).sub p = some u ∧
-      bitmaskCheck (calldata pre args suffix) l d.compValue d.inlined d.size junk =
+      bitmask (calldata pre args suffix) l y d.compValue junk =
         bitmaskSpec (content u) d.compValue) ∨
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
-      bitmaskCheck (calldata pre args suffix) l d.compValue d.inlined d.size junk =
+      bitmask (calldata pre args suffix) l y d.compValue junk =
         bitmaskSpec bs d.compValue) ∨
-    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
+    InStray s (calldata pre args suffix) root (rootSlice pre args suffix) (.call pre args)
+      p d l y := by
   rcases decoder_locations root pre args suffix hD hR hZ hlen hv with
-    ⟨d0, u, _, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
-    ⟨d0, bs, u, rfl, hw, hat, _, _, hsub, hiw⟩ | hst
+    ⟨d0, u, _, rfl, rfl, hsub, hD0, hp, hr⟩ | ⟨d0, rfl, hns⟩ |
+    ⟨d0, bs, u, rfl, hw, hat, rfl, h1, _, hsub, hiw⟩ | hst
   · left
     refine ⟨u, hsub, ?_⟩
     have hop0 := annotate_op_of hop (by decide)
@@ -291,14 +285,16 @@ theorem decoder_bitmask {s : Bool}
     rw [annotate_encoding] at henc
     match hD0 with
     | .word he _ _ hw =>
-      have hat : At (calldata pre args suffix) l _ := hp
-      simp only [hmeta.1, hmeta.2, Val.isStatic, ite_true, enc, annotate_compValue] at hat ⊢
-      simpa [content] using bitmaskCheck_inlined (data := calldata pre args suffix) d0.compValue junk hat
+      have hfit : Fits (calldata pre args suffix) l _ := hp
+      simp only [Val.isStatic, ite_true, enc] at hmeta hfit
+      rw [hmeta, annotate_compValue]
+      simpa [content] using bitmask_inlined d0.compValue junk hfit (by omega)
     | .bytes he _ _ hu =>
-      have hat := Placed.to_At_of_root hp hr (by rw [he]; decide) (by rw [he]; decide)
-      rw [enc_bytesLike hu] at hat
-      simp only [hmeta.1, isStatic_bytesLike hu, annotate_compValue]
-      exact bitmaskCheck_dynamic hlen _ junk _ hat
+      have hfit := Placed.to_Fits_of_root hp hr (by rw [he]; decide) (by rw [he]; decide)
+      rw [enc_bytesLike hu] at hfit
+      simp only [isStatic_bytesLike hu, Bool.false_eq_true, ite_false] at hmeta
+      rw [hmeta, annotate_compValue]
+      exact bitmask_dynamic hlen _ junk hfit
     | .sliceWord _ h _ _ _ _ _ | .sliceBytes _ h _ _ _ _ _ => rw [hop0] at h; cases h
     | .tuple he _ _ _ _ _ | .array _ _ he _ _ _ _ _ | .call he _ _ _ _ _ | .logical _ he _ _ _ _ _ =>
       rw [he] at henc; simp at henc
@@ -311,10 +307,8 @@ theorem decoder_bitmask {s : Bool}
     · simp [he] at henc
   · right; left
     refine ⟨u, bs, hsub, hiw, ?_⟩
-    have hm := Win.annotate_meta hw
-    simp only [Condition.withSize_inlined, Condition.withSize_size, Condition.withSize_compValue,
-      hm.1, annotate_compValue]
-    exact bitmaskCheck_inlined _ junk hat
+    rw [annotate_compValue]
+    exact bitmask_inlined _ junk hat h1
   · right; right; exact hst
 
 end Top

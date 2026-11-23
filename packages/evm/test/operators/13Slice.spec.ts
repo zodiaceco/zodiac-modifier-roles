@@ -513,7 +513,7 @@ describe("Operator - Slice", () => {
         .withArgs(
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          68, // payloadLocation: bytes data at byte 68 (4 + 32 + 32)
+          68, // calldataOffset: bytes data at byte 68 (4 + 32 + 32)
         );
     });
   });

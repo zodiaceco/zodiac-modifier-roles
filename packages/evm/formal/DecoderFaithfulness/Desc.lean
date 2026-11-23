@@ -51,11 +51,11 @@ mutual
   /-- A type description: what the children of an operator that reads its
       whole value (`EqualTo` on a tuple, `Pluck`, ...) must be, since their
       sizes give the length of the value read. No node of the subtree
-      navigates, except below nested calldata (which `AbiLocation.size`
+      navigates, except below nested calldata (which `AbiLocation.sliceRegion`
       reads as `bytes`) and a `Slice` (a word or `bytes`): their own
       children do not change their size. -/
   def exactTy : Condition → Bool
-    | ⟨e, op, cs, _, _, _, _⟩ => e == .AbiEncoded || op == .Slice || (!isNavOp op && exactTyAll cs)
+    | ⟨e, op, cs, _, _, _⟩ => e == .AbiEncoded || op == .Slice || (!isNavOp op && exactTyAll cs)
   def exactTyAll : List Condition → Bool
     | [] => true
     | c :: cs => exactTy c && exactTyAll cs
@@ -99,8 +99,8 @@ inductive ZipNode : Condition → Prop
       c.encoding = .None → (c.operator = .ZipSome ∨ c.operator = .ZipEvery) →
       c.children = [t] → ZipNode c
 
-/-- No Zip child comes before `ch0`. `AbiLocation.size` of a logical node
-    returns the first child size that fits in calldata; a Zip child's size
+/-- No Zip child comes before `ch0`. `AbiLocation.sliceRegion` of a logical node
+    returns the first child region it finds; a Zip child's region
     is unrelated to the value, so the described child `ch0` must come
     first. (Integrity requires the Plucks a Zip reads to be visited before
     it, which puts the Zip after the sibling that holds them.) -/
@@ -234,7 +234,7 @@ def ZipOK (s : Bool) (root : Condition) : Prop :=
 mutual
   /-- The tree contains a Zip node. -/
   def hasZip : Condition → Bool
-    | ⟨_, op, cs, _, _, _, _⟩ => decide (op = .ZipSome ∨ op = .ZipEvery) || hasZipAll cs
+    | ⟨_, op, cs, _, _, _⟩ => decide (op = .ZipSome ∨ op = .ZipEvery) || hasZipAll cs
 
   def hasZipAll : List Condition → Bool
     | [] => false
@@ -248,7 +248,7 @@ theorem hasZipAll_mem {c : Condition} : ∀ {cs : List Condition}, c ∈ cs →
 
 theorem hasZip_false {c : Condition} (h : hasZip c = false) :
     (c.operator ≠ .ZipSome ∧ c.operator ≠ .ZipEvery) ∧ hasZipAll c.children = false := by
-  rcases c with ⟨_, op, cs, _, _, _, _⟩
+  rcases c with ⟨_, op, cs, _, _, _⟩
   simp only [hasZip, Bool.or_eq_false_iff, decide_eq_false_iff_not, not_or] at h
   exact h
 
@@ -272,16 +272,21 @@ theorem ZipOK.of_noZip {s : Bool} {root : Condition} (h : hasZip root = false) :
 def At (data : Bytes) (l : Nat) (bs : Bytes) : Prop :=
   (data.drop l).take bs.length = bs ∧ l + bs.length ≤ data.length
 
-/-- Where Roles expects a value's encoding at location `l`. Nested calldata
-    (`call`) at `l > 0` is a length-prefixed `bytes` value; at `l = 0` it is
-    the top-level calldata itself, with no length word (`evaluate` adds 32
-    to the location of `AbiEncoded` nodes only when `location > 0`). -/
-def Placed (data : Bytes) (l : Nat) : Val → Prop
-  | .call pre args =>
-      (l = 0 ∧ At data 0 (pre ++ encTuple args)) ∨ (0 < l ∧ At data l (enc (.call pre args)))
-  | u => At data l (enc u)
+/-- The slice `sl` starts with `bs`, and has room for it. -/
+def Fits (data : Bytes) (sl : Slice) (bs : Bytes) : Prop :=
+  At data sl.offset bs ∧ bs.length ≤ sl.length
 
-/-- The value `__input` should produce for a value whose encoding is `bs`
+/-- Where Roles expects a value's encoding in the slice `sl`. Nested calldata
+    (`call`) at an offset `> 0` is a length-prefixed `bytes` value; at offset
+    `0` it is the top-level calldata itself, with no length word (`_matches`
+    takes the payload of an `AbiEncoded` node only when `location != 0`). -/
+def Placed (data : Bytes) (sl : Slice) : Val → Prop
+  | .call pre args =>
+      (sl.offset = 0 ∧ Fits data sl (pre ++ encTuple args)) ∨
+        (0 < sl.offset ∧ Fits data sl (enc (.call pre args)))
+  | u => Fits data sl (enc u)
+
+/-- The value `_read` should produce for a value whose encoding is `bs`
     (every modeled encoding is at least 32 bytes). -/
 def expectInput (bs : Bytes) : Input :=
   if bs.length = 32 then .word (wordVal bs) else .hash bs

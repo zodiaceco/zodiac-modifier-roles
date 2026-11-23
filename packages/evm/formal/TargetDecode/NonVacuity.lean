@@ -36,8 +36,8 @@ theorem ex_LPCall' : ∃ args, LPCall exData (exData.take 4) args := by
   obtain ⟨args, h⟩ := Option.isSome_iff_exists.mp ex_decode
   exact ⟨args, decodeCall_LPCall h⟩
 
-def leafD : Condition := ⟨.Dynamic, .EqualTo, [], false, 0, 0, []⟩
-def rootT : Condition := ⟨.AbiEncoded, .Matches, [leafD, leafD], false, 0, 4, []⟩
+def leafD : Condition := ⟨.Dynamic, .EqualTo, [], 0, 0, []⟩
+def rootT : Condition := ⟨.AbiEncoded, .Matches, [leafD, leafD], 0, 4, []⟩
 
 theorem rootT_desc : Desc false rootT (.call exSel exArgs) :=
   .call rfl rfl (by simp [rootT]) (by simp [rootT, exArgs])
@@ -48,12 +48,19 @@ theorem annotate_rootT : annotate rootT = rootT := by
   simp [rootT, leafD, annotate_eq, isInlined_eq]
 
 set_option maxRecDepth 100000 in
-/-- Roles finds `a`'s tail at 132 and `b`'s at 68 (reversed). -/
-theorem children_rootT : children exData 4 rootT = some [132, 68] := by decide +kernel
+/-- The arguments are found in the calldata past the selector. -/
+theorem body_rootT : matchesBody exData ⟨0, exData.length⟩ rootT = some ⟨4, 192⟩ := by
+  decide +kernel
 
-theorem visit_b : Eval exData (annotate rootT) [1] leafD 68 := by
+set_option maxRecDepth 100000 in
+/-- Roles finds `a`'s tail at 132 and `b`'s at 68 (reversed). -/
+theorem children_rootT : children exData ⟨4, 192⟩ rootT = some [⟨132, 64⟩, ⟨68, 128⟩] := by
+  decide +kernel
+
+theorem visit_b : Eval exData (annotate rootT) [1] leafD ⟨68, 128⟩ 0 := by
   rw [annotate_rootT]
-  exact .visit (.matchesChild [132, 68] 1 (by decide) rfl (by exact children_rootT) rfl .here)
+  exact .visit (.matchesChild ⟨4, 192⟩ [⟨132, 64⟩, ⟨68, 128⟩] 1 (by decide) rfl body_rootT
+    children_rootT rfl .here)
 
 /-- `target_input` applies with every hypothesis discharged, in strict mode. -/
 example := target_input rootT_desc (.abi rfl) (.of_noZip rfl) ex_LPCall

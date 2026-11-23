@@ -4,7 +4,7 @@ import Bridge.TyLay
 # Normalization keeps every node's layout
 
 The contract reads a value through the tree's own metadata: where the fields
-of a `Matches` are follows from its children's `inlined` and `size`. With
+of a `Matches` are follows from its children's `inlineSize`. With
 pruning gone, normalization keeps these for every node of a well-typed tree
 (`inv`): a rewritten node is read where and as the original was.
 `norm_inv` proves it; `readWorld_normOk` turns it into the assumptions of
@@ -679,124 +679,99 @@ structure NEq (d m : Condition) : Prop where
   op : d.operator = m.operator
   cv : d.compValue = m.compValue
   lb : d.leadingBytes = m.leadingBytes
-  inl : d.inlined = m.inlined
-  sz : d.size = m.size
+  isz : d.inlineSize = m.inlineSize
   len : d.children.length = m.children.length
   ch : ∀ i (h1 : i < d.children.length) (h2 : i < m.children.length), LayEq d.children[i] m.children[i]
 
 theorem D_lay {a b : Cond} (h : LayR avatar a b) : LayEq (D avatar a) (D avatar b) := by
-  unfold LayEq; rw [D_inlined, D_inlined, D_size, D_size, h.1]
+  unfold LayEq; rw [D_inlineSize, D_inlineSize, h.1]
   by_cases hi : isInl b = true
   · rw [← h.1] at hi; simp [hi, h.2 hi]
   · simp at hi; simp [hi]
 
-theorem childrenE_congr (data : Calldata) (loc : Nat) {d m : Condition} (h : NEq d m) :
-    childrenE data loc d = childrenE data loc m := by
-  unfold childrenE allocPanics children
+theorem children_congr (data : Calldata) (body : Slice) {d m : Condition} (h : NEq d m) :
+    children data body d = children data body m := by
+  unfold children
   rw [h.enc]
   split
-  · rfl
-  · congr 1
-    split
-    · congr 1
-      apply childrenLoop_congr
-      intro j _ _
-      cases hd : d.children with
-      | nil =>
-        have : m.children = [] := List.eq_nil_of_length_eq_zero (by rw [← h.len, hd]; rfl)
-        rw [this]; exact LayEq.refl _
-      | cons a as =>
-        cases hm : m.children with
-        | nil => have := h.len; rw [hd, hm] at this; simp at this
-        | cons b bs =>
-          have := h.ch 0 (by rw [hd]; simp) (by rw [hm]; simp)
-          simp only [hd, hm, List.getElem_cons_zero] at this
-          exact this
-    · rw [h.len]
-      apply childrenLoop_congr
-      intro j _ hj
-      simp only [Nat.zero_add] at hj
-      have hl := h.len
-      rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega),
-        List.getElem?_eq_getElem hj]
-      simp only [Option.getD_some]
-      exact h.ch j (by omega) hj
+  · cases hd : d.children with
+    | nil =>
+      have : m.children = [] := List.eq_nil_of_length_eq_zero (by rw [← h.len, hd]; rfl)
+      rw [this]
+    | cons a as =>
+      cases hm : m.children with
+      | nil => have := h.len; rw [hd, hm] at this; simp at this
+      | cons b bs =>
+        have := h.ch 0 (by rw [hd]; simp) (by rw [hm]; simp)
+        simp only [hd, hm, List.getElem_cons_zero] at this
+        have he : a.inlineSize = b.inlineSize := this
+        simp only [he]
+  · rw [h.len]
+    apply childrenLoop_congr
+    intro j _ hj
+    simp only [Nat.zero_add] at hj
+    have hl := h.len
+    rw [List.getD_eq_getElem?_getD, List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega),
+      List.getElem?_eq_getElem hj]
+    simp only [Option.getD_some]
+    exact h.ch j (by omega) hj
 
-theorem NEq.withSize {d m : Condition} (h : NEq d m) (s : Nat) : NEq (d.withSize s) (m.withSize s) :=
-  ⟨h.enc, h.op, h.cv, h.lb, h.inl, rfl, h.len, h.ch⟩
-
-theorem TyEq.withSize {d m : Condition} (h : TyEq d m) (s : Nat) : TyEq (d.withSize s) (m.withSize s) := by
-  cases h with
-  | mk he hl hc => exact .mk he ⟨hl.1, rfl⟩ hc
-
-theorem nodeAt_neq {c c' : Cond} (h : NEq (D avatar c') (D avatar c)) :
-    ∀ v, NEq (nodeAt avatar c' v) (nodeAt avatar c v)
-  | .pos _ => h
-  | .el _ => h
-  | .win _ sz => h.withSize sz
-
-theorem nodeAt_ty {c c' : Cond} (h : TyEq (D avatar c') (D avatar c)) :
-    ∀ v, TyEq (nodeAt avatar c' v) (nodeAt avatar c v)
-  | .pos _ => h
-  | .el _ => h
-  | .win _ sz => h.withSize sz
+theorem matchesHead_congr (data : Calldata) (l : Slice) {d m : Condition} (h : NEq d m) :
+    matchesHead data l d = matchesHead data l m := by
+  unfold matchesHead
+  rw [h.enc, h.lb, h.cv]
 
 section
 variable (env : Env) (data : Calldata) (n : Nat)
 
-/-- `readExt`, from the operator, the encoding and the nodes the evaluator runs. -/
-def readExtN (op e : Nat) (nd : RV → Condition) (ss : List (RV → T)) (v : RV) : T :=
+/-- `readExt`, from the operator, the node the evaluator runs and the
+    `inlineSize` it is given. -/
+def readExtN (op : Nat) (d : Condition) (z : Nat) (ss : List (RV → T)) (v : RV) : T :=
   match op with
   | 4 => emptyT data
-  | 5 => marrT data e (nd v) v.loc ss
-  | 6 => iterT data false (nd v) v.loc ss
-  | 7 => iterT data true (nd v) v.loc ss
-  | 8 => tailT data (nd v) v.loc ss
-  | 10 => zipT data n false (nd v) (ss.headD fun _ => passT)
-  | 11 => zipT data n true (nd v) (ss.headD fun _ => passT)
-  | 13 => sliceT data (nd v) v.loc (ss.headD fun _ => passT)
-  | 14 => pluckT env data n (nd v) v.loc
-  | 15 | 16 | 17 | 18 | 19 | 20 => checkT fun _ => cmpOk env data (nd v) v.loc
-  | 21 => checkT fun _ =>
-    bitmaskStatus (bitmaskCheck data v.loc (nd v).compValue (nd v).inlined (nd v).size []) = sOk
-  | 22 => chargesT env.balance (customCharges env data (nd v) v.loc)
-  | 23 => checkT fun sl => env.ratio (nd v).compValue sl.values = sOk
-  | 28 => chargesT env.balance fun _ => allowanceCharge env data (nd v) v.loc
-  | 30 => chargesT env.balance fun _ => (charge env (nd v).compValue 1).map ([·])
+  | 5 => marrT data d v.loc ss
+  | 6 => iterT data false d v.loc ss
+  | 7 => iterT data true d v.loc ss
+  | 8 => tailT data d v.loc ss
+  | 10 => zipT data n false d (ss.headD fun _ => passT)
+  | 11 => zipT data n true d (ss.headD fun _ => passT)
+  | 13 => sliceT data d v.loc z (ss.headD fun _ => passT)
+  | 14 => pluckT env data n d v.loc z
+  | 15 | 16 | 17 | 18 | 19 | 20 => checkT fun _ => cmpOk env data d v.loc z
+  | 21 => checkT fun _ => bitmaskStatus (bitmask data v.loc z d.compValue []) = sOk
+  | 22 => chargesT env.balance (customCharges env data d v.loc z)
+  | 23 => checkT fun sl => env.ratio d.compValue sl.values = sOk
+  | 28 => chargesT env.balance fun _ => allowanceCharge env data d v.loc z
+  | 30 => chargesT env.balance fun _ => (charge env d.compValue 1).map ([·])
   | _ => failT
 
-theorem readExt_eq (c : Cond) :
-    readExt avatar env data n c = readExtN env data n c.op c.enc (nodeAt avatar c) := by
-  funext ss v; unfold readExt readExtN; rfl
+theorem readExt_eq (c : Cond) (ss : List (RV → T)) (v : RV) :
+    readExt avatar env data n c ss v =
+      readExtN env data n c.op (D avatar c) (szAt avatar c v) ss v := by
+  unfold readExt readExtN; rfl
 
-theorem arrLocs_congr {d m : Condition} (h : NEq d m) (l : Nat) : arrLocs data d l = arrLocs data m l := by
-  unfold arrLocs; rw [childrenE_congr data l h]
+theorem arrLocs_congr {d m : Condition} (h : NEq d m) : arrLocs data d = arrLocs data m := by
+  funext l; unfold arrLocs; rw [children_congr data l h]
 
-theorem readExtN_congr {op e : Nat} {nd nd' : RV → Condition} (hkw : op ≠ 10 ∧ op ≠ 11 ∧ op ≠ 14)
-    (hN : ∀ v, NEq (nd v) (nd' v)) (hT : descOp op = true → ∀ v, TyEq (nd v) (nd' v)) :
-    readExtN env data n op e nd = readExtN env data n op e nd' := by
-  funext ss v
-  have N := hN v
-  have T : descOp op = true → TyEq (nd v) (nd' v) := fun h => hT h v
+theorem readExtN_congr {op : Nat} {d m : Condition} (hkw : op ≠ 10 ∧ op ≠ 11 ∧ op ≠ 14)
+    (N : NEq d m) (hT : descOp op = true → TyEq d m) (z : Nat) (ss : List (RV → T)) (v : RV) :
+    readExtN env data n op d z ss v = readExtN env data n op m z ss v := by
   unfold readExtN
-  generalize nd v = d at N T
-  generalize nd' v = m at N T
   split
   · rfl
-  · unfold marrT; rw [N.cv, N.lb, arrLocs_congr data N]
+  · unfold marrT; rw [matchesHead_congr data _ N, arrLocs_congr data N]
   · unfold iterT; rw [arrLocs_congr data N]
   · unfold iterT; rw [arrLocs_congr data N]
   · unfold tailT; rw [arrLocs_congr data N]
   · exact absurd rfl hkw.1
   · exact absurd rfl hkw.2.1
-  · unfold sliceT; rw [N.cv, N.inl, N.sz]
+  · unfold sliceT; rw [N.cv]
   · exact absurd rfl hkw.2.2
   all_goals first
-    | (unfold cmpOk; rw [input_tyEq data (T rfl), N.op, N.cv])
-    | (rw [N.cv, N.inl, N.sz])
-    | (unfold customCharges; rw [N.cv, N.sz, size_tyEq data (T rfl)])
+    | (unfold cmpOk; rw [input_tyEq data (hT rfl), inputLength_tyEq data (hT rfl), N.op, N.cv])
+    | (unfold customCharges; rw [N.enc, operand_tyEq data (hT rfl), N.cv])
+    | (unfold allowanceCharge; rw [input_tyEq data (hT rfl), N.cv])
     | (rw [N.cv])
-    | (unfold allowanceCharge; rw [input_tyEq data (T rfl), N.cv])
     | rfl
 end
 
@@ -811,7 +786,7 @@ theorem D_neq {c c' : Cond} (he : c'.enc = c.enc) (hop : c'.op = c.op) (hcv : c'
   have hd := D_lay avatar hr
   refine ⟨⟨by rw [D_encoding, D_encoding, he], by rw [D_operator, D_operator, hop],
     by rw [D_compValue, D_compValue]; unfold cvOf; rw [hop, he, hcv, hr.1],
-    by rw [D_leadingBytes, D_leadingBytes]; unfold lbOf; rw [he, hcv], hd.1, hd.2,
+    by rw [D_leadingBytes, D_leadingBytes]; unfold lbOf; rw [he, hcv], hd,
     by rw [D_children, D_children, List.length_map, List.length_map, hl],
     fun i h1 h2 => ?_⟩, hr⟩
   simp only [D_children, List.getElem_map]
@@ -826,10 +801,16 @@ theorem matchLocs_congr (data : Calldata) (e : Nat) (cv : List Nat) {ch ch' : Li
   | el => rfl
   | pos l =>
     unfold matchLocs; dsimp only
-    rw [N.cv, N.lb, childrenE_congr data _ N, hl]
-  | win l sz =>
+    rw [matchesHead_congr data _ N]
+    cases matchesHead data (RV.pos l).loc (D avatar ⟨e, 5, cv, ch⟩) with
+    | inl _ => rfl
+    | inr body => simp only; rw [children_congr data body N, hl]
+  | win l =>
     unfold matchLocs; dsimp only
-    rw [N.cv, N.lb, childrenE_congr data _ N, hl]
+    rw [matchesHead_congr data _ N]
+    cases matchesHead data (RV.win l).loc (D avatar ⟨e, 5, cv, ch⟩) with
+    | inl _ => rfl
+    | inr body => simp only; rw [children_congr data body N, hl]
 
 theorem append_lay {a b : Cond} (hab : LayR avatar a b) (pre post : List Cond) :
     ∀ i (h1 : i < (pre ++ a :: post).length) (h2 : i < (pre ++ b :: post).length),
@@ -866,14 +847,20 @@ theorem readWorld_normOk (env : Env) (data : Calldata) (n : Nat) :
     have N := (D_neq avatar (c' := { c with ch := c.ch.map (normalize k) }) (c := c) rfl rfl rfl (by simp)
       fun i h1 h2 => by simp only [List.getElem_map]; exact hch _ (List.getElem_mem _)).1
     show readExt avatar env data n _ = readExt avatar env data n c
+    funext ss v
     rw [readExt_eq, readExt_eq]
-    apply readExtN_congr env data n
+    have hz : szAt avatar { c with ch := c.ch.map (normalize k) } v = szAt avatar c v := by
+      cases v with
+      | win _ => rfl
+      | pos _ => exact N.isz
+      | el _ => exact N.isz
+    rw [hz]
+    apply readExtN_congr env data n _ N
+    · intro hd
+      exact RTy.D avatar (td_map avatar k ((AllN.self _ hc).2.2.2.1 hd)).2
     · unfold keepsAsWritten at hkw
       simp only [Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hkw
       exact ⟨hkw.1.2, hkw.2, hkw.1.1⟩
-    · exact nodeAt_neq avatar N
-    · intro hd
-      exact nodeAt_ty avatar (RTy.D avatar (td_map avatar k ((AllN.self _ hc).2.2.2.1 hd)).2)
   hinge := fun e cv pre post hs hst _ x hx v => by
     have hm := matchLocs_congr avatar data e cv (ch := pre ++ orNode hs :: post) (ch' := pre ++ x :: post)
       (by simp) (append_lay avatar ((orNode_lay avatar hst x hx).2.symm) pre post) v

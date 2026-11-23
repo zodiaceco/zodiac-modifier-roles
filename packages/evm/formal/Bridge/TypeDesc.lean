@@ -4,8 +4,8 @@ import Bridge.AllN
 # Normalization keeps type descriptions
 
 The children of a check that reads its whole value (`EqualTo` on a tuple,
-`Pass`, ...) only describe the value's type: `AbiLocation.size` and
-`__input` read their encodings and sizes, and nothing below a word, `bytes`
+`Pass`, ...) only describe the value's type: `AbiLocation.sliceRegion` and
+`_read` read their encodings and sizes, and nothing below a word, `bytes`
 or nested calldata (`TyEq`). `TD` lists the descriptions the SDK check
 accepts there (`exactTy`). Normalization rewrites inside them (it sorts a
 nested call's `Or`, say), but keeps their type: `td_normalize`, with
@@ -18,7 +18,7 @@ open DecoderFaithfulness DecoderFaithfulness.Roles Normalize Evaluate
 mutual
   theorem TyEq.trans : ∀ {a b c : Condition}, TyEq a b → TyEq b c → TyEq a c
     | _, _, _, .mk he1 hl1 hc1, .mk he2 hl2 hc2 =>
-      .mk (he1.trans he2) ⟨hl1.1.trans hl2.1, hl1.2.trans hl2.2⟩ fun h1 h2 h3 =>
+      .mk (he1.trans he2) (Eq.trans hl1 hl2) fun h1 h2 h3 =>
         TyEqL.trans (hc1 h1 h2 h3)
           (hc2 (fun h => h1 (he1.trans h)) (fun h => h2 (he1.trans h)) (fun h => h3 (he1.trans h)))
   theorem TyEqL.trans : ∀ {as bs cs : List Condition}, TyEqL as bs → TyEqL bs cs → TyEqL as cs
@@ -43,7 +43,7 @@ section
 variable (avatar : Bytes)
 
 /-- Same type, on the SDK trees: what `D` makes of a node for
-    `AbiLocation.size` and `__input`. -/
+    `AbiLocation.sliceRegion` and `_read`. -/
 inductive RTy : Cond → Cond → Prop
   | mk {a b : Cond} : a.enc = b.enc → isInl a = isInl b →
       (isInl a = true → rawSz avatar a = rawSz avatar b) →
@@ -77,9 +77,9 @@ theorem tyEqL_map : ∀ (as bs : List Cond), as.length = bs.length →
 theorem RTy.D {a b : Cond} (h : RTy avatar a b) : TyEq (D avatar a) (D avatar b) := by
   induction h with
   | @mk a b he hi hs hlen _ ih =>
-    refine .mk (by rw [D_encoding, D_encoding, he]) ⟨?_, ?_⟩ ?_
-    · rw [D_inlined, D_inlined, ← hi]; by_cases h : isInl a = true <;> simp [h, hs]
-    · rw [D_size, D_size, ← hi]; by_cases h : isInl a = true <;> simp [h, hs]
+    refine .mk (by rw [D_encoding, D_encoding, he]) ?_ ?_
+    · unfold LayEq
+      rw [D_inlineSize, D_inlineSize, ← hi]; by_cases h : isInl a = true <;> simp [h, hs]
     · intro h1 h2 h3
       have e1 : a.enc ≠ 1 := fun h => h1 (by rw [D_encoding, h]; rfl)
       have e2 : a.enc ≠ 2 := fun h => h2 (by rw [D_encoding, h]; rfl)
@@ -198,7 +198,7 @@ end
 
 mutual
   theorem tyEq_self : ∀ d : Condition, TyEq d d
-    | ⟨_, _, cs, _, _, _, _⟩ => .mk rfl ⟨rfl, rfl⟩ fun _ _ _ => tyEqL_self cs
+    | ⟨_, _, cs, _, _, _⟩ => .mk rfl rfl fun _ _ _ => tyEqL_self cs
   theorem tyEqL_self : ∀ cs : List Condition, TyEqL cs cs
     | [] => .nil
     | c :: cs => .cons (tyEq_self c) (tyEqL_self cs)

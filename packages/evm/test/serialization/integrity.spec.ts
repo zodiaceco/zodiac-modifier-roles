@@ -848,6 +848,23 @@ describe("Integrity", () => {
         zipIn(X(zipOf(hex(0, 1), [pass(E.Array, S)]))),
         "UnsuitableChildTypeTree",
       );
+      // the reference check does not look at the operator of the tuple
+      it("rejects a Zip over a tuple compared as a whole", () =>
+        expectRejected(
+          zipIn(
+            zipOf(hex(0, 1), [X(node(E.Tuple, O.EqualTo, zeros(64), [S, S]))]),
+          ),
+          "UnsupportedOperator",
+          [],
+          { reference: false },
+        ));
+      it("rejects a Zip over a tuple passed as a whole", () =>
+        expectRejected(
+          zipIn(zipOf(hex(0, 1), [X(pass(E.Tuple, S, S))])),
+          "UnsupportedOperator",
+          [],
+          { reference: false },
+        ));
       rejects(
         "a Zip field that reads no calldata",
         zipIn(zipOf(hex(0, 1), [X(tuple(S, ether))])),

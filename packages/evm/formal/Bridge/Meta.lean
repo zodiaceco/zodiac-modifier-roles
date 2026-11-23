@@ -4,8 +4,8 @@ import Bridge.Base
 # Metadata of SDK trees, and what the evaluator reads of it
 
 `isInl c` and `rawSz c`: the packer's `isInlined` and `inlinedSize` of the tree,
-which give `D c`'s `inlined` and `size`. `size_tyEq`, `input_tyEq`:
-`AbiLocation.size` and `__input` read a node only through `TyEq`.
+which give `D c`'s `inlineSize`. `region_tyEq`, `input_tyEq`:
+`AbiLocation.sliceRegion` and `_read` read a node only through `TyEq`.
 -/
 
 namespace Bridge
@@ -18,7 +18,7 @@ variable (avatar : Bytes)
 
 theorem toRoles_eq (c : Cond) :
     toRoles avatar c =
-      ⟨encN c.enc, opN c.op, c.ch.map (toRoles avatar), false, 0, lbOf c, cvOf avatar c⟩ := by
+      ⟨encN c.enc, opN c.op, c.ch.map (toRoles avatar), 0, lbOf c, cvOf avatar c⟩ := by
   rcases c with ⟨e, o, cv, ch⟩
   rw [toRoles, toRolesL_eq]
 
@@ -56,19 +56,6 @@ theorem D_compValue (c : Cond) : (D avatar c).compValue = cvOf avatar c := by
 theorem D_leadingBytes (c : Cond) :
     (D avatar c).leadingBytes = if encN c.enc = .AbiEncoded then lbOf c else 0 := by
   unfold D; rw [annotate_leadingBytes, toRoles_eq]
-
-theorem Node.operator {c : Cond} {d : Condition} (h : Node avatar c d) : d.operator = opN c.op := by
-  rw [h]; exact D_operator avatar c
-theorem Node.encoding {c : Cond} {d : Condition} (h : Node avatar c d) :
-    d.encoding = (D avatar c).encoding := by rw [h]
-theorem Node.compValue {c : Cond} {d : Condition} (h : Node avatar c d) :
-    d.compValue = cvOf avatar c := by rw [h]; exact D_compValue avatar c
-theorem Node.children {c : Cond} {d : Condition} (h : Node avatar c d) :
-    d.children = c.ch.map (D avatar) := by rw [h]; exact D_children avatar c
-theorem Node.inlined {c : Cond} {d : Condition} (h : Node avatar c d) :
-    d.inlined = (D avatar c).inlined := by rw [h]
-theorem Node.refl (c : Cond) : Node avatar c (D avatar c) := by
-  unfold Node; cases D avatar c; rfl
 
 end
 
@@ -139,12 +126,9 @@ decreasing_by exact sizeOf_lt_of_mem hx
 /-- `inlinedSize` of the tree. -/
 def rawSz (c : Cond) : Nat := inlinedSize (toRoles avatar c)
 
-theorem D_inlined (c : Cond) :
-    (D avatar c).inlined = decide ((if isInl c then rawSz avatar c else 0) > 0) := by
-  unfold D rawSz; rw [annotate_inlined, isInlined_toRoles]
-
-theorem D_size (c : Cond) : (D avatar c).size = if isInl c then rawSz avatar c else 0 := by
-  unfold D rawSz; rw [annotate_size, isInlined_toRoles]
+theorem D_inlineSize (c : Cond) :
+    (D avatar c).inlineSize = if isInl c then rawSz avatar c else 0 := by
+  unfold D rawSz; rw [annotate_inlineSize, isInlined_toRoles]
 
 theorem encN_static (e : Nat) : encN e = .Static ↔ e = 1 := by
   unfold encN
@@ -173,31 +157,6 @@ theorem rawSz_eq (c : Cond) :
   by_cases h : c.enc = 1
   · rw [ite_pos' ((encN_static _).2 h), ite_pos' h]
   · rw [ite_neg' (fun h' => h ((encN_static _).1 h')), ite_neg' h]
-
-/-- `isInl c = (D c).inlined`: an inlined node has a positive size. -/
-def Sane (c : Cond) : Prop := isInl c = (D avatar c).inlined
-
-theorem Sane.pos {c : Cond} (h : Sane avatar c) (hi : isInl c = true) : 0 < rawSz avatar c := by
-  unfold Sane at h; rw [D_inlined, hi] at h; simp at h; omega
-
-theorem LayEq.of_sane {c : Cond} {m : Condition} (hs : Sane avatar c) (hl : LayEq (D avatar c) m) :
-    isInl c = m.inlined ∧ (isInl c = true → rawSz avatar c = m.size) := by
-  refine ⟨hs.trans hl.1, fun hi => ?_⟩
-  rw [← hl.2, D_size, ite_pos' hi]
-
-theorem LayEq.of_raw {c : Cond} {m : Condition} (h1 : isInl c = m.inlined)
-    (h2 : isInl c = true → rawSz avatar c = m.size) (hpos : m.inlined = true → 0 < m.size)
-    (hz : m.inlined = false → m.size = 0) :
-    LayEq (D avatar c) m ∧ Sane avatar c := by
-  unfold Sane LayEq
-  rw [D_inlined, D_size]
-  by_cases hi : isInl c = true
-  · have := h2 hi
-    have hp := hpos (h1 ▸ hi)
-    simp [hi, this, hp, ← h1]
-  · have hf : isInl c = false := by simpa using hi
-    have hm : m.inlined = false := h1 ▸ hf
-    simp [hf, hm, hz hm]
 
 /-! ## Non-structural subtrees -/
 
@@ -236,34 +195,33 @@ end
 
 /-! ## Decoding -/
 
-theorem childrenLoop_congr (data : Calldata) (loc : Nat) (f g : Nat → Condition) :
-    ∀ (n i h : Nat), (∀ j, i ≤ j → j < i + n → LayEq (f j) (g j)) →
-      childrenLoop data loc f n i h = childrenLoop data loc g n i h
+theorem childrenLoop_congr (data : Calldata) (body : Slice) (f g : Nat → Nat) :
+    ∀ (n i h : Nat), (∀ j, i ≤ j → j < i + n → f j = g j) →
+      childrenLoop data body f n i h = childrenLoop data body g n i h
   | 0, _, _, _ => rfl
   | n + 1, i, h, hfg => by
-    have ⟨hin, hsz⟩ := hfg i (Nat.le_refl _) (by omega)
-    simp only [childrenLoop, hin, hsz]
-    rw [childrenLoop_congr data loc f g n (i + 1) _ (fun j h1 h2 => hfg j (by omega) (by omega))]
+    simp only [childrenLoop, hfg i (Nat.le_refl _) (by omega)]
+    split
+    · rfl
+    · rw [childrenLoop_congr data body f g n (i + 1) _ (fun j h1 h2 => hfg j (by omega) (by omega))]
 
-theorem childrenLoop_prefix (data : Calldata) (loc : Nat) (f : Nat → Condition) :
-    ∀ (k K i h : Nat) (locs : List Nat), k ≤ K → childrenLoop data loc f K i h = some locs →
-      childrenLoop data loc f k i h = some (locs.take k)
+theorem childrenLoop_prefix (data : Calldata) (body : Slice) (f : Nat → Nat) :
+    ∀ (k K i h : Nat) (spans : List Slice), k ≤ K →
+      childrenLoop data body f K i h = some spans →
+      childrenLoop data body f k i h = some (spans.take k)
   | 0, _, _, _, _, _, _ => by simp [childrenLoop]
   | k + 1, 0, _, _, _, hk, _ => absurd hk (by omega)
-  | k + 1, K + 1, i, h, locs, hk, hK => by
+  | k + 1, K + 1, i, h, spans, hk, hK => by
     simp only [childrenLoop] at hK ⊢
-    cases hfi : (f i).inlined <;> simp only [hfi, Bool.false_eq_true, ite_false, ite_true] at hK ⊢ <;>
-    · split at hK
-      · exact absurd hK (by simp)
-      · rename_i hr
-        rw [if_neg hr]
-        obtain ⟨rest, hrest, rfl⟩ := Option.map_eq_some_iff.1 hK
-        rw [childrenLoop_prefix data loc f k K _ _ rest (by omega) hrest]
-        simp
+    split at hK
+    · exact absurd hK (by simp)
+    · obtain ⟨rest, hrest, rfl⟩ := Option.map_eq_some_iff.1 hK
+      rw [childrenLoop_prefix data body f k K _ _ rest (by omega) hrest]
+      simp
 
-/-! ## `size` and `__input` read the type -/
+/-! ## `sliceRegion` and `_read` read the type -/
 
-theorem LayEq.refl (d : Condition) : LayEq d d := ⟨rfl, rfl⟩
+theorem LayEq.refl (d : Condition) : LayEq d d := rfl
 
 theorem TyEq.layEq {d m : Condition} (h : TyEq d m) : LayEq d m := by cases h; assumption
 theorem TyEq.encoding {d m : Condition} (h : TyEq d m) : d.encoding = m.encoding := by
@@ -279,60 +237,101 @@ theorem TyEqL.headD {as bs : List Condition} (h : TyEqL as bs) :
   | nil => exact Or.inr ⟨rfl, rfl⟩
   | cons h1 _ => exact Or.inl h1
 
-theorem sizeArrayLoop_congr (data : Calldata) (loc : Nat) (a b : Condition) (fa fb : Nat → Nat)
-    (hab : LayEq a b) (hf : ∀ l, fa l = fb l) :
-    ∀ n h, sizeArrayLoop data loc a fa n h = sizeArrayLoop data loc b fb n h
-  | 0, _ => rfl
-  | n + 1, h => by
-    simp only [sizeArrayLoop, hab.1, hab.2, hf]
-    rw [sizeArrayLoop_congr data loc a b fa fb hab hf n]
-    rw [sizeArrayLoop_congr data loc a b fa fb hab hf n]
+theorem regionArrayLoop_congr (data : Calldata) (body : Slice) (fa fb : Slice → Option Nat)
+    (hf : ∀ l, fa l = fb l) :
+    ∀ n h cur, regionArrayLoop data body fa n h cur = regionArrayLoop data body fb n h cur
+  | 0, _, _ => rfl
+  | n + 1, h, cur => by
+    simp only [regionArrayLoop, hf]
+    split
+    · rfl
+    · split
+      · rfl
+      · exact regionArrayLoop_congr data body fa fb hf n _ _
+
+theorem headSize_tyEq : ∀ {as bs : List Condition}, TyEqL as bs → headSize as = headSize bs
+  | _, _, .nil => rfl
+  | _, _, .cons h1 h2 => by
+    simp only [headSize]
+    rw [h1.layEq, headSize_tyEq h2]
 
 mutual
-  theorem size_tyEq (data : Calldata) : ∀ {d m : Condition}, TyEq d m → ∀ l, size data l d = size data l m
-    | ⟨de, dop, dcs, di, ds, dlb, dcv⟩, ⟨me, mop, mcs, mi, ms, mlb, mcv⟩, .mk he hl hcs, l => by
-      simp only at he hl hcs
-      subst he
-      rw [size_eq, size_eq]
+  theorem region_tyEq (data : Calldata) : ∀ {d m : Condition}, TyEq d m →
+      ∀ l, region data l d = region data l m
+    | ⟨de, dop, dcs, ds, dlb, dcv⟩, ⟨me, mop, mcs, ms, mlb, mcv⟩, .mk he hl hcs, l => by
+      simp only [LayEq] at he hl hcs
+      subst he; subst hl
+      rw [region_eq, region_eq]
       simp only
       split
       · rfl
       split
       · rfl
-      rename_i hS
-      split
-      · rfl
       rename_i hD
+      by_cases hS : de = .Static
+      · subst hS; rfl
       have hcs := hcs hS (fun h => hD (.inl h)) (fun h => hD (.inr h))
       split
-      · exact sizeNone_tyEq data hcs l
+      · exact regionNone_tyEq data hcs l
       split
       · cases hcs with
         | nil => rfl
         | cons h0 hrest =>
+          have hl0 : _ = _ := h0.layEq
           simp only
-          rw [sizeArrayLoop_congr data (l + 32) _ _ _ _ h0.layEq (fun l' => size_tyEq data h0 l')]
-      · exact sizeTuple_tyEq data hcs l 0
+          rw [hl0]
+          split
+          · rfl
+          · rw [regionArrayLoop_congr data _ _ _ (fun l' => region_tyEq data h0 l')]
+      split
+      · rw [headSize_tyEq hcs]
+        split
+        · rfl
+        · exact regionTuple_tyEq data hcs l 0 _
+      · rfl
 
-  theorem sizeNone_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
-      ∀ l, sizeNone data l as = sizeNone data l bs
+  theorem regionNone_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
+      ∀ l, regionNone data l as = regionNone data l bs
     | _, _, .nil, _ => rfl
     | _, _, .cons h1 h2, l => by
-      simp only [sizeNone]
-      rw [size_tyEq data h1 l, sizeNone_tyEq data h2 l]
+      simp only [regionNone]
+      rw [region_tyEq data h1 l, regionNone_tyEq data h2 l]
 
-  theorem sizeTuple_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
-      ∀ l h, sizeTuple data l as h = sizeTuple data l bs h
-    | _, _, .nil, _, _ => rfl
-    | _, _, .cons h1 h2, l, h => by
-      simp only [sizeTuple, h1.layEq.1, h1.layEq.2]
-      rw [size_tyEq data h1, sizeTuple_tyEq data h2, sizeTuple_tyEq data h2]
+  theorem regionTuple_tyEq (data : Calldata) : ∀ {as bs : List Condition}, TyEqL as bs →
+      ∀ l h cur, regionTuple data l as h cur = regionTuple data l bs h cur
+    | _, _, .nil, _, _, _ => rfl
+    | _, _, .cons h1 h2, l, h, cur => by
+      have hl : _ = _ := h1.layEq
+      simp only [regionTuple, hl]
+      split
+      · exact regionTuple_tyEq data h2 l _ _
+      · split
+        · rfl
+        · rw [region_tyEq data h1]
+          split
+          · rfl
+          · exact regionTuple_tyEq data h2 l _ _
 end
 
-theorem input_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Nat) :
-    input data l d = input data l m := by
+theorem operand_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Slice) (z : Nat) :
+    operand data l z d = operand data l z m := by
+  unfold operand sliceRegion
+  rw [region_tyEq data h l]
+
+theorem input_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Slice) (z : Nat) :
+    input data l z d = input data l z m := by
   unfold input
-  rw [h.encoding, h.layEq.2, size_tyEq data h l]
+  rw [h.encoding, operand_tyEq data h l z]
+
+theorem inputLength_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Slice)
+    (z : Nat) : inputLength data l z d = inputLength data l z m := by
+  unfold inputLength
+  rw [h.encoding, operand_tyEq data h l z]
+
+theorem pluckSpan_tyEq (data : Calldata) {d m : Condition} (h : TyEq d m) (l : Slice)
+    (z : Nat) : pluckSpan data l z d = pluckSpan data l z m := by
+  unfold pluckSpan
+  rw [h.encoding, operand_tyEq data h l z]
 
 /-! ## Consumptions -/
 

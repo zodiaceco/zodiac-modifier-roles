@@ -174,8 +174,7 @@ def expRec (avatar : Bytes) (fs : List Flat) (c : Nat) : URec :=
   { encoding := if encCode f.paramType = 6 then 0 else encCode f.paramType
     operator := if opCode f.operator = 15 then 16 else opCode f.operator
     children := if k > 0 then List.range' (1 + cnt fs c) k else []
-    inlined := decide (sz > 0)
-    size := sz
+    inlineSize := sz
     leadingBytes := if f.paramType = .AbiEncoded then wordVal (cv.take 2) else 0
     compValue :=
       if f.operator = .EqualToAvatar then avatar

@@ -61,17 +61,22 @@ struct Transaction {
     Operation operation;
 }
 
+/// @dev Packed calldata slice (`offset` in low 128 bits, `length` in high 128).
+///      Construct via `AbiLocation.toSpan`; `Span.wrap(0)` is an empty slice.
+type Span is uint256;
+
 struct Context {
     address to;
     uint256 value;
+    Span data;
     Operation operation;
     bytes32[] pluckedValues;
-    uint256[] pluckedLocations;
+    Span[] pluckedLocations;
 }
 
 struct Result {
     Status status;
     uint256 violatedNodeIndex;
-    uint256 payloadLocation;
+    uint256 calldataOffset;
     Consumption[] consumptions;
 }

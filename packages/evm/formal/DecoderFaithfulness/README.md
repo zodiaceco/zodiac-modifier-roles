@@ -29,21 +29,23 @@ Setting (`Main.lean`):
   the 4-byte selector), the **spec encoding** of the arguments, then arbitrary
   trailing bytes.
 - The evaluator runs on `annotate root`, the tree as pack + unpack leave it
-  (with the `inlined` / `size` / `leadingBytes` metadata the packer computes).
+  (with the `inlineSize` / `leadingBytes` metadata the packer computes).
   That pack + unpack really produce `annotate` of the input tree is proven
   separately, on the byte buffer:
   [`ConditionPacking`](../ConditionPacking/README.md).
 
-`Eval` is what `evaluate` reaches from the root: `Visit` (one step per branch of
-`evaluate` that recurses), plus the Zip jump: field `f` of a reached Zip is
-evaluated at element `i` of the array decoded at the location of a reached Pluck
-node with the referenced slot. Every node `d` reached at location `l` is one of
-four cases (`Reached`):
+Roles reads calldata through `bytes calldata` slices that it only narrows; in
+the model a slice is its offset in the calldata and its length. `Eval` is what
+`evaluate` reaches from the root: `Visit` (one step per branch of `_evaluate`
+that recurses), plus the Zip jump: field `f` of a reached Zip is evaluated at
+element `i` of the array decoded in the span a reached Pluck node with the
+referenced slot stored. Every node `d` reached in a slice `l` is one of four
+cases (`Reached`):
 
 1. **Component:** `d` describes the component `u` reached by the same index path
    (`Matches` child _i_ = tuple field / array element / call argument _i_), and
-   sits exactly at `u`'s spec encoding.
-2. **Window:** `d` is below a `Slice` and sits exactly at a window of `u`'s
+   its slice starts with exactly `u`'s spec encoding, and has room for it.
+2. **Window:** `d` is below a `Slice` and its slice is exactly a window of `u`'s
    content (the static word, or the bytes without length word and padding).
    The theorems say it is *some* contiguous window (`IsWindow`), not which
    one; that it is `[shift, shift + size)` is tested (the Slice end-to-end
@@ -66,12 +68,17 @@ tree the theorems give case 4 for nodes inside a branch that does not fit.
 | Theorem                  | Statement                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `decoder_locations`      | The four cases above, for every visited node.                                                                                                                                                                                                                                                                                                                                                                   |
-| `decoder_input`          | For every visited `EqualTo`, `GreaterThan`, `LessThan`, signed comparison, `WithinAllowance` or `Pluck` node, `__input` returns exactly the spec encoding of the component (the word itself when it is 32 bytes, otherwise exactly the bytes that get keccak-hashed). Below a `Slice` it returns a window of the component's content, right-aligned. For `EtherValue` it returns the transaction value. |
+| `decoder_input`          | For every visited `EqualTo`, `GreaterThan`, `LessThan`, signed comparison, `WithinAllowance` or `Pluck` node, `_read` returns exactly the spec encoding of the component (the word itself when it is 32 bytes, otherwise exactly the bytes that get keccak-hashed), and the operand's length is that encoding's. Below a `Slice` it returns a window of the component's content, right-aligned, with the window's length. For `EtherValue` it returns the transaction value. |
 | `decoder_custom_operand` | `Custom` conditions receive exactly the spec position and length (of the component, or of the window).                                                                                                                                                                                                                                                                                                          |
-| `decoder_children`       | No false rejections: every visited container decodes its children without `CalldataOverflow`: an array one location per element, a tuple or call one per child of the node (a `Matches` may leave out trailing fields), never more than the value has components.                                                                                                                                              |
-| `decoder_slice`          | No false rejections for `Slice`: the length `_slice` checks `shift + size` against is exactly the length of the bytes the spec window comes from. So a slice is rejected exactly when the spec window does not exist.                                                                                                                                                                                           |
-| `decoder_bitmask`        | For every visited `Bitmask` node (on a `Static` or `Dynamic` parameter), `BitmaskChecker.check` returns exactly `bitmaskSpec` of the component's content (or, below a `Slice`, of the window): `BitmaskOverflow` if `shift + n` exceeds it, else `Ok` iff `bytes[shift + j] & mask[j] = expected[j]` for all `j < n`. Holds for any memory after the compValue.                                                 |
-| `decoder_zip`            | No false rejections for Zip: the array at a referenced Pluck's location decodes into exactly one location per spec element. So `ZippedArrayLengthMismatch` happens exactly when the spec arrays differ in length; with `decoder_locations`, each field is evaluated where the spec put its element.                                                                                                             |
+| `decoder_children`       | No false rejections: every visited container decodes its children without `CalldataOverflow`: an array one slice per element, a tuple or call one per child of the node (a `Matches` may leave out trailing fields), never more than the value has components.                                                                                                                                                 |
+| `decoder_slice`          | No false rejections for `Slice`: the payload `_slice` checks `shift + size` against is exactly the bytes the spec window comes from. So a slice is rejected exactly when the spec window does not exist.                                                                                                                                                                                                       |
+| `decoder_bitmask`        | For every visited `Bitmask` node (on a `Static` or `Dynamic` parameter), `_bitmask` (`BitmaskChecker.check` on the payload) returns exactly `bitmaskSpec` of the component's content (or, below a `Slice`, of the window): `BitmaskOverflow` if `shift + n` exceeds it, else `Ok` iff `bytes[shift + j] & mask[j] = expected[j]` for all `j < n`. Holds for any memory after the compValue.                     |
+| `decoder_zip`            | No false rejections for Zip: the span a referenced Pluck stores is exactly the spec encoding of its array, and decodes into one slice per spec element. So `ZippedArrayLengthMismatch` happens exactly when the spec arrays differ in length; with `decoder_locations`, each field is evaluated where the spec put its element.                                                                                 |
+
+These cover the checks `AbiLocation` adds on the way: a child fits its block,
+an offset points past its own slot, an array's count fits its slice, and a
+value read as a whole (`sliceRegion`) is in one canonical piece with zero
+padding. On the spec encoding none of them fails.
 
 Covered ABI shapes: static words (`uintN`, `intN`, `address`, `bool`, `bytesN`),
 `bytes`/`string`, tuples (including fixed-size arrays `T[k]`, which the ABI
@@ -90,7 +97,7 @@ the Plucks it reads to be visited before it.
 | File                              | Contents                                                                                                                                                                                                                                                                                             | Depends on        |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `Spec.lean`                       | ABI encoding, transcribed from the [formal spec section](https://docs.soliditylang.org/en/latest/abi-spec.html#formal-specification-of-the-encoding) of the Solidity docs: values in, bytes out.                                                                                                     | `Bytes.lean` only |
-| `Roles.lean`                      | Line-by-line transcription of `AbiLocation.sol`, the pack/unpack metadata, `ConditionEvaluator.__input`, which node `evaluate` visits at which location (`Visit`, including `_slice`; `Eval` adds the Zip jump), and `BitmaskChecker.check`.                                                         | `Bytes.lean` only |
+| `Roles.lean`                      | Line-by-line transcription of `AbiLocation.sol`, the pack/unpack metadata, `ConditionEvaluator._read`, which node `_evaluate` visits in which slice (`Visit`, including `_slice`; `Eval` adds the Zip jump), and `BitmaskChecker.check`.                                                             | `Bytes.lean` only |
 | `Desc.lean`                       | `Desc s c u`: condition tree `c` describes value `u` (the structural rules Integrity enforces, a `Matches` the first fields); `ZipOK` (the Zip type rules).                                                                                                                                          | both              |
 | `Basic`, `Meta`, `Decode`, `Main` | Proofs.                                                                                                                                                                                                                                                                                              |                   |
 | `Bitmask.lean`                    | `bitmaskSpec` (what a Bitmask checks, byte by byte) and `decoder_bitmask`.                                                                                                                                                                                                                           |                   |
@@ -105,25 +112,25 @@ nested calldata's `leadingBytes`) makes the theorems false and the build fail.
 ## Checking the transcription against the Solidity
 
 `Roles.lean` is a hand translation, so it is tested against the deployed code by
-`test/formal/lean-model.spec.ts`:
+`formal/test/lean-model.spec.ts`:
 
 - **Decoder, differential.** Random function signatures and matching condition
   trees (including `And`/`Or` wrappers, variant `Or` with a second
   nested-calldata interpretation, `Slice` nodes and non-structural siblings),
   with calldata encoded by ethers' `AbiCoder` (half of it then corrupted). The
   test walks the trees the way `evaluate` does and compares every
-  `AbiLocation.children` and `AbiLocation.size` result from `MockLocator`
-  (Integrity → pack → unpack → AbiLocation, on-chain) with the Lean model's, via
-  the `roles-model` executable (`../Diff.lean`).
+  `AbiLocation.children` and `AbiLocation.sliceRegion` result from
+  `MockLocator` (Integrity → pack → unpack → AbiLocation, on-chain, on the
+  slice of the calldata from a location on) with the Lean model's, via the
+  `roles-model` executable (`../Diff.lean`).
 - **Slice, end to end.** For random signatures, a `Slice` + `EqualTo` on one
   argument is run through the real `ConditionEvaluator.evaluate`
   (`MockEvaluator`). The result must be exactly what the spec window predicts:
   `Ok` for the right value, `ParameterNotAllowed` for a different one,
   `CalldataOverflow` when the window lies outside the value.
 - **Bitmask, differential.** `bitmaskCheck` against `BitmaskChecker.check`
-  (`MockBitmask`) on random calldata, locations, length words and compValues
-  (including multi-chunk masks, out-of-range shifts and odd lengths). Every
-  status must agree.
+  (`MockBitmask`) on random operands and compValues (including multi-chunk
+  masks, out-of-range shifts and odd lengths). Every status must agree.
 - **Bitmask, end to end.** A `Bitmask` (sometimes below a `Slice`) on one
   argument of a random signature, through `evaluate`. The status must be
   `bitmaskSpec` of the spec bytes.
@@ -135,13 +142,13 @@ nested calldata's `leadingBytes`) makes the theorems false and the build fail.
 
 ```
 cd packages/evm/formal && lake build roles-model
-cd .. && LEAN_DIFF_CASES=60 LEAN_DIFF_SEED=1 npx hardhat test mocha test/formal/lean-model.spec.ts
+cd .. && LEAN_DIFF_CASES=60 LEAN_DIFF_SEED=1 npx hardhat test mocha formal/test/lean-model.spec.ts
 ```
 
-Calls that revert on-chain (out of gas or array-allocation panics, mostly on
-corrupted data) are skipped and counted. Reverting denies the transaction, so it
-is the safe direction. The `Visit` relation and `__input` are otherwise reviewed
-by hand; `MockLocator` does not expose them.
+Calls that revert on-chain (trees Integrity rejects) are skipped and counted.
+The `Visit` relation and `_read` are otherwise reviewed by hand, and exercised
+through the evaluator model (`GAP_EVAL`, see the [overview](../README.md#the-evaluator-model));
+`MockLocator` does not expose them.
 
 ## Assumptions (trusted base)
 
@@ -160,15 +167,18 @@ by hand; `MockLocator` does not expose them.
   (sized as `bytes`) and a `Slice` (a word or `bytes`), whose own children do
   not change their size. Integrity rejects a tuple `Matches` or an
   `And`/`Or` there. Also assumed: inlined sizes ≤ 8191 bytes
-  (Integrity rejects larger), and the flat-BFS-array-to-tree view of `inlined` / `size`.
-- **Pluck slots** (in `Eval`): when a Zip reads slot `k`, it holds a location
-  where the Pluck node with slot `k` was evaluated. Integrity makes the slot's
+  (Integrity rejects larger), and the flat-BFS-array-to-tree view of `inlineSize`.
+- **Pluck slots** (in `Eval`): when a Zip reads slot `k`, it holds the span
+  the Pluck node with slot `k` stored. Integrity makes the slot's
   Pluck unique (`_plucks`) and makes sure it ran before
   on that path (`_slots`); `_pluck` is the only writer.
   Checked by the Zip end-to-end test.
 - **Bitmask**: `bytes32` values are modeled as byte lists, so `&` is bytewise.
   Bytes read past the end of `data` are modeled as zeros (on-chain they are the
   rest of `msg.data`); the proof shows only in-bounds bytes are compared.
+- **Slices**: a `bytes calldata` slice is modeled as its offset in the calldata
+  and its length, and a word is read at an offset of the calldata. Outside
+  `Bitmask`, the contract reads a word only inside a slice it has checked.
 - **Arithmetic**: modeled on unbounded naturals. Solidity's checked `uint256`
   arithmetic reverts on overflow, and a revert denies. `calldata.length < 2^255`
   is a hypothesis.
@@ -183,7 +193,7 @@ by hand; `MockLocator` does not expose them.
   now requires that the branch is a node of the tree, that it does not
   describe the bytes value, that the walk from the root reaches it exactly
   where that value sits, and that `d` is reached from it. `Reached` takes the
-  top node's location for this (`root 0` in the theorems).
+  top node's slice for this (the whole calldata in the theorems).
 
 ## Not covered
 
@@ -192,7 +202,7 @@ by hand; `MockLocator` does not expose them.
   dirty padding, trailing junk inside values). That depends on the target's
   decoder, so it is a separate property. This includes what happens inside an
   interpretation that does not fit the data (case 4).
-- Comparison semantics (`__compare`, keccak), `WithinRatio`, `Custom` checkers.
+- Comparison semantics (`_compare`, keccak), `WithinRatio`, `Custom` checkers.
   Only the operand is proven, not what is done with it.
 - **A Zip as a positional child of a container,** as in
   `Matches[Pluck a, Pluck b, ZipEvery(...)]` for `f(uint256[] a, uint256[] b)`.

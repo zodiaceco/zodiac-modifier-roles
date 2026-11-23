@@ -40,16 +40,16 @@ end
 
 def metaB (ch : Condition) (t : TN) : Bool :=
   match inlineSize t with
-  | some isz => ch.inlined == decide (0 < isz) && ch.size == isz
+  | some isz => ch.inlineSize == isz
   | none => false
 
 theorem metaB_sound {ch : Condition} {t : TN} (h : metaB ch t = true) : MetaFit ch t := by
   unfold metaB at h
   split at h
   · rename_i isz hisz
-    simp only [Bool.and_eq_true, beq_iff_eq] at h
-    refine ⟨isz, hisz, ?_, h.2⟩
-    rw [h.1]; simp
+    simp only [beq_iff_eq] at h
+    unfold MetaFit
+    rw [hisz, h]
   · simp at h
 
 def isZipB (op : Operator) : Bool := op == .ZipSome || op == .ZipEvery
@@ -73,7 +73,7 @@ def fitWB (Γ : Plucks) : Nat → Condition → Bool
   | f + 1, c =>
     noDescendB c.operator ||
     (c.operator == .Pluck && (Γ (cvByte c.compValue 0)).isNone) ||
-    (c.operator == .Slice && c.inlined && decide (0 < sliceSize c.compValue) &&
+    (c.operator == .Slice && decide (0 < c.inlineSize) && decide (0 < sliceSize c.compValue) &&
       decide (sliceSize c.compValue ≤ 32) && fitWB Γ f (c.children.headD default))
 
 theorem fitWB_sound (Γ : Plucks) : ∀ f c, fitWB Γ f c = true → FitW Γ c
@@ -118,8 +118,8 @@ def fitB (Γ : Plucks) : Nat → Condition → TN → Bool
         | some l => metaB ((zipFields c).getD k default) l &&
             fitB Γ f ((zipFields c).getD k default) l
     else if c.operator == .Slice then
-      ((t.encoding == .Static && c.inlined && c.size == 32) ||
-        (t.encoding == .Dynamic && !c.inlined)) &&
+      ((t.encoding == .Static && c.inlineSize == 32) ||
+        (t.encoding == .Dynamic && c.inlineSize == 0)) &&
         decide (0 < sliceSize c.compValue) && decide (sliceSize c.compValue ≤ 32) &&
         fitWB Γ f (c.children.headD default)
     else if c.operator == .And || c.operator == .Or then
@@ -187,8 +187,8 @@ theorem fitB_sound (Γ : Plucks) : ∀ (f : Nat) (c : Condition) (t : TN), fitB 
         Bool.not_eq_true'] at h
       obtain ⟨⟨⟨hk, h1⟩, h2⟩, hw⟩ := h
       refine .slice (by simpa using hs) ?_ h1 h2 (fitWB_sound Γ f _ hw)
-      rcases hk with ⟨⟨he, hi⟩, hsz⟩ | ⟨he, hi⟩
-      · exact Or.inl ⟨he, hi, hsz⟩
+      rcases hk with ⟨he, hsz⟩ | ⟨he, hi⟩
+      · exact Or.inl ⟨he, hsz⟩
       · exact Or.inr ⟨he, hi⟩
     rw [if_neg hs] at h
     by_cases hl : (c.operator == .And || c.operator == .Or) = true
@@ -261,7 +261,8 @@ theorem noPZB_sound : ∀ f c, noPZB f c = true → NoPZ c
 def rootB (Γ : Plucks) (root : Condition) (td tm : TN) : Bool :=
   root.operator == .Matches && root.encoding == .AbiEncoded && root.leadingBytes == 4 &&
     root.children.length == 3 &&
-    !(root.children.getD 0 default).inlined && !(root.children.getD 1 default).inlined &&
+    (root.children.getD 0 default).inlineSize == 0 &&
+    (root.children.getD 1 default).inlineSize == 0 &&
     msgB Γ (root.children.getD 0 default) td && msgB Γ (root.children.getD 1 default) tm &&
     noPZB 64 (root.children.getD 2 default)
 

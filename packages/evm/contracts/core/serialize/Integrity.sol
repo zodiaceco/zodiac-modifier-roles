@@ -394,6 +394,12 @@ library Integrity {
         }
         _requireCompValue(fields.childCount == compValue.length, index);
 
+        // Only the fields are evaluated: an operator on the Tuple itself
+        // would never run
+        if (fields.operator != Operator.Matches) {
+            revert IRolesError.UnsupportedOperator(node.childStart);
+        }
+
         // Distinct slots, each written by an Array Pluck
         uint256 seen;
         for (uint256 i; i < compValue.length; ++i) {

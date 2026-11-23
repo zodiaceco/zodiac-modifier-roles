@@ -16,7 +16,7 @@ open DecoderFaithfulness DecoderFaithfulness.Roles
 /-! ## Basics -/
 
 theorem sizeOf_child {ch c : Condition} (h : ch ∈ c.children) : sizeOf ch < sizeOf c := by
-  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩
+  rcases c with ⟨e, op, cs, sz, lb, cv⟩
   have := List.sizeOf_lt_of_mem h
   simp only [Condition.mk.sizeOf_spec]
   simp only at this
@@ -25,7 +25,7 @@ theorem sizeOf_child {ch c : Condition} (h : ch ∈ c.children) : sizeOf ch < si
 theorem classify_eq (s : Bool) (c : Condition) :
     classify s c = (classifyAll s c.children).bind
       (classifyNode s c.encoding c.operator c.children c.leadingBytes c.compValue) := by
-  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩
+  rcases c with ⟨e, op, cs, sz, lb, cv⟩
   simp [classify]
 
 theorem classifyAll_get (s : Bool) :
@@ -1179,7 +1179,7 @@ theorem rootOk_eq (s : Bool) (c : Condition) :
     rootOk s c = (c.encoding == .AbiEncoded ||
       (c.encoding == .None && (c.operator == .And || c.operator == .Or) &&
         rootOkAll s c.children)) := by
-  rcases c with ⟨e, op, cs, i, sz, lb, cv⟩
+  rcases c with ⟨e, op, cs, sz, lb, cv⟩
   simp [rootOk]
 
 theorem rootOkAll_mem (s : Bool) : ∀ {cs : List Condition}, rootOkAll s cs = true →
@@ -1250,7 +1250,7 @@ theorem checkCondition_call_all {s : Bool} {root : Condition} {lb : Nat} {ts : L
 
 /-- **End to end**, for the comparison operands (`decoder_input`): on a tree
     the check accepts, for every well-typed calldata, every visited node that
-    reads `__input` reads the spec encoding of its value (or a window of it,
+    calls `_read` reads the spec encoding of its value (or a window of it,
     below a `Slice`, or the ether value), unless it sits in a variant branch
     that does not fit (`InStray`, only with `s = true`). Root type `.call`
     only: a variant root (an `Or` of `AbiEncoded` branches, type `.dynamic`
@@ -1260,15 +1260,18 @@ theorem checked_input {s : Bool} {root : Condition} {lb : Nat} {ts : List Ty} {o
     (hpre : pre.length = lb) (hargs : if o then HasTPre s args ts else HasTAll s args ts)
     (suffix : Bytes)
     (hlen : (calldata pre args suffix).length < 2 ^ 255)
-    {p : List Nat} {d : Condition} {l : Nat}
-    (hv : Eval (calldata pre args suffix) (annotate root) p d l)
+    {p : List Nat} {d : Condition} {l : Slice} {y : Nat}
+    (hv : Eval (calldata pre args suffix) (annotate root) p d l y)
     (hop : readsInput d.operator = true) :
     (∃ u, (Val.call pre args).sub p = some u ∧
-      input (calldata pre args suffix) l d = expectInput (enc u)) ∨
+      input (calldata pre args suffix) l y d = expectInput (enc u) ∧
+      inputLength (calldata pre args suffix) l y d = (enc u).length ∧ 32 ≤ (enc u).length) ∨
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
-      input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
-    input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) root 0 (.call pre args) p d l := by
+      input (calldata pre args suffix) l y d = .word (wordVal bs) ∧
+      inputLength (calldata pre args suffix) l y d = bs.length) ∨
+    input (calldata pre args suffix) l y d = .etherValue ∨
+    InStray s (calldata pre args suffix) root (rootSlice pre args suffix) (.call pre args)
+      p d l y := by
   obtain ⟨hr, hz, hd⟩ := checkCondition_call h hpre hargs
   exact decoder_input root pre args suffix hd hr hz hlen hv hop
 

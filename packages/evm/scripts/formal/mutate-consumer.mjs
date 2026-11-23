@@ -88,7 +88,7 @@ const TESTS = [
     name: "evaluate-diff",
     cwd: evm,
     cmd: [
-      "test/formal/integrity-gaps.spec.ts",
+      "formal/test/integrity-gaps.spec.ts",
       "--grep",
       "Lean model of evaluate",
     ],

@@ -8,10 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const LEAN_BIN = path.resolve(
-  here,
-  "../../formal/.lake/build/bin/roles-model",
-);
+export const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
 const abi = AbiCoder.defaultAbiCoder();
 
 function mulberry32(seed: number) {

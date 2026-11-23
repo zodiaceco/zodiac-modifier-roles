@@ -33,17 +33,17 @@ const TARGETS = {
       "normalize/pushDownOr.ts",
       "conditionId.ts",
     ],
-    test: ["test/formal/sdk-normalize.spec.ts"],
+    test: ["formal/test/sdk-normalize.spec.ts"],
     env: { SDK_NORMALIZE_CASES: "6000" },
   },
   check: {
     files: ["checkStored.ts"],
-    test: ["test/formal/sdk-check.spec.ts", "--grep", "agrees on"],
+    test: ["formal/test/sdk-check.spec.ts", "--grep", "agrees on"],
     env: { SDK_CHECK_CASES: "1500" },
   },
   pack: {
     files: ["packConditions.ts"],
-    test: ["test/formal/sdk-check.spec.ts", "--grep", "byte for byte"],
+    test: ["formal/test/sdk-check.spec.ts", "--grep", "byte for byte"],
     env: { SDK_CHECK_CASES: "1500" },
   },
 };

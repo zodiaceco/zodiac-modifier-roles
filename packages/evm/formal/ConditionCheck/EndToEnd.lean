@@ -13,7 +13,7 @@ with a `...Packed` setter (no Integrity on-chain):
    `annotate (rawTree fs 0)`;
 3. `checked_input` (`checkCondition_sound` + `decoder_input`): on every
    well-typed calldata, every node `evaluate` reaches in that tree that reads
-   `__input` reads the spec encoding of its value (or a window of it below a
+   `_read` reads the spec encoding of its value (or a window of it below a
    `Slice`, the ether value, or the node is inside a variant branch that does
    not fit, `InStray`).
 
@@ -34,15 +34,18 @@ theorem stored_input {s : Bool} {fs : List ConditionPacking.Flat} (hP : Conditio
     {pre : Bytes} {args : List Val} (hpre : pre.length = lb)
     (hargs : if o then HasTPre s args ts else HasTAll s args ts)
     (suffix : Bytes) (hlen : (calldata pre args suffix).length < 2 ^ 255)
-    {p : List Nat} {d : Condition} {l : Nat}
-    (hv : Eval (calldata pre args suffix) tree p d l)
+    {p : List Nat} {d : Condition} {l : Slice} {y : Nat}
+    (hv : Eval (calldata pre args suffix) tree p d l y)
     (hop : readsInput d.operator = true) :
     (∃ u, (Val.call pre args).sub p = some u ∧
-      input (calldata pre args suffix) l d = expectInput (enc u)) ∨
+      input (calldata pre args suffix) l y d = expectInput (enc u) ∧
+      inputLength (calldata pre args suffix) l y d = (enc u).length ∧ 32 ≤ (enc u).length) ∨
     (∃ u bs, (Val.call pre args).sub p = some u ∧ IsWindow bs (content u) ∧
-      input (calldata pre args suffix) l d = .word (wordVal bs)) ∨
-    input (calldata pre args suffix) l d = .etherValue ∨
-    InStray s (calldata pre args suffix) (ConditionPacking.rawTree avatar fs 0) 0 (.call pre args) p d l := by
+      input (calldata pre args suffix) l y d = .word (wordVal bs) ∧
+      inputLength (calldata pre args suffix) l y d = bs.length) ∨
+    input (calldata pre args suffix) l y d = .etherValue ∨
+    InStray s (calldata pre args suffix) (ConditionPacking.rawTree avatar fs 0)
+      (rootSlice pre args suffix) (.call pre args) p d l y := by
   rw [ConditionPacking.pack_roundtrip avatar junk junk' fs hP] at hu
   simp only [Option.some.injEq, Prod.mk.injEq] at hu
   obtain ⟨rfl, -⟩ := hu
