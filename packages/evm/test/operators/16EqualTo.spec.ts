@@ -20,8 +20,10 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam, setupArrayParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
+const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - EqualTo", () => {
   after(async () => {
@@ -4364,7 +4366,7 @@ describe("Operator - EqualTo", () => {
 
   describe.skip("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
         await expect(
@@ -4376,12 +4378,12 @@ describe("Operator - EqualTo", () => {
               compValue: abiCoder.encode(["uint256"], [100]),
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -4392,7 +4394,7 @@ describe("Operator - EqualTo", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
   });
 });

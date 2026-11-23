@@ -25,7 +25,7 @@ import { Encoding as E, Operator as O } from "../utils.js";
 
 const connection = await network.create();
 const { ethers } = connection;
-const { deployRolesMod } = createSetup(connection);
+const { deployEvaluator, deployRolesMod } = createSetup(connection);
 
 // ---------------------------------------------------------------------------
 // Trees
@@ -154,6 +154,7 @@ const ACCEPTED = "accepted";
 const NO_INDEX = ["UnsuitableRootNode", "NotBFS"];
 
 let roles: Awaited<ReturnType<typeof deployRolesMod>>;
+let evaluator: Awaited<ReturnType<typeof deployEvaluator>>;
 
 /** What the contract does with `flat`: `accepted`, or `Error(args)`. */
 async function outcome(flat: Flat[]): Promise<string> {
@@ -164,7 +165,7 @@ async function outcome(flat: Flat[]): Promise<string> {
     const data = e.data ?? e.info?.error?.data ?? e.error?.data;
     const parsed =
       typeof data === "string" && data.length >= 10
-        ? roles.interface.parseError(data)
+        ? evaluator.interface.parseError(data)
         : null;
     return parsed
       ? `${parsed.name}(${parsed.args.join(", ")})`
@@ -261,7 +262,13 @@ function compValues(
 describe("Integrity", () => {
   before(async () => {
     const [owner] = await ethers.getSigners();
-    roles = await deployRolesMod(owner.address, owner.address, owner.address);
+    evaluator = await deployEvaluator();
+    roles = await deployRolesMod(
+      owner.address,
+      owner.address,
+      owner.address,
+      await evaluator.getAddress(),
+    );
   });
 
   after(async () => {

@@ -18,8 +18,9 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - LessThan", () => {
   after(async () => {
@@ -233,7 +234,7 @@ describe("Operator - LessThan", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.None,
@@ -251,12 +252,12 @@ describe("Operator - LessThan", () => {
               compValue: abiCoder.encode(["uint256"], [100]),
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -267,11 +268,11 @@ describe("Operator - LessThan", () => {
             compValue: "0x0000", // Not 32 bytes
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts LeafNodeCannotHaveChildren when LessThan has children", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -288,7 +289,7 @@ describe("Operator - LessThan", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
   });
 });

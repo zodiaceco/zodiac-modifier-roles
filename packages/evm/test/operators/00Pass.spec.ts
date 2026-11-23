@@ -13,7 +13,8 @@ import {
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Pass", () => {
   after(async () => {
@@ -46,7 +47,7 @@ describe("Operator - Pass", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -57,7 +58,7 @@ describe("Operator - Pass", () => {
             compValue: "0x".padEnd(66, "0"),
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
   });
 });

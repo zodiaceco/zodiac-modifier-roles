@@ -18,7 +18,8 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupArrayParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - ArraySome", () => {
   after(async () => {
@@ -297,7 +298,7 @@ describe("Operator - ArraySome", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.AbiEncoded,
@@ -316,12 +317,12 @@ describe("Operator - ArraySome", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -338,12 +339,12 @@ describe("Operator - ArraySome", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     describe("children", () => {
       it("reverts UnsuitableChildCount when ArraySome has zero children", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -354,11 +355,11 @@ describe("Operator - ArraySome", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       });
 
       it("reverts UnsuitableChildCount when ArraySome has more than one child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         // ArraySome requires exactly 1 structural child
         await expect(
@@ -382,7 +383,7 @@ describe("Operator - ArraySome", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
 
         // ArraySome requires exactly 1 structural child
         await expect(
@@ -406,11 +407,11 @@ describe("Operator - ArraySome", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       });
 
       it("reverts UnsuitableChildCount when ArraySome has non-structural child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
 
@@ -464,7 +465,7 @@ describe("Operator - ArraySome", () => {
               compValue: allowanceKey,
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       });
     });
   });

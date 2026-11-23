@@ -7,10 +7,9 @@ import { packConditions } from "../../../sdk/src/main/condition/packConditions.j
 import { Encoding as E, Operator as O } from "../utils.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { ethers } = connection;
 const abi = AbiCoder.defaultAbiCoder();
 
-const AVATAR_SLOT = 1;
 const AVATAR = "0x00000000000000000000000000000000000a7a7a";
 
 // ---------------------------------------------------------------------------
@@ -155,11 +154,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
   before(async () => {
     const Mock = await ethers.getContractFactory("MockPackerUnpacker");
     mock = await Mock.deploy();
-    await networkHelpers.setStorageAt(
-      await mock.getAddress(),
-      AVATAR_SLOT,
-      zeroPadValue(AVATAR, 32),
-    );
+    await mock.setAvatar(AVATAR);
   });
 
   after(async () => {
@@ -364,20 +359,11 @@ describe("ConditionPacker / ConditionUnpacker", () => {
 
       // the buffer does not hold the avatar: a new one shows without repacking
       const other = "0x00000000000000000000000000000000000b0b0b";
-      const address = await mock.getAddress();
-      await networkHelpers.setStorageAt(
-        address,
-        AVATAR_SLOT,
-        zeroPadValue(other, 32),
-      );
+      await mock.setAvatar(other);
       expect((await unpack(packed)).nodes[1].compValue).to.equal(
         zeroPadValue(other, 32),
       );
-      await networkHelpers.setStorageAt(
-        address,
-        AVATAR_SLOT,
-        zeroPadValue(AVATAR, 32),
-      );
+      await mock.setAvatar(AVATAR);
     });
   });
 

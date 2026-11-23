@@ -16,7 +16,7 @@ describe("Operator - Pluck", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // Note: Array is now allowed for Pluck (used by Zip operators)
 
@@ -36,14 +36,14 @@ describe("Operator - Pluck", () => {
             },
           ]),
         )
-          .to.be.revertedWithCustomError(roles, "UnsuitableParameterType")
+          .to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType")
           .withArgs(0);
       }
     });
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is not 1 byte", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -54,11 +54,11 @@ describe("Operator - Pluck", () => {
               compValue: "0x0000", // 2 bytes instead of 1
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when index is 255 (reserved)", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -69,12 +69,12 @@ describe("Operator - Pluck", () => {
               compValue: "0xff", // index 255 is reserved
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     it("reverts LeafNodeCannotHaveChildren when Pluck has children", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -91,11 +91,11 @@ describe("Operator - Pluck", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
 
     it("reverts UnsuitableChildCount when Pluck(Array) has a non-structural child", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // The evaluator reads children[0] as the array element template, so a
       // child that reads no calldata must be rejected.
@@ -127,7 +127,7 @@ describe("Operator - Pluck", () => {
           },
         ]),
       )
-        .to.be.revertedWithCustomError(roles, "UnsuitableChildCount")
+        .to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount")
         .withArgs(1);
     });
   });

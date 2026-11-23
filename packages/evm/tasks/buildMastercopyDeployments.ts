@@ -26,22 +26,10 @@ export async function buildMastercopyDeployments(
   hre: HardhatRuntimeEnvironment,
   connection: NetworkConnection,
 ): Promise<MastercopyDeployment[]> {
-  const conditionStorer = await readArtifact({
+  const evaluator = await readArtifact({
     hre,
-    contractName: "ConditionStorer",
-    contract: "contracts/core/serialize/ConditionStorer.sol:ConditionStorer",
-  });
-  const withinRatioChecker = await readArtifact({
-    hre,
-    contractName: "WithinRatioChecker",
-    contract:
-      "contracts/core/evaluate/WithinRatioChecker.sol:WithinRatioChecker",
-  });
-  const customConditionChecker = await readArtifact({
-    hre,
-    contractName: "CustomConditionChecker",
-    contract:
-      "contracts/core/evaluate/CustomConditionChecker.sol:CustomConditionChecker",
+    contractName: "Evaluator",
+    contract: "contracts/evaluator/Evaluator.sol:Evaluator",
   });
   const avatarIsOwnerOfERC721 = await readArtifact({
     hre,
@@ -62,29 +50,19 @@ export async function buildMastercopyDeployments(
       "contracts/periphery/signing/SignTypedMessageLib.sol:SignTypedMessageLib",
   });
 
-  const libraries = {
-    ConditionStorer: conditionStorer.address,
-    WithinRatioChecker: withinRatioChecker.address,
-    CustomConditionChecker: customConditionChecker.address,
-  };
-  const rolesFactory = await connection.ethers.getContractFactory("Roles", {
-    libraries,
-  });
+  const rolesFactory = await connection.ethers.getContractFactory("Roles");
   const roles = buildDeployment({
     contractName: "Roles",
     contract: "contracts/Roles.sol:Roles",
     bytecode: rolesFactory.bytecode,
     constructorArgs: {
-      types: ["address", "address", "address"],
-      values: [AddressOne, AddressOne, AddressOne],
+      types: ["address", "address", "address", "address"],
+      values: [AddressOne, AddressOne, AddressOne, AddressOne],
     },
-    libraries,
   });
 
   return [
-    conditionStorer,
-    withinRatioChecker,
-    customConditionChecker,
+    evaluator,
     avatarIsOwnerOfERC721,
     multiSendUnwrapper,
     signTypedMessageLib,
