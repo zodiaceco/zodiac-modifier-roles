@@ -4,10 +4,9 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "./evaluate/ConditionEvaluator.sol";
-import "./serialize/ConditionLoader.sol";
 import "./Storage.sol";
 
+import "../IEvaluator.sol";
 import "../periphery/interfaces/ITransactionUnwrapper.sol";
 
 /**
@@ -22,8 +21,6 @@ import "../periphery/interfaces/ITransactionUnwrapper.sol";
  *         3. Payload Validation: Evaluates condition trees against tx data
  *
  *         Transaction bundles are supported via adapter-based unwrapping.
- *
- * @author  gnosisguild
  */
 abstract contract Authorization is RolesStorage {
     function _authorize(
@@ -168,25 +165,23 @@ abstract contract Authorization is RolesStorage {
         }
 
         /*
-         * Load and Evaluate Condition tree
+         * Delegate condition loading & evaluation to the stateless Evaluator
          */
-        (Condition memory condition, uint256 maxPluckCount) = ConditionLoader
-            .load(scopeConfig);
+        address _evaluator = evaluator;
+        if (_evaluator.code.length == 0) {
+            revert EvaluatorNotAContract(_evaluator);
+        }
 
-        Result memory result = ConditionEvaluator.evaluate(
-            condition,
-            consumptions,
-            Context(
-                transaction.to,
-                transaction.value,
-                AbiLocation.toSpan(data),
-                transaction.operation,
-                new bytes32[](maxPluckCount),
-                new Span[](maxPluckCount)
-            )
+        Result memory result = IEvaluator(_evaluator).evaluate(
+            scopeConfig,
+            transaction.to,
+            transaction.value,
+            data,
+            transaction.operation,
+            consumptions
         );
 
-        if (result.status != Status.Ok) {
+        if (result.status != 0) {
             revert ConditionViolation(
                 result.status,
                 result.violatedNodeIndex,

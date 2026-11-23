@@ -30,8 +30,9 @@ import type { Roles } from "../../typechain-types/index.js";
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
-const { setupTestContract, setupOneParam, setupTwoParams } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
 
 describe("Operator - WithinAllowance", async () => {
   after(async () => {
@@ -2214,7 +2215,7 @@ describe("Operator - WithinAllowance", async () => {
   describe("integrity", () => {
     describe("encoding", () => {
       it("reverts UnsuitableParameterType for invalid encodings", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
 
@@ -2234,7 +2235,7 @@ describe("Operator - WithinAllowance", async () => {
                 compValue: allowanceKey,
               },
             ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+          ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
         }
       });
 
@@ -2272,7 +2273,7 @@ describe("Operator - WithinAllowance", async () => {
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is not 32, 34, or 54 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -2283,7 +2284,7 @@ describe("Operator - WithinAllowance", async () => {
               compValue: "0x" + "ab".repeat(31), // 31 bytes
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("accepts compValue longer than 54 bytes (with adapter params)", async () => {
@@ -2320,7 +2321,7 @@ describe("Operator - WithinAllowance", async () => {
       });
 
       it("reverts UnsuitableCompValue when compValue is 33 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -2331,11 +2332,11 @@ describe("Operator - WithinAllowance", async () => {
               compValue: "0x" + "ab".repeat(33), // 33 bytes
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts AllowanceDecimalsExceedMax when targetDecimals > 27", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
         // 34-byte compValue: allowanceKey(32) + targetDecimals(1) + sourceDecimals(1)
@@ -2353,11 +2354,14 @@ describe("Operator - WithinAllowance", async () => {
               compValue,
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax");
+        ).to.be.revertedWithCustomError(
+          evaluator,
+          "AllowanceDecimalsExceedMax",
+        );
       });
 
       it("reverts AllowanceDecimalsExceedMax when sourceDecimals > 27", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
         // 34-byte compValue: allowanceKey(32) + targetDecimals(1) + sourceDecimals(1)
@@ -2375,7 +2379,10 @@ describe("Operator - WithinAllowance", async () => {
               compValue,
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax");
+        ).to.be.revertedWithCustomError(
+          evaluator,
+          "AllowanceDecimalsExceedMax",
+        );
       });
 
       it("accepts decimals at boundary (27)", async () => {
@@ -2407,7 +2414,7 @@ describe("Operator - WithinAllowance", async () => {
     });
 
     it("reverts LeafNodeCannotHaveChildren when WithinAllowance has children", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       const allowanceKey = hexlify(randomBytes(32));
 
@@ -2426,7 +2433,7 @@ describe("Operator - WithinAllowance", async () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
   });
 });

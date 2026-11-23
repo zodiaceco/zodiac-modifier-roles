@@ -54,7 +54,6 @@ describe("AllowanceTracking", () => {
       avatarAddress,
       avatarAddress,
     );
-    await roles.enableModule(member.address);
 
     const TestContract = await ethers.getContractFactory("TestContract");
     const testContract = await TestContract.deploy();

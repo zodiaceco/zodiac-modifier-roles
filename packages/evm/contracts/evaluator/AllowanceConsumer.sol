@@ -4,13 +4,13 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {ALLOWANCES_SLOT} from "../core/StorageSlots.sol";
-import {Allowance, Consumption} from "../types/Allowance.sol";
-import {Status} from "../types/Authorization.sol";
+import {Consumption, IRolesCore} from "../IEvaluator.sol";
+import {Status} from "./types/EvaluatorTypes.sol";
 
 /**
  * @title AllowanceConsumer
- * @notice Loads allowances from storage and tracks their consumption.
+ * @notice Reads accrued allowance balances from Roles Core and tracks their
+ *         consumption during stateless condition evaluation.
  *
  * @dev Owns the running consumption list threaded through permission
  *      evaluation. An entry tracks one allowance key: the balance accrued
@@ -30,6 +30,7 @@ import {Status} from "../types/Authorization.sol";
 library AllowanceConsumer {
     /**
      * @notice Consumes `amount` from an allowance in the running list.
+     * @param core Roles Core contract exposing `accruedAllowance`
      * @param consumptions Running consumption list (not mutated)
      * @param allowanceKey The allowance to consume from
      * @param amount Amount to consume, denominated in balance units
@@ -37,11 +38,13 @@ library AllowanceConsumer {
      * @return next Updated list when status is Ok, the input list otherwise
      */
     function consume(
+        address core,
         Consumption[] memory consumptions,
         bytes32 allowanceKey,
         uint256 amount
     ) internal view returns (Status status, Consumption[] memory next) {
         (Consumption memory entry, uint256 index) = _findOrAccrue(
+            core,
             consumptions,
             allowanceKey
         );
@@ -56,44 +59,8 @@ library AllowanceConsumer {
     }
 
     /**
-     * @notice Loads an allowance from storage and calculates its accrued
-     *         balance at `blockTimestamp`.
-     */
-    function accrue(
-        bytes32 allowanceKey,
-        uint64 blockTimestamp
-    ) internal view returns (uint128 balance, uint64 timestamp) {
-        Allowance memory a = _load(allowanceKey);
-
-        // No refill configured.
-        if (a.period == 0) return (a.balance, a.timestamp);
-
-        // Nothing accrues when the configured timestamp is current or in the future.
-        // This also makes the elapsed-time subtraction below safe.
-        if (blockTimestamp <= a.timestamp) return (a.balance, a.timestamp);
-
-        // Calculate full periods elapsed.
-        uint64 elapsedIntervals = (blockTimestamp - a.timestamp) / a.period;
-        if (elapsedIntervals == 0) return (a.balance, a.timestamp);
-
-        // Timestamp always advances, even when balance is at cap
-        timestamp = a.timestamp + elapsedIntervals * a.period;
-
-        // Already at cap, or initial balance was set above maxRefill
-        if (a.balance >= a.maxRefill) return (a.balance, timestamp);
-
-        // Add refill for each elapsed period, capping at maxRefill.
-        uint256 accruedBalance = uint256(a.balance) +
-            uint256(a.refill) *
-            elapsedIntervals;
-        balance = accruedBalance < a.maxRefill
-            ? uint128(accruedBalance)
-            : a.maxRefill;
-    }
-
-    /**
-     * @dev Finds the entry tracking `allowanceKey`, accruing it from storage
-     *      when the key is not tracked yet.
+     * @dev Finds the entry tracking `allowanceKey`, reading its accrued balance
+     *      from Core when the key is not tracked yet.
      *
      *      Returns a newly allocated Consumption entry, never a reference
      *      into the list: entries are pointer-shared across list copies, so
@@ -103,6 +70,7 @@ library AllowanceConsumer {
      * @return index Position of the entry; equals consumptions.length when new
      */
     function _findOrAccrue(
+        address core,
         Consumption[] memory consumptions,
         bytes32 allowanceKey
     ) private view returns (Consumption memory entry, uint256 index) {
@@ -123,46 +91,10 @@ library AllowanceConsumer {
             );
         }
 
-        (uint128 balance, uint64 timestamp) = accrue(
-            allowanceKey,
-            uint64(block.timestamp)
+        (uint128 balance, uint64 timestamp) = IRolesCore(core).accruedAllowance(
+            allowanceKey
         );
         return (Consumption(allowanceKey, balance, 0, timestamp), index);
-    }
-
-    /**
-     *
-     * Storage Layout (2 words, 64 bytes, 512 bits):
-     * ┌────────────────────────────────┬────────────────────────────────┐
-     * │           maxRefill            │             refill             │
-     * │            128 bits            │            128 bits            │
-     * ├────────────────┬───────────────┴───────────────┬────────────────┤
-     * │   timestamp    │            balance            │     period     │
-     * │    64 bits     │           128 bits            │    64 bits     │
-     * └────────────────┴───────────────────────────────┴────────────────┘
-     *
-     */
-    function _load(
-        bytes32 allowanceKey
-    ) private view returns (Allowance memory) {
-        uint256 word1;
-        uint256 word2;
-        assembly {
-            mstore(0x00, allowanceKey)
-            mstore(0x20, ALLOWANCES_SLOT)
-            let slot := keccak256(0x00, 0x40)
-            word1 := sload(slot)
-            word2 := sload(add(slot, 1))
-        }
-
-        return
-            Allowance({
-                refill: uint128(word1),
-                maxRefill: uint128(word1 >> 128),
-                period: uint64(word2),
-                balance: uint128(word2 >> 64),
-                timestamp: uint64(word2 >> 192)
-            });
     }
 
     /**

@@ -32,8 +32,9 @@ function replaceBytes(data: string, byteOffset: number, replacement: string) {
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Slice", () => {
   after(async () => {
@@ -520,7 +521,7 @@ describe("Operator - Slice", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [Encoding.Tuple, Encoding.Array]) {
         await expect(
@@ -532,13 +533,13 @@ describe("Operator - Slice", () => {
               compValue: encodeCompValue(0, 4),
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is not 3 bytes", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -549,11 +550,11 @@ describe("Operator - Slice", () => {
               compValue: "0x0000", // 2 bytes instead of 3
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when size is 0", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -564,11 +565,11 @@ describe("Operator - Slice", () => {
               compValue: encodeCompValue(0, 0), // size=0 not allowed
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when size is greater than 32", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -579,13 +580,13 @@ describe("Operator - Slice", () => {
               compValue: encodeCompValue(0, 33), // size=33 exceeds max
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     describe("children", () => {
       it("reverts UnsuitableChildCount when Slice has more than one child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -608,11 +609,11 @@ describe("Operator - Slice", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       });
 
       it("reverts SliceChildNotStatic when Slice child is not Static", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         // All non-Static encodings should be rejected
         for (const encoding of [
@@ -637,7 +638,7 @@ describe("Operator - Slice", () => {
                 compValue: "0x",
               },
             ]),
-          ).to.be.revertedWithCustomError(roles, "SliceChildNotStatic");
+          ).to.be.revertedWithCustomError(evaluator, "SliceChildNotStatic");
         }
       });
     });

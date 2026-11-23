@@ -324,6 +324,26 @@ describe("onlyOwner", () => {
         ).to.be.revertedWithCustomError(roles, "OwnableUnauthorizedAccount");
       });
     });
+
+    describe("setEvaluator", () => {
+      it("succeeds when called by owner", async () => {
+        const { roles, owner } = await loadFixture(setup);
+        const newEvaluator = "0x0000000000000000000000000000000000000001";
+
+        await expect(
+          roles.connect(owner).setEvaluator(newEvaluator),
+        ).to.not.be.revert(ethers);
+      });
+
+      it("reverts 'OwnableUnauthorizedAccount' when called by non-owner", async () => {
+        const { roles, nonOwner } = await loadFixture(setup);
+        const newEvaluator = "0x0000000000000000000000000000000000000001";
+
+        await expect(
+          roles.connect(nonOwner).setEvaluator(newEvaluator),
+        ).to.be.revertedWithCustomError(roles, "OwnableUnauthorizedAccount");
+      });
+    });
   });
 
   describe("Module functions (inherited from Modifier)", () => {

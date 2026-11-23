@@ -4,7 +4,7 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {Status} from "../../types/Types.sol";
+import {Status} from "../types/EvaluatorTypes.sol";
 
 /**
  * @title BitmaskChecker

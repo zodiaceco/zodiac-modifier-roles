@@ -4,8 +4,8 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../common/PriceLoader.sol";
-import "../../types/Types.sol";
+import "../PriceLoader.sol";
+import {Status} from "../types/EvaluatorTypes.sol";
 
 /**
  * @title WithinRatioChecker
@@ -32,7 +32,7 @@ library WithinRatioChecker {
      * └───────────────────┴───────────────────┴───────────────────┴───────────────────┴────────────┴────────────┘
      *
      * Optionally followed by a ref adapter blob, then a rel adapter blob.
-     
+     *
      * Adapter blob structure:
      * ┌──────────┬─────────────┬──────────────────────┐
      * │ blobLen  │   adapter   │       params         │
@@ -66,9 +66,9 @@ library WithinRatioChecker {
      * @return Status Ok if within bounds, error status otherwise
      */
     function check(
-        bytes calldata compValue,
-        bytes32[] calldata pluckedValues
-    ) external view returns (Status) {
+        bytes memory compValue,
+        bytes32[] memory pluckedValues
+    ) internal view returns (Status) {
         CompValue memory config = _unpack(compValue);
         (
             Status status,
@@ -124,7 +124,7 @@ library WithinRatioChecker {
      */
     function _convert(
         CompValue memory config,
-        bytes32[] calldata pluckedValues
+        bytes32[] memory pluckedValues
     )
         private
         view
@@ -172,7 +172,7 @@ library WithinRatioChecker {
     }
 
     function _unpack(
-        bytes calldata compValue
+        bytes memory compValue
     ) private pure returns (CompValue memory config) {
         bytes32 packed = bytes32(compValue);
 

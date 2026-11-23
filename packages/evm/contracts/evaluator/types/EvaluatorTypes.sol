@@ -4,6 +4,19 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
+import {Operation} from "@gnosis-guild/zodiac-core/contracts/core/Operation.sol";
+
+enum Encoding {
+    None,
+    Static,
+    Dynamic,
+    Tuple,
+    Array,
+    AbiEncoded,
+    /* EtherValue is a nonstructural, and an alias for None */
+    EtherValue
+}
+
 enum Operator {
     // 00:    EMPTY EXPRESSION (default, always passes)
     //          paramType: Static / Dynamic / Tuple / Array / EtherValue
@@ -70,4 +83,77 @@ enum Operator {
     /* 29: */ _Placeholder29,
     /* 30: */ CallWithinAllowance, // paramType: None
     /* 31: */ _Placeholder31
+}
+
+enum Status {
+    Ok,
+    /// Or condition not met
+    OrViolation,
+    /// Parameter value is not equal to allowed
+    ParameterNotAllowed,
+    /// Parameter value less than allowed
+    ParameterLessThanAllowed,
+    /// Parameter value greater than maximum allowed by role
+    ParameterGreaterThanAllowed,
+    /// Parameter value does not match
+    ParameterNotAMatch,
+    /// Array elements do not meet allowed criteria for every element
+    NotEveryArrayElementPasses,
+    /// Array elements do not meet allowed criteria for at least one element
+    NoArrayElementPasses,
+    /// Bitmask exceeded value length
+    BitmaskOverflow,
+    /// Bitmask not an allowed value
+    BitmaskNotAllowed,
+    CustomConditionViolation,
+    CustomConditionNotAContract,
+    CustomConditionReverted,
+    CustomConditionInvalidResult,
+    PricingAdapterNotAContract,
+    PricingAdapterReverted,
+    PricingAdapterInvalidResult,
+    PricingAdapterZeroPrice,
+    AllowanceExceeded,
+    /// No longer emitted: full-precision comparison reports AllowanceExceeded
+    /// instead. Kept to preserve status codes.
+    AllowanceValueOverflow,
+    CalldataOverflow,
+    RatioBelowMin,
+    RatioAboveMax,
+    /// Calldata is not empty when it should be
+    CalldataNotEmpty,
+    /// Leading bytes do not match expected value
+    LeadingBytesNotAMatch,
+    /// Zipped arrays have different lengths
+    ZippedArrayLengthMismatch,
+    /// No zipped element pair passes
+    NoZippedElementPasses,
+    /// Not every zipped element pair passes
+    NotEveryZippedElementPasses
+}
+
+struct Condition {
+    /// @dev BFS index from unpacking - identifies this node in the flattened tree
+    uint256 index;
+    Encoding encoding;
+    Operator operator;
+    bytes compValue;
+    Condition[] children;
+    /* meta fields */
+    uint256 inlineSize;
+    uint256 leadingBytes;
+}
+
+/// @dev Packed calldata slice (`offset` in low 128 bits, `length` in high 128).
+///      Construct via `AbiLocation.toSpan`; `Span.wrap(0)` is an empty slice.
+type Span is uint256;
+
+struct Context {
+    address core;
+    address to;
+    uint256 value;
+    Span data;
+    Operation operation;
+    bytes32[] pluckedValues;
+    Span[] pluckedLocations;
 }

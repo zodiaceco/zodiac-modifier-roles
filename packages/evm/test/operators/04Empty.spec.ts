@@ -126,7 +126,7 @@ describe("Operator - Empty", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.Static,
@@ -151,12 +151,12 @@ describe("Operator - Empty", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -173,11 +173,11 @@ describe("Operator - Empty", () => {
             compValue: "0x01",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts LeafNodeCannotHaveChildren when Empty has children", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget([
@@ -200,7 +200,7 @@ describe("Operator - Empty", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
   });
 });

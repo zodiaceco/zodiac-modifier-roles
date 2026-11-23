@@ -19,8 +19,9 @@ const defaultAbiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupDynamicParam, setupOneParamSigned } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupDynamicParam = setupFn("function fn(bytes)");
+const setupOneParamSigned = setupFn("function fn(int256)");
 
 describe("Operator - SignedIntLessThan", () => {
   after(async () => {
@@ -405,7 +406,7 @@ describe("Operator - SignedIntLessThan", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.None,
@@ -423,12 +424,12 @@ describe("Operator - SignedIntLessThan", () => {
               compValue: defaultAbiCoder.encode(["int256"], [100]),
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -439,11 +440,11 @@ describe("Operator - SignedIntLessThan", () => {
             compValue: "0x0000", // Not 32 bytes
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts LeafNodeCannotHaveChildren when SignedIntLessThan has children", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -460,7 +461,7 @@ describe("Operator - SignedIntLessThan", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
   });
 });

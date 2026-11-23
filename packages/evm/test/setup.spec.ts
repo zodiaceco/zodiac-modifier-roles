@@ -13,7 +13,7 @@ import { createSetup } from "./setup.js";
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
-const { deployRolesMod } = createSetup(connection);
+const { deployEvaluator, deployRolesMod } = createSetup(connection);
 
 const maxUint64 = 2n ** 64n - 1n;
 const maxUint128 = 2n ** 128n - 1n;
@@ -51,10 +51,12 @@ describe("Setup", () => {
     const avatar = await Avatar.deploy();
     const avatarAddress = await avatar.getAddress();
 
+    const evaluator = await deployEvaluator();
     const roles = await deployRolesMod(
       owner.address,
       avatarAddress,
       avatarAddress,
+      await evaluator.getAddress(),
     );
 
     const TestContract = await ethers.getContractFactory("TestContract");
@@ -65,6 +67,7 @@ describe("Setup", () => {
 
     return {
       roles: roles.connect(owner),
+      evaluator,
       owner,
       member,
       testContract,
@@ -413,7 +416,7 @@ describe("Setup", () => {
     });
 
     it("validates condition tree integrity on pack", async () => {
-      const { roles } = await loadFixture(setup);
+      const { roles, evaluator } = await loadFixture(setup);
 
       // Invalid: root node has invalid parent reference (must be 0 for root)
       await expect(
@@ -425,7 +428,7 @@ describe("Setup", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableRootNode");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableRootNode");
     });
 
     it("emits AllowTarget event", async () => {
@@ -753,7 +756,7 @@ describe("Setup", () => {
     });
 
     it("validates condition tree integrity on pack", async () => {
-      const { roles } = await loadFixture(setup);
+      const { roles, evaluator } = await loadFixture(setup);
 
       // Invalid: root node has invalid parent reference (must be 0 for root)
       await expect(
@@ -765,7 +768,7 @@ describe("Setup", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableRootNode");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableRootNode");
     });
 
     it("emits AllowFunction event", async () => {

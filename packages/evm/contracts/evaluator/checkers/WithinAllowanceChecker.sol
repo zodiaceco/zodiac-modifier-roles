@@ -4,9 +4,10 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../common/AllowanceConsumer.sol";
-import "../../common/PriceLoader.sol";
-import "../../types/Types.sol";
+import {Consumption} from "../../IEvaluator.sol";
+import "../AllowanceConsumer.sol";
+import "../PriceLoader.sol";
+import {Status} from "../types/EvaluatorTypes.sol";
 
 /**
  * @title WithinAllowanceChecker
@@ -37,6 +38,7 @@ library WithinAllowanceChecker {
      * adapterParams: optional trailing bytes passed to IPricing.getPrice(params)
      */
     function check(
+        address core,
         Consumption[] memory consumptions,
         uint256 value,
         bytes memory compValue
@@ -49,7 +51,12 @@ library WithinAllowanceChecker {
 
         // 2. Consume it from the allowance
         return
-            AllowanceConsumer.consume(consumptions, bytes32(compValue), value);
+            AllowanceConsumer.consume(
+                core,
+                consumptions,
+                bytes32(compValue),
+                value
+            );
     }
 
     /**

@@ -4,6 +4,27 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
+import {Operation} from "@gnosis-guild/zodiac-core/contracts/core/Operation.sol";
+
+enum Clearance {
+    None,
+    Target,
+    Function
+}
+
+enum ExecutionOptions {
+    None,
+    Send,
+    DelegateCall,
+    Both
+}
+
+struct Role {
+    mapping(address => uint256) members;
+    mapping(address => Clearance) clearance;
+    mapping(bytes32 => uint256) scopeConfig;
+}
+
 /**
  * @notice Represents an allowance with periodic refilling capability.
  *
@@ -33,9 +54,8 @@ struct Allowance {
     uint64 timestamp;
 }
 
-struct Consumption {
-    bytes32 allowanceKey;
-    uint128 balance;
-    uint128 consumed;
-    uint64 timestamp;
+struct Transaction {
+    address to;
+    uint256 value;
+    Operation operation;
 }

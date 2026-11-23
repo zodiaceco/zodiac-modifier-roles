@@ -21,7 +21,8 @@ import { encodeKey } from "../../sdk/src/main/keys.js";
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupDynamicParam } = createSetup(connection);
+const { setupFn } = createSetup(connection);
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 const bytes = ParamType.from("bytes");
 
@@ -99,7 +100,9 @@ describe("SDK helpers on Roles", () => {
         paramType: 5,
         operator: 5,
         children: [
-          bitmask({ mask: "0x" + "ff".repeat(20), value: prefix })(bytes),
+          bitmask({ mask: "0x" + "ff".repeat(20), value: prefix })(
+            bytes as any,
+          ),
         ],
       } as any),
     );

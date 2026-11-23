@@ -17,7 +17,8 @@ import {
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Custom", () => {
   after(async () => {
@@ -430,7 +431,7 @@ describe("Operator - Custom", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for None and AbiEncoded", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
         await expect(
@@ -443,13 +444,13 @@ describe("Operator - Custom", () => {
             },
           ]),
         )
-          .to.be.revertedWithCustomError(roles, "UnsuitableParameterType")
+          .to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType")
           .withArgs(0);
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is less than 20 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -460,7 +461,7 @@ describe("Operator - Custom", () => {
             compValue: "0x" + "ab".repeat(19), // 19 bytes, less than address
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
   });
 

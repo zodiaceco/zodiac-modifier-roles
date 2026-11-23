@@ -4,14 +4,14 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {ExecutionOptions} from "./Permission.sol";
+import {ExecutionOptions} from "./CoreTypes.sol";
 
 /**
- * @title IRolesEvent - All events emitted by the Roles Mod.
+ * @title ICoreEvent - All events emitted by the Roles Mod.
  *
  * @author gnosisguild
  */
-interface IRolesEvent {
+interface ICoreEvent {
     /*//////////////////////////////////////////////////////////////
                              SETUP EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -105,6 +105,9 @@ interface IRolesEvent {
 
     /// Emitted when a transaction unwrap adapter is set
     event SetUnwrapAdapter(address to, bytes4 selector, address adapter);
+
+    /// Emitted when the condition evaluator is set
+    event SetEvaluator(address evaluator);
 
     /*//////////////////////////////////////////////////////////////
                            ALLOWANCE EVENTS

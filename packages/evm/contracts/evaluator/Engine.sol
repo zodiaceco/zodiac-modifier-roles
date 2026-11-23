@@ -4,17 +4,19 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "./BitmaskChecker.sol";
-import "./CustomConditionChecker.sol";
-import "./WithinAllowanceChecker.sol";
-import "./WithinRatioChecker.sol";
+import "./AbiLocation.sol";
 
-import "../../common/AbiLocation.sol";
+import "./checkers/BitmaskChecker.sol";
+import "./checkers/CustomChecker.sol";
+import "./checkers/WithinAllowanceChecker.sol";
+import "./checkers/WithinRatioChecker.sol";
 
-import "../../types/Types.sol";
+import {Consumption, Result} from "../IEvaluator.sol";
+import "./types/EvaluatorError.sol";
+import "./types/EvaluatorTypes.sol";
 
 /**
- * @title ConditionEvaluator
+ * @title Engine
  * @notice Evaluates a condition tree against transaction calldata, returning
  *         allowance consumptions on pass or a violation on failure.
  *
@@ -40,7 +42,7 @@ import "../../types/Types.sol";
  *
  * @author gnosisguild
  */
-library ConditionEvaluator {
+library Engine {
     /**
      * @notice Evaluates `condition` against the transaction in `context`.
      * @param condition    Root of the condition tree.
@@ -98,6 +100,7 @@ library ConditionEvaluator {
                 );
                 if (ok) {
                     (status, consumptions) = WithinAllowanceChecker.check(
+                        context.core,
                         consumptions,
                         uint256(word),
                         condition.compValue
@@ -107,6 +110,7 @@ library ConditionEvaluator {
                 }
             } else if (operator == uint256(Operator.CallWithinAllowance)) {
                 (status, consumptions) = WithinAllowanceChecker.check(
+                    context.core,
                     consumptions,
                     1,
                     condition.compValue
@@ -127,7 +131,7 @@ library ConditionEvaluator {
                     context.pluckedValues
                 );
             } else {
-                revert IRolesError.UnsupportedOperator(condition.index);
+                revert IEvaluatorError.UnsupportedOperator(condition.index);
             }
         } else if (operator == uint256(Operator.Pass)) {
             status = Status.Ok;
@@ -161,7 +165,7 @@ library ConditionEvaluator {
                 ? Status.Ok
                 : Status.CalldataNotEmpty;
         } else {
-            revert IRolesError.UnsupportedOperator(condition.index);
+            revert IEvaluatorError.UnsupportedOperator(condition.index);
         }
 
         if (status != Status.Ok) {
@@ -189,7 +193,7 @@ library ConditionEvaluator {
                 result.consumptions,
                 context
             );
-            if (result.status != Status.Ok) {
+            if (result.status != 0) {
                 return result;
             }
         }
@@ -209,7 +213,7 @@ library ConditionEvaluator {
                 consumptions,
                 context
             );
-            if (result.status == Status.Ok) {
+            if (result.status == 0) {
                 return result;
             }
         }
@@ -304,7 +308,7 @@ library ConditionEvaluator {
                 result.consumptions,
                 context
             );
-            if (result.status != Status.Ok) {
+            if (result.status != 0) {
                 return result;
             }
         }
@@ -348,12 +352,12 @@ library ConditionEvaluator {
             );
 
             if (every) {
-                if (result.status != Status.Ok) {
-                    result.status = Status.NotEveryArrayElementPasses;
+                if (result.status != 0) {
+                    result.status = uint8(Status.NotEveryArrayElementPasses);
                     return result;
                 }
             } else {
-                if (result.status == Status.Ok) {
+                if (result.status == 0) {
                     return result;
                 }
             }
@@ -414,7 +418,7 @@ library ConditionEvaluator {
                 result.consumptions,
                 context
             );
-            if (result.status != Status.Ok) {
+            if (result.status != 0) {
                 return result;
             }
         }
@@ -456,16 +460,16 @@ library ConditionEvaluator {
                     result.consumptions,
                     context
                 );
-                if (result.status != Status.Ok) break;
+                if (result.status != 0) break;
             }
 
             if (every) {
-                if (result.status != Status.Ok) {
-                    result.status = Status.NotEveryZippedElementPasses;
+                if (result.status != 0) {
+                    result.status = uint8(Status.NotEveryZippedElementPasses);
                     return result;
                 }
             } else {
-                if (result.status == Status.Ok) {
+                if (result.status == 0) {
                     return result;
                 }
             }
@@ -687,7 +691,8 @@ library ConditionEvaluator {
         }
 
         return
-            CustomConditionChecker.check(
+            CustomChecker.check(
+                context.core,
                 condition.compValue,
                 context.to,
                 context.value,
@@ -740,7 +745,7 @@ library ConditionEvaluator {
         Condition memory condition,
         Context memory context
     ) private pure returns (Result memory result) {
-        result.status = status;
+        result.status = uint8(status);
         result.violatedNodeIndex = condition.index;
         result.calldataOffset = AbiLocation.offsetOf(context.data, dataSlice);
     }

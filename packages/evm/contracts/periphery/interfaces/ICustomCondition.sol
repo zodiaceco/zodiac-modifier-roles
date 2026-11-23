@@ -26,7 +26,8 @@ interface ICustomCondition {
         uint256 location,
         uint256 size,
         bytes calldata extra,
-        bytes32[] calldata pluckedValues
+        bytes32[] calldata pluckedValues,
+        address roles
     )
         external
         view

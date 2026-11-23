@@ -18,8 +18,10 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupTwoParams, setupDynamicParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Matches", () => {
   after(async () => {
@@ -1406,7 +1408,7 @@ describe("Operator - Matches", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.None,
@@ -1423,13 +1425,13 @@ describe("Operator - Matches", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     describe("compValue", () => {
       it("only AbiEncoded accepts non-empty compValue", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         // All valid Matches encodings except AbiEncoded
         for (const encoding of [Encoding.Tuple, Encoding.Array]) {
@@ -1448,12 +1450,12 @@ describe("Operator - Matches", () => {
                 compValue: "0x",
               },
             ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+          ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
         }
       });
 
       it("reverts UnsuitableCompValue when AbiEncoded Matches has 1 byte compValue", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         await expect(
           allowTarget([
@@ -1470,11 +1472,11 @@ describe("Operator - Matches", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when AbiEncoded Matches compValue exceeds 34 bytes", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
+        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         // 35 bytes = 2 + 33, but N must be <= 32
         const compValue = "0x" + "00".repeat(35);
@@ -1494,12 +1496,12 @@ describe("Operator - Matches", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     it("requires at least one structural child", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       const allowanceKey = hexlify(randomBytes(32));
 
@@ -1524,7 +1526,7 @@ describe("Operator - Matches", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
 
         await expect(
           allowTarget([
@@ -1548,7 +1550,7 @@ describe("Operator - Matches", () => {
               compValue: allowanceKey,
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       }
     });
   });

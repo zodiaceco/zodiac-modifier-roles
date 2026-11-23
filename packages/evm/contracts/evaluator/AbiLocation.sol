@@ -4,8 +4,7 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import {Span} from "../types/Authorization.sol";
-import {Condition, Encoding} from "../types/Condition.sol";
+import {Condition, Encoding, Span} from "./types/EvaluatorTypes.sol";
 
 /**
  * @title AbiLocation

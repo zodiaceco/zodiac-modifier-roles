@@ -6,7 +6,9 @@ pragma solidity >=0.8.17 <0.9.0;
 
 import "@gnosis-guild/zodiac-core/contracts/core/Modifier.sol";
 
-import "../types/Types.sol";
+import "./types/CoreError.sol";
+import "./types/CoreEvent.sol";
+import "./types/CoreTypes.sol";
 
 /**
  * @title RolesStorage
@@ -15,13 +17,14 @@ import "../types/Types.sol";
  * @author gnosisguild
  *
  */
-abstract contract RolesStorage is Modifier, IRolesEvent, IRolesError {
+abstract contract RolesStorage is Modifier, ICoreEvent, ICoreError {
     string public constant VERSION = "3.0.0";
 
     mapping(bytes32 => Role) internal roles;
     mapping(bytes32 => Allowance) public allowances;
     mapping(bytes32 => address) public unwrappers;
     mapping(address => bytes32) public defaultRoles;
+    address public evaluator;
 
     bool private transient _reentrancyGuard;
 

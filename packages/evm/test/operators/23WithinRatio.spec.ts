@@ -50,7 +50,8 @@ function matchesWithRatio(
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupTwoParams } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
 
 describe("Operator - WithinRatio", () => {
   describe("Core Functionality", () => {
@@ -2312,7 +2313,7 @@ describe("integrity", () => {
   });
 
   it("reverts UnsuitableParameterType for invalid encodings", async () => {
-    const { roles } = await loadFixture(setupTestContract);
+    const { roles, evaluator } = await loadFixture(setupTestContract);
 
     const compValue = encodeWithinRatioCompValue({
       referencePluckIndex: 0,
@@ -2340,7 +2341,7 @@ describe("integrity", () => {
             compValue,
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
     }
   });
 
@@ -2498,7 +2499,7 @@ describe("integrity", () => {
     });
 
     it("reverts UnsuitableCompValue when compValue is less than 12 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -2509,11 +2510,11 @@ describe("integrity", () => {
             compValue: "0x" + "ab".repeat(11), // 11 bytes
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableCompValue when compValue is between 12 and 33 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -2524,11 +2525,11 @@ describe("integrity", () => {
             compValue: "0x" + "ab".repeat(20), // 20 bytes - invalid
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts AllowanceDecimalsExceedMax when referenceDecimals exceeds 27", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
       const compValue = encodeWithinRatioCompValue({
         referencePluckIndex: 0,
         referenceDecimals: 28,
@@ -2548,12 +2549,12 @@ describe("integrity", () => {
           },
         ]),
       )
-        .to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax")
+        .to.be.revertedWithCustomError(evaluator, "AllowanceDecimalsExceedMax")
         .withArgs(0);
     });
 
     it("reverts AllowanceDecimalsExceedMax when relativeDecimals exceeds 27", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
       const compValue = encodeWithinRatioCompValue({
         referencePluckIndex: 0,
         referenceDecimals: 18,
@@ -2573,7 +2574,7 @@ describe("integrity", () => {
           },
         ]),
       )
-        .to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax")
+        .to.be.revertedWithCustomError(evaluator, "AllowanceDecimalsExceedMax")
         .withArgs(0);
     });
 
@@ -2649,7 +2650,7 @@ describe("integrity", () => {
     });
 
     it("reverts WithinRatioNoRatioProvided when both minRatio and maxRatio are zero", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       const compValue = encodeWithinRatioCompValue({
         referencePluckIndex: 3,
@@ -2693,11 +2694,11 @@ describe("integrity", () => {
             compValue: "0x07",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "WithinRatioNoRatioProvided");
+      ).to.be.revertedWithCustomError(evaluator, "WithinRatioNoRatioProvided");
     });
 
     it("reverts WithinRatioMinExceedsMax when minRatio is greater than maxRatio", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       const compValue = encodeWithinRatioCompValue({
         referencePluckIndex: 3,
@@ -2741,12 +2742,12 @@ describe("integrity", () => {
             compValue: "0x07",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "WithinRatioMinExceedsMax");
+      ).to.be.revertedWithCustomError(evaluator, "WithinRatioMinExceedsMax");
     });
   });
 
   it("reverts LeafNodeCannotHaveChildren when WithinRatio has children", async () => {
-    const { roles } = await loadFixture(setupTestContract);
+    const { roles, evaluator } = await loadFixture(setupTestContract);
 
     const compValue = encodeWithinRatioCompValue({
       referencePluckIndex: 3,
@@ -2790,6 +2791,6 @@ describe("integrity", () => {
           compValue: "0x",
         },
       ]),
-    ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+    ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
   });
 });

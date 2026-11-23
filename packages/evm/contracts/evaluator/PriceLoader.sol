@@ -5,7 +5,7 @@
 pragma solidity >=0.8.17 <0.9.0;
 
 import "../periphery/interfaces/IPricing.sol";
-import "../types/Types.sol";
+import {Status} from "./types/EvaluatorTypes.sol";
 
 /**
  * @title PriceLoader

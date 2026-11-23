@@ -40,7 +40,6 @@ describe("AvatarIsOwnerOfERC721", () => {
       avatarAddress,
       avatarAddress,
     );
-    await roles.enableModule(invoker.address);
 
     await roles.connect(owner).grantRole(invoker.address, ROLE_KEY, 0, 0, 0);
     await roles.connect(owner).setDefaultRole(invoker.address, ROLE_KEY);

@@ -21,7 +21,8 @@ import type { Roles } from "../../typechain-types/index.js";
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
-const { setupTestContract, setupOneParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - CallWithinAllowance", async () => {
   after(async () => {
@@ -767,7 +768,7 @@ describe("Operator - CallWithinAllowance", async () => {
   describe("integrity", () => {
     describe("encoding", () => {
       it("reverts UnsuitableParameterType for invalid encodings", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
 
@@ -788,14 +789,14 @@ describe("Operator - CallWithinAllowance", async () => {
                 compValue: allowanceKey,
               },
             ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+          ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
         }
       });
     });
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -806,11 +807,11 @@ describe("Operator - CallWithinAllowance", async () => {
               compValue: "0x" + "ab".repeat(31), // 31 bytes
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when compValue is 33 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -821,13 +822,13 @@ describe("Operator - CallWithinAllowance", async () => {
               compValue: "0x" + "ab".repeat(33), // 33 bytes
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     describe("children", () => {
       it("reverts LeafNodeCannotHaveChildren when CallWithinAllowance has children", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         const allowanceKey = hexlify(randomBytes(32));
 
@@ -846,7 +847,10 @@ describe("Operator - CallWithinAllowance", async () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+        ).to.be.revertedWithCustomError(
+          evaluator,
+          "LeafNodeCannotHaveChildren",
+        );
       });
     });
   });

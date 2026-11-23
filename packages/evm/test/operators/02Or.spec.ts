@@ -19,8 +19,9 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Or", () => {
   after(async () => {
@@ -606,7 +607,7 @@ describe("Operator - Or", () => {
   describe("integrity", () => {
     describe("encoding", () => {
       it("reverts UnsuitableParameterType for invalid encodings", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         for (const encoding of [
           Encoding.Static,
@@ -631,14 +632,14 @@ describe("Operator - Or", () => {
                 compValue: "0x",
               },
             ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+          ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
         }
       });
     });
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -655,13 +656,13 @@ describe("Operator - Or", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     describe("children", () => {
       it("reverts UnsuitableChildCount when Or has zero children", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -672,7 +673,7 @@ describe("Operator - Or", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
       });
     });
   });

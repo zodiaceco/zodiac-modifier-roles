@@ -4,11 +4,20 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../core/serialize/ConditionPacker.sol";
-import "../../core/serialize/ConditionUnpacker.sol";
-import "../../core/serialize/Integrity.sol";
+import {ConditionFlat} from "../../IEvaluator.sol";
+import "../../evaluator/Integrity.sol";
+import "../../evaluator/serialize/Packer.sol";
+import "../../evaluator/serialize/Unpacker.sol";
+import "../../evaluator/types/EvaluatorError.sol";
+import "../../evaluator/types/EvaluatorTypes.sol";
 
-contract MockPackerUnpacker {
+contract MockPackerUnpacker is IEvaluatorError {
+    address public avatar;
+
+    function setAvatar(address _avatar) external {
+        avatar = _avatar;
+    }
+
     struct ConditionForTest {
         uint256 parent;
         Operator operator;
@@ -26,10 +35,12 @@ contract MockPackerUnpacker {
         returns (ConditionForTest[] memory result, uint256 maxPluckValueCount)
     {
         Integrity.enforce(conditions);
-        bytes memory buffer = ConditionPacker.pack(conditions);
+        bytes memory buffer = Packer.pack(conditions);
 
-        (Condition memory condition, uint256 maxCount) = ConditionUnpacker
-            .unpack(buffer);
+        (Condition memory condition, uint256 maxCount) = Unpacker.unpack(
+            buffer,
+            address(this)
+        );
 
         result = _flatten(condition);
         maxPluckValueCount = maxCount;
@@ -41,14 +52,14 @@ contract MockPackerUnpacker {
         ConditionFlat[] memory conditions
     ) public pure returns (bytes memory) {
         Integrity.enforce(conditions);
-        return ConditionPacker.pack(conditions);
+        return Packer.pack(conditions);
     }
 
     /// @dev Without Integrity, as the SDK packs for the `...Packed` setters.
     function packUnchecked(
         ConditionFlat[] memory conditions
     ) public pure returns (bytes memory) {
-        return ConditionPacker.pack(conditions);
+        return Packer.pack(conditions);
     }
 
     /// @dev Unpacks a buffer as the evaluator loads it, whoever packed it.
@@ -59,8 +70,10 @@ contract MockPackerUnpacker {
         view
         returns (ConditionForTest[] memory result, uint256 maxPluckValueCount)
     {
-        (Condition memory condition, uint256 maxCount) = ConditionUnpacker
-            .unpack(buffer);
+        (Condition memory condition, uint256 maxCount) = Unpacker.unpack(
+            buffer,
+            address(this)
+        );
 
         result = _flatten(condition);
         maxPluckValueCount = maxCount;

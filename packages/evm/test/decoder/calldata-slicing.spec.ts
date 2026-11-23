@@ -1133,7 +1133,7 @@ describe("Calldata slicing and traversal safety", () => {
     });
 
     it("reverts with UnsupportedOperator on a raw-packed placeholder operator", async () => {
-      const { roles, allowRaw, invoke } = await loadFixture(setup);
+      const { evaluator, allowRaw, invoke } = await loadFixture(setup);
 
       await allowRaw(
         packRaw([
@@ -1141,7 +1141,7 @@ describe("Calldata slicing and traversal safety", () => {
         ]),
       );
       await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(roles, "UnsupportedOperator")
+        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
         .withArgs(0);
 
       await allowRaw(
@@ -1150,7 +1150,7 @@ describe("Calldata slicing and traversal safety", () => {
         ]),
       );
       await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(roles, "UnsupportedOperator")
+        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
         .withArgs(0);
 
       await allowRaw(
@@ -1159,7 +1159,7 @@ describe("Calldata slicing and traversal safety", () => {
         ]),
       );
       await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(roles, "UnsupportedOperator")
+        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
         .withArgs(0);
     });
 

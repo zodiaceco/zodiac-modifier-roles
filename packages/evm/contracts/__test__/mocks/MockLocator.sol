@@ -4,10 +4,12 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../common/AbiLocation.sol";
-import "../../core/serialize/Integrity.sol";
-import "../../core/serialize/ConditionPacker.sol";
-import "../../core/serialize/ConditionUnpacker.sol";
+import {ConditionFlat} from "../../IEvaluator.sol";
+import "../../evaluator/AbiLocation.sol";
+import "../../evaluator/Integrity.sol";
+import "../../evaluator/serialize/Packer.sol";
+import "../../evaluator/serialize/Unpacker.sol";
+import "../../evaluator/types/EvaluatorTypes.sol";
 
 /**
  * @dev Exposes AbiLocation, with the calldata as the frame: values are
@@ -85,8 +87,8 @@ contract MockLocator {
         ConditionFlat[] memory conditions,
         uint256 bfsIndex
     ) internal view returns (Condition memory) {
-        bytes memory packed = ConditionPacker.pack(conditions);
-        (Condition memory root, ) = ConditionUnpacker.unpack(packed);
+        bytes memory packed = Packer.pack(conditions);
+        (Condition memory root, ) = Unpacker.unpack(packed, address(0));
 
         // BFS traversal to find condition at bfsIndex
         Condition[] memory queue = new Condition[](conditions.length);

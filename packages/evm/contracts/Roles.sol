@@ -21,8 +21,19 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
     /// @param _owner Address of the owner
     /// @param _avatar Address of the avatar (e.g. a Gnosis Safe)
     /// @param _target Address of the contract that will call exec function
-    constructor(address _owner, address _avatar, address _target) {
-        bytes memory initParams = abi.encode(_owner, _avatar, _target);
+    /// @param _evaluator Address of the stateless condition evaluator contract
+    constructor(
+        address _owner,
+        address _avatar,
+        address _target,
+        address _evaluator
+    ) {
+        bytes memory initParams = abi.encode(
+            _owner,
+            _avatar,
+            _target,
+            _evaluator
+        );
         setUp(initParams);
     }
 
@@ -35,6 +46,16 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         address module
     ) external view returns (bool) {
         return _hasActiveMembership(roleKey, module);
+    }
+
+    /// @dev Returns the accrued allowance balance at current block.timestamp.
+    /// @param allowanceKey The allowance key.
+    /// @return balance The accrued balance.
+    /// @return timestamp The timestamp of the last accrual point.
+    function accruedAllowance(
+        bytes32 allowanceKey
+    ) external view returns (uint128 balance, uint64 timestamp) {
+        return _accrue(allowanceKey, uint64(block.timestamp));
     }
 
     /// @dev Passes a transaction to the modifier using the caller's default role.
@@ -179,7 +200,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
             revert ModuleTransactionFailed();
         }
         if (success) {
-            _persist(module, roleKey, nextMembership, consumptions);
+            _settle(module, roleKey, nextMembership, consumptions);
         }
     }
 
@@ -205,7 +226,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
             revert ModuleTransactionFailed();
         }
         if (success) {
-            _persist(module, roleKey, nextMembership, consumptions);
+            _settle(module, roleKey, nextMembership, consumptions);
         }
     }
 }

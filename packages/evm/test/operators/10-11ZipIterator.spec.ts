@@ -18,12 +18,17 @@ const abiCoder = AbiCoder.defaultAbiCoder();
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const {
-  setupTwoArrayParams,
-  setupThreeArrayParams,
-  setupTwoTupleArrayParams,
-  setupTestContract,
-} = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupTwoArrayParams = setupFn("function fn(uint256[], uint256[])");
+const setupThreeBytesArrayParams = setupFn(
+  "function fn(bytes[], bytes[], bytes[])",
+);
+const setupThreeDefaultArrayParams = setupFn(
+  "function fn(uint256[], uint256[], uint256[])",
+);
+const setupTwoTupleArrayParams = setupFn(
+  "function fn((uint256, uint256)[], (uint256, uint256)[])",
+);
 
 function pluckArray(index: number) {
   return {
@@ -54,14 +59,6 @@ function pluckTupleArray(index: number) {
 
 function encodeCompValue(...indices: number[]) {
   return "0x" + indices.map((i) => i.toString(16).padStart(2, "0")).join("");
-}
-
-function setupThreeBytesArrayParams() {
-  return setupThreeArrayParams("bytes");
-}
-
-function setupThreeDefaultArrayParams() {
-  return setupThreeArrayParams();
 }
 
 describe("Operator - Zip (ZipSome & ZipEvery)", () => {
@@ -800,7 +797,7 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for non-None encoding", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.Static,
@@ -818,12 +815,12 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
               compValue: "0x0001",
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is shorter than 2 bytes", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // 0 bytes
       await expect(
@@ -835,7 +832,7 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
 
       // 1 byte
       await expect(
@@ -847,11 +844,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             compValue: "0x00",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableCompValue when compValue length does not match tuple field count", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // compValue has 2 bytes but tuple has 3 fields
       await expect(
@@ -884,11 +881,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableCompValue when pluck indices repeat", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget(
@@ -919,11 +916,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableCompValue when pluck index not found", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // Reference pluck index 5 which doesn't exist
       await expect(
@@ -955,11 +952,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableCompValue when pluck is not Array encoding", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // Pluck index 1 is Static, not Array
       await expect(
@@ -998,11 +995,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
     });
 
     it("reverts UnsuitableChildTypeTree when child does not resolve to a Tuple", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget(
@@ -1029,11 +1026,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildTypeTree");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildTypeTree");
     });
 
     it("reverts UnsuitableChildTypeTree when field type does not match pluck array element type", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // Pluck 0 has Static elements, but zip tuple field 0 is Tuple
       await expect(
@@ -1074,11 +1071,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildTypeTree");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildTypeTree");
     });
 
     it("reverts UnsupportedOperator when descendant uses Pluck", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       await expect(
         allowTarget(
@@ -1113,11 +1110,11 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsupportedOperator");
+      ).to.be.revertedWithCustomError(evaluator, "UnsupportedOperator");
     });
 
     it("reverts UnsuitableChildCount when tuple child has a non-structural child", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
       // Every field of the Tuple is evaluated at an element of the array in
       // its slot, so a field that reads no calldata has no place in it.
@@ -1150,7 +1147,7 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
             ],
           }),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+      ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
     });
   });
 });

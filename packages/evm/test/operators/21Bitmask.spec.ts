@@ -32,7 +32,8 @@ function encodeCompValue(
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupDynamicParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Bitmask", () => {
   after(async () => {
@@ -356,7 +357,7 @@ describe("Operator - Bitmask", () => {
 
   describe("integrity", () => {
     it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       for (const encoding of [
         Encoding.None,
@@ -374,13 +375,13 @@ describe("Operator - Bitmask", () => {
               compValue: encodeCompValue(0, "ff", "ab"),
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
       }
     });
 
     describe("compValue", () => {
       it("reverts UnsuitableCompValue when compValue is less than 4 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -391,11 +392,11 @@ describe("Operator - Bitmask", () => {
               compValue: "0x0000", // 2 bytes (only shift, no mask/expected)
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
 
       it("reverts UnsuitableCompValue when (length - 2) is odd", async () => {
-        const { roles } = await loadFixture(setupTestContract);
+        const { roles, evaluator } = await loadFixture(setupTestContract);
 
         await expect(
           packConditions(roles, [
@@ -406,12 +407,12 @@ describe("Operator - Bitmask", () => {
               compValue: "0x0000aabbcc", // 5 bytes: 2 shift + 3 (odd, can't split evenly)
             },
           ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
       });
     });
 
     it("reverts LeafNodeCannotHaveChildren when Bitmask has children", async () => {
-      const { roles } = await loadFixture(setupTestContract);
+      const { roles, evaluator } = await loadFixture(setupTestContract);
 
       await expect(
         packConditions(roles, [
@@ -428,7 +429,7 @@ describe("Operator - Bitmask", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
     });
   });
 });
