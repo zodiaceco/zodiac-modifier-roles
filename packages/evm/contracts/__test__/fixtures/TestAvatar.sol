@@ -15,7 +15,7 @@ contract TestAvatar {
     ) external {
         bool success;
         bytes memory response;
-        if (operation == 1) (success, ) = to.delegatecall(data);
+        if (operation == 1) (success, response) = to.delegatecall(data);
         else (success, response) = to.call{value: value}(data);
         if (!success) {
             assembly {
@@ -40,7 +40,7 @@ contract TestAvatar {
         bytes memory data,
         uint8 operation
     ) external returns (bool success, bytes memory returnData) {
-        if (operation == 1) (success, ) = to.delegatecall(data);
+        if (operation == 1) (success, returnData) = to.delegatecall(data);
         else (success, returnData) = to.call{value: value}(data);
     }
 }

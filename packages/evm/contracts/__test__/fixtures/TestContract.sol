@@ -21,6 +21,12 @@ contract TestContract {
         revert AnError();
     }
 
+    function fnThatRevertsEmpty() public pure {
+        assembly {
+            revert(0, 0)
+        }
+    }
+
     function fnThatMaybeReverts(
         uint256 a,
         bool maybe

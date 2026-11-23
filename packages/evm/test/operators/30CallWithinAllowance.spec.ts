@@ -570,7 +570,6 @@ describe("Operator - CallWithinAllowance", async () => {
             doNothingData,
             0,
             roleKey,
-            true,
           ),
       ).to.not.be.revert(ethers);
 
@@ -584,7 +583,6 @@ describe("Operator - CallWithinAllowance", async () => {
             doEvenLessData,
             0,
             roleKey,
-            true,
           ),
       ).to.not.be.revert(ethers);
 
@@ -598,7 +596,6 @@ describe("Operator - CallWithinAllowance", async () => {
             doNothingData,
             0,
             roleKey,
-            true,
           ),
       )
         .to.be.revertedWithCustomError(roles, "ConditionViolation")

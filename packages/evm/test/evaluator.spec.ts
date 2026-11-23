@@ -29,7 +29,6 @@ const ROLE_TX_TYPES = {
     { name: "data", type: "bytes" },
     { name: "operation", type: "uint8" },
     { name: "roleKey", type: "bytes32" },
-    { name: "shouldRevert", type: "bool" },
     { name: "salt", type: "bytes32" },
   ],
 };
@@ -347,14 +346,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
     });
 
@@ -382,14 +374,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
       // Relayed execTransactionWithSignature signed by enabled non-member
@@ -405,7 +390,6 @@ describe("Core / Evaluator split", () => {
         data,
         operation: 0,
         roleKey,
-        shouldRevert: true,
         salt,
       });
 
@@ -418,7 +402,6 @@ describe("Core / Evaluator split", () => {
             data,
             0,
             roleKey,
-            true,
             salt,
             signature,
           ),
@@ -438,14 +421,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            ZeroHash,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, ZeroHash),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
       // Future start timestamp rejected
@@ -457,40 +433,19 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "MembershipNotYetValid");
 
       // Advance into window: 1 use succeeds, 2nd call rejected
       await time.increaseTo(now + 1000);
       await roles
         .connect(nonMember)
-        .execTransactionWithRole(
-          testContractAddress,
-          0,
-          data,
-          0,
-          roleKey,
-          true,
-        );
+        .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey);
 
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
       // Expired membership rejected
@@ -501,14 +456,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "MembershipExpired");
     });
   });

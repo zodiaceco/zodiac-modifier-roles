@@ -76,8 +76,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
                 value,
                 data,
                 operation,
-                defaultRoles[sentOrSignedByModule()],
-                false
+                defaultRoles[sentOrSignedByModule()]
             );
     }
 
@@ -105,39 +104,37 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
                 value,
                 data,
                 operation,
-                defaultRoles[sentOrSignedByModule()],
-                false
+                defaultRoles[sentOrSignedByModule()]
             );
     }
 
     /// @dev Passes a transaction to the modifier assuming the specified role.
+    ///      Reverts with the inner error if execution fails.
     /// @param to Destination address of module transaction
     /// @param value Ether value of module transaction
     /// @param data Data payload of module transaction
     /// @param operation Operation type of module transaction
     /// @param roleKey Identifier of the role to assume for this transaction
-    /// @param shouldRevert Should the function revert on inner execution returning success false?
     /// @notice Can only be called by enabled modules
     function execTransactionWithRole(
         address to,
         uint256 value,
         bytes calldata data,
         Operation operation,
-        bytes32 roleKey,
-        bool shouldRevert
-    ) public nonReentrant moduleOnly returns (bool success) {
-        return _execWithRole(to, value, data, operation, roleKey, shouldRevert);
+        bytes32 roleKey
+    ) public nonReentrant moduleOnly returns (bytes memory returnData) {
+        return _execWithRoleOrRevert(to, value, data, operation, roleKey);
     }
 
     /// @dev Relayed variant of execTransactionWithRole. The caller does not
     ///      need to be an enabled module; instead, an enabled module must sign
     ///      the call (EIP-712 over a RoleTx struct).
+    ///      Reverts with the inner error if execution fails.
     /// @param to Destination address of module transaction
     /// @param value Ether value of module transaction
     /// @param data Data payload of module transaction
     /// @param operation Operation type of module transaction
     /// @param roleKey Identifier of the role to assume for this transaction
-    /// @param shouldRevert Should the function revert on inner execution returning success false?
     /// @param salt Replay-protection nonce mixed into the signed digest;
     ///        each digest can be consumed only once.
     /// @param signature EIP-712 signature by the module (EOA or ERC-1271)
@@ -147,28 +144,18 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         bytes calldata data,
         Operation operation,
         bytes32 roleKey,
-        bool shouldRevert,
         bytes32 salt,
         bytes calldata signature
-    ) external nonReentrant returns (bool success) {
+    ) external nonReentrant returns (bytes memory returnData) {
         return
             _execWithRoleSigned(
-                RoleTx.hashStruct(
-                    to,
-                    value,
-                    data,
-                    operation,
-                    roleKey,
-                    shouldRevert,
-                    salt
-                ),
+                RoleTx.hashStruct(to, value, data, operation, roleKey, salt),
                 signature,
                 to,
                 value,
                 data,
                 operation,
-                roleKey,
-                shouldRevert
+                roleKey
             );
     }
 
@@ -186,10 +173,13 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         uint256 value,
         bytes calldata data,
         Operation operation,
-        bytes32 roleKey,
-        bool shouldRevert
-    ) private moduleOnlySigned(structHash, signature) returns (bool success) {
-        return _execWithRole(to, value, data, operation, roleKey, shouldRevert);
+        bytes32 roleKey
+    )
+        private
+        moduleOnlySigned(structHash, signature)
+        returns (bytes memory returnData)
+    {
+        return _execWithRoleOrRevert(to, value, data, operation, roleKey);
     }
 
     function _execWithRole(
@@ -197,8 +187,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         uint256 value,
         bytes calldata data,
         Operation operation,
-        bytes32 roleKey,
-        bool shouldRevert
+        bytes32 roleKey
     ) private returns (bool success) {
         address module = _authenticate(roleKey);
         Consumption[] memory consumptions = _authorize(
@@ -214,9 +203,6 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
             data,
             operation
         );
-        if (shouldRevert && !success) {
-            revert ModuleTransactionFailed();
-        }
         if (success) {
             _settle(module, roleKey, consumptions);
         }
@@ -227,8 +213,7 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         uint256 value,
         bytes calldata data,
         Operation operation,
-        bytes32 roleKey,
-        bool shouldRevert
+        bytes32 roleKey
     ) private returns (bool success, bytes memory returnData) {
         address module = _authenticate(roleKey);
         Consumption[] memory consumptions = _authorize(
@@ -240,11 +225,33 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         );
         (success, returnData) = IAvatar(target)
             .execTransactionFromModuleReturnData(to, value, data, operation);
-        if (shouldRevert && !success) {
-            revert ModuleTransactionFailed();
-        }
         if (success) {
             _settle(module, roleKey, consumptions);
+        }
+    }
+
+    function _execWithRoleOrRevert(
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Operation operation,
+        bytes32 roleKey
+    ) private returns (bytes memory returnData) {
+        bool success;
+        (success, returnData) = _execWithRoleReturnData(
+            to,
+            value,
+            data,
+            operation,
+            roleKey
+        );
+        if (!success) {
+            if (returnData.length > 0) {
+                assembly {
+                    revert(add(returnData, 0x20), mload(returnData))
+                }
+            }
+            revert ModuleTransactionFailed();
         }
     }
 }

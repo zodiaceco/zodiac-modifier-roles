@@ -9,7 +9,7 @@ import {Operation} from "@gnosis-guild/zodiac-core/contracts/core/Operation.sol"
 library RoleTx {
     bytes32 internal constant TYPEHASH =
         keccak256(
-            "RoleTx(address to,uint256 value,bytes data,uint8 operation,bytes32 roleKey,bool shouldRevert,bytes32 salt)"
+            "RoleTx(address to,uint256 value,bytes data,uint8 operation,bytes32 roleKey,bytes32 salt)"
         );
 
     /**
@@ -21,7 +21,6 @@ library RoleTx {
      * @param data Transaction calldata.
      * @param operation Transaction operation.
      * @param roleKey Role under which the transaction is authorized.
-     * @param shouldRevert Whether a failed inner execution should revert.
      * @param salt Value used to distinguish the signed message for replay protection.
      * @return structHash Hash of the encoded RoleTx message and its type hash.
      */
@@ -31,7 +30,6 @@ library RoleTx {
         bytes calldata data,
         Operation operation,
         bytes32 roleKey,
-        bool shouldRevert,
         bytes32 salt
     ) internal pure returns (bytes32 structHash) {
         return
@@ -43,7 +41,6 @@ library RoleTx {
                     keccak256(data),
                     operation,
                     roleKey,
-                    shouldRevert,
                     salt
                 )
             );
