@@ -7,9 +7,11 @@
  * - a signature of a Safe counts wherever its EIP-1271 signature does, so a
  *   role that can make it sign raw hashes acts with that Safe's roles
  *   (docs: general/signing, "What a signature authorizes");
- * - settlement writes after execution, so it overwrites allowance and
- *   membership changes the executed transaction made (docs: general/
- *   allowances and general/membership).
+ * - settlement runs after execution: for allowances it re-accrues from current
+ *   storage and deducts consumption (reverting if an executed call reduced the
+ *   allowance below what was consumed); for memberships it writes the
+ *   pre-computed next state, overwriting changes the executed transaction made
+ *   (docs: general/allowances and general/membership).
  */
 import { expect } from "chai"
 import {
@@ -45,15 +47,16 @@ const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
 const randomKey = () => hexlify(randomBytes(32))
 
 async function deployRoles(owner: string, avatar: string) {
-  const lib = async (name: string) =>
-    (await (await ethers.getContractFactory(name)).deploy()).getAddress()
-  const libraries = {
-    ConditionStorer: await lib("ConditionStorer"),
-    WithinRatioChecker: await lib("WithinRatioChecker"),
-    CustomConditionChecker: await lib("CustomConditionChecker"),
-  }
-  const factory = await ethers.getContractFactory("Roles", { libraries })
-  const roles = await factory.deploy(owner, avatar, avatar)
+  const evaluator = await (
+    await ethers.getContractFactory("Evaluator")
+  ).deploy()
+  const factory = await ethers.getContractFactory("Roles")
+  const roles = await factory.deploy(
+    owner,
+    avatar,
+    avatar,
+    await evaluator.getAddress()
+  )
   return roles
 }
 
@@ -214,7 +217,7 @@ describe("Roles composition, end to end", () => {
     expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
   })
 
-  it("settlement overwrites an allowance the executed batch set", async () => {
+  it("settlement re-accrues allowances from storage after the executed batch", async () => {
     await deployMastercopies(ethers)
     const [ownerA, member] = await ethers.getSigners()
     const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
@@ -264,7 +267,8 @@ describe("Roles composition, end to end", () => {
     // the Safe owns R from here on
     await R.connect(ownerA).transferOwnership(safeA)
 
-    const batch = encodeMultiSend([
+    // Reducing K below the batch's consumption reverts during settlement.
+    const batchToZero = encodeMultiSend([
       {
         to: R.target as string,
         value: 0n,
@@ -280,19 +284,49 @@ describe("Roles composition, end to end", () => {
       },
       { to: Y, value: 10n, data: "0x", operation: 0 },
     ])
+    await expect(
+      R.connect(member).execTransactionWithRole(
+        await multiSend.getAddress(),
+        0,
+        batchToZero,
+        1,
+        roleP,
+        true
+      )
+    )
+      .to.be.revertedWithCustomError(R, "AllowanceExceeded")
+      .withArgs(K)
+    expect(await ethers.provider.getBalance(Y)).to.equal(0n)
+    expect((await R.allowances(K)).balance).to.equal(100n)
+
+    // Updating K to a balance that covers the consumption settles against
+    // the new balance (50 - 10 = 40), not the pre-execution balance (100 - 10).
+    const batchToFifty = encodeMultiSend([
+      {
+        to: R.target as string,
+        value: 0n,
+        data: R.interface.encodeFunctionData("setAllowance", [
+          K,
+          50,
+          0,
+          0,
+          0,
+          0,
+        ]),
+        operation: 0,
+      },
+      { to: Y, value: 10n, data: "0x", operation: 0 },
+    ])
     await R.connect(member).execTransactionWithRole(
       await multiSend.getAddress(),
       0,
-      batch,
+      batchToFifty,
       1,
       roleP,
       true
     )
-
-    // In order, the batch sets K to 0 and then spends 10 from it, which
-    // should not pass. Both ran, and settlement wrote 100 - 10.
     expect(await ethers.provider.getBalance(Y)).to.equal(10n)
-    expect((await R.allowances(K)).balance).to.equal(90n)
+    expect((await R.allowances(K)).balance).to.equal(40n)
   })
 
   it("settlement restores a limited membership the executed call revoked", async () => {

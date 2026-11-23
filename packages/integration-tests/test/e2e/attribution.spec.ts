@@ -102,15 +102,11 @@ type RoleTx = {
 /* ------------------------------------------------------------------ setup */
 
 async function deployRoles(owner: string, avatar: string) {
-  const lib = async (name: string) =>
-    (await (await ethers.getContractFactory(name)).deploy()).getAddress()
-  const libraries = {
-    ConditionStorer: await lib("ConditionStorer"),
-    WithinRatioChecker: await lib("WithinRatioChecker"),
-    CustomConditionChecker: await lib("CustomConditionChecker"),
-  }
-  const factory = await ethers.getContractFactory("Roles", { libraries })
-  return factory.deploy(owner, avatar, avatar)
+  const evaluator = await (
+    await ethers.getContractFactory("Evaluator")
+  ).deploy()
+  const factory = await ethers.getContractFactory("Roles")
+  return factory.deploy(owner, avatar, avatar, await evaluator.getAddress())
 }
 
 async function execSafe(owner: Signer, safe: string, to: string, data: string) {
