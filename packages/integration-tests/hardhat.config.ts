@@ -31,6 +31,7 @@ export default defineConfig({
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/Roles.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/evaluator/Evaluator.sol",
+      "@gnosis-guild/zodiac-core-modifier-roles/contracts/evaluator/Integrity.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/signing/SignTypedMessageLib.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/unwrappers/MultiSendUnwrapper.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/__test__/fixtures/MultiSend.sol",

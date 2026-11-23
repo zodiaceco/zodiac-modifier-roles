@@ -6,8 +6,9 @@ pragma solidity >=0.8.17 <0.9.0;
 
 import {Consumption} from "../../IEvaluator.sol";
 import "../../periphery/interfaces/ICustomCondition.sol";
+import "../AbiLocation.sol";
 import "../AllowanceConsumer.sol";
-import {Status} from "../types/EvaluatorTypes.sol";
+import {Context, Status} from "../types/EvaluatorTypes.sol";
 
 /**
  * @title CustomChecker
@@ -32,30 +33,21 @@ import {Status} from "../types/EvaluatorTypes.sol";
 library CustomChecker {
     /**
      * @notice Evaluates a custom condition against an external adapter.
-     * @param core Roles Core contract (passed to the adapter and queried for allowances)
      * @param compValue Packed config: adapter address (20 bytes) + optional extra data
-     * @param to Target address of the transaction
-     * @param value ETH value of the transaction
-     * @param data Calldata of the transaction
-     * @param operation Call or DelegateCall
      * @param location Byte offset into calldata
      * @param size Byte size of the payload at location
      * @param consumptions Running allowance consumption list
-     * @param pluckedValues Array of previously plucked values
+     * @param context Transaction metadata, plucked values and the Roles Core
+     *        contract (passed to the adapter and queried for allowances)
      * @return status Ok if condition passes, error status otherwise
      * @return The updated consumption list when the adapter passes
      */
     function check(
-        address core,
         bytes memory compValue,
-        address to,
-        uint256 value,
-        bytes calldata data,
-        Operation operation,
         uint256 location,
         uint256 size,
         Consumption[] memory consumptions,
-        bytes32[] memory pluckedValues
+        Context memory context
     ) internal view returns (Status, Consumption[] memory) {
         address adapter = address(bytes20(compValue));
 
@@ -72,22 +64,21 @@ library CustomChecker {
             }
         }
 
-        (bool success, bytes memory result) = adapter.staticcall(
-            abi.encodeCall(
-                ICustomCondition.check,
-                (
-                    to,
-                    value,
-                    data,
-                    operation,
-                    location,
-                    size,
-                    extra,
-                    pluckedValues,
-                    core
-                )
+        bytes memory callData = abi.encodeCall(
+            ICustomCondition.check,
+            (
+                context.to,
+                context.value,
+                AbiLocation.fromSpan(context.data),
+                context.operation,
+                location,
+                size,
+                extra,
+                context.pluckedValues,
+                context.core
             )
         );
+        (bool success, bytes memory result) = adapter.staticcall(callData);
         if (!success) {
             return (Status.CustomConditionReverted, consumptions);
         }
@@ -100,7 +91,7 @@ library CustomChecker {
             return (status, consumptions);
         }
 
-        return _applyConsumptions(core, consumptions, usedConsumptions);
+        return _applyConsumptions(context.core, consumptions, usedConsumptions);
     }
 
     /**

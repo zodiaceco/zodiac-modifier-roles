@@ -72,8 +72,13 @@ const bytesOf = (n: number) =>
   hexlify(Uint8Array.from({ length: n }, () => int(256)))
 
 async function deployRoles(owner: string, avatar: string) {
+  const integrity = await (
+    await ethers.getContractFactory("Integrity")
+  ).deploy()
   const evaluator = await (
-    await ethers.getContractFactory("Evaluator")
+    await ethers.getContractFactory("Evaluator", {
+      libraries: { Integrity: await integrity.getAddress() },
+    })
   ).deploy()
   return (await ethers.getContractFactory("Roles")).deploy(
     owner,

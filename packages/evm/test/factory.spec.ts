@@ -7,10 +7,12 @@ import {
 } from "@gnosis-guild/zodiac-core/tooling";
 
 import { createEIP1193 } from "../tasks/createEIP1193.js";
+import { createSetup } from "./setup.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers, provider } = connection;
 const { loadFixture } = networkHelpers;
+const { deployEvaluator } = createSetup(connection);
 
 const AddressOne = "0x0000000000000000000000000000000000000001";
 
@@ -34,8 +36,7 @@ describe("Module works with factory", () => {
   async function setup() {
     const [deployer] = await ethers.getSigners();
 
-    const Evaluator = await ethers.getContractFactory("Evaluator");
-    const evaluator = await Evaluator.deploy();
+    const evaluator = await deployEvaluator();
     const evaluatorAddress = await evaluator.getAddress();
 
     const Modifier = await ethers.getContractFactory("Roles");

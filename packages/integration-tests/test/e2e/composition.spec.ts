@@ -47,8 +47,13 @@ const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
 const randomKey = () => hexlify(randomBytes(32))
 
 async function deployRoles(owner: string, avatar: string) {
+  const integrity = await (
+    await ethers.getContractFactory("Integrity")
+  ).deploy()
   const evaluator = await (
-    await ethers.getContractFactory("Evaluator")
+    await ethers.getContractFactory("Evaluator", {
+      libraries: { Integrity: await integrity.getAddress() },
+    })
   ).deploy()
   const factory = await ethers.getContractFactory("Roles")
   const roles = await factory.deploy(

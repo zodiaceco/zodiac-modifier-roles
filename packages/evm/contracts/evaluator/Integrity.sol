@@ -72,7 +72,8 @@ library Integrity {
         uint256 pluck;
     }
 
-    function enforce(ConditionFlat[] memory conditions) internal pure {
+    /// @notice Reverts unless `conditions` is a well-formed condition tree.
+    function enforce(ConditionFlat[] memory conditions) external pure {
         Node[] memory nodes = _layout(conditions);
         uint256[] memory plucks = _plucks(conditions, nodes);
 

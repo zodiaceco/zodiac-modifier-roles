@@ -119,8 +119,7 @@ describe("Core / Evaluator split", () => {
     it("allows owner to swap evaluator, emits SetEvaluator, and rejects zero address", async () => {
       const { roles, owner, nonMember } = await loadFixture(setup);
 
-      const AltEvaluator = await ethers.getContractFactory("Evaluator");
-      const alt = await AltEvaluator.deploy();
+      const alt = await deployEvaluator();
       const altAddress = await alt.getAddress();
 
       await expect(
@@ -200,8 +199,7 @@ describe("Core / Evaluator split", () => {
         .withArgs(ConditionViolationStatus.ParameterNotAllowed, 7, 4);
 
       // Swap back to a freshly deployed real Evaluator: membership, permission, and allowance balance (60) remain intact
-      const FreshEvaluator = await ethers.getContractFactory("Evaluator");
-      const fresh = await FreshEvaluator.deploy();
+      const fresh = await deployEvaluator();
       expect(await fresh.getAddress()).to.not.equal(evaluatorAddress);
       await roles.connect(owner).setEvaluator(await fresh.getAddress());
 

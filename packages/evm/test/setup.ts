@@ -13,9 +13,23 @@ import "@nomicfoundation/hardhat-network-helpers";
 
 type InvokeOptions = { value?: bigint | number; operation?: number };
 
+/**
+ * Factory options for the contracts that link the Integrity library
+ * (Evaluator, and the mocks that call it), with a freshly deployed one.
+ */
+export async function linkIntegrity(ethers: NetworkConnection["ethers"]) {
+  const Integrity = await ethers.getContractFactory("Integrity");
+  const integrity = await Integrity.deploy();
+  await integrity.waitForDeployment();
+  return { libraries: { Integrity: await integrity.getAddress() } };
+}
+
 export function createSetup({ ethers, provider }: NetworkConnection) {
   async function deployEvaluator() {
-    const Evaluator = await ethers.getContractFactory("Evaluator");
+    const Evaluator = await ethers.getContractFactory(
+      "Evaluator",
+      await linkIntegrity(ethers),
+    );
     const evaluator = await Evaluator.deploy();
     await evaluator.waitForDeployment();
     return evaluator;
