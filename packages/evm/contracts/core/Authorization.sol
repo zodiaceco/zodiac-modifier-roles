@@ -30,7 +30,9 @@ abstract contract Authorization is RolesStorage {
         bytes calldata data,
         Operation operation
     ) internal view returns (Consumption[] memory consumptions) {
-        address adapter = unwrappers[_key(to, bytes4(data))];
+        address adapter = data.length >= 4
+            ? unwrappers[_key(to, bytes4(data))]
+            : address(0);
         if (adapter == address(0)) {
             return
                 _transaction(
@@ -112,10 +114,13 @@ abstract contract Authorization is RolesStorage {
          */
         uint256 scopeConfig;
         if (clearance == Clearance.Function) {
-            scopeConfig = role.scopeConfig[
-                bytes32(bytes20(transaction.to)) |
-                    (bytes32(bytes4(data)) >> 160)
-            ];
+            // Requires a 4-byte selector: empty calldata must not right-pad to 0x00000000
+            scopeConfig = data.length >= 4
+                ? role.scopeConfig[
+                    bytes32(bytes20(transaction.to)) |
+                        (bytes32(bytes4(data)) >> 160)
+                ]
+                : 0;
         } else if (clearance == Clearance.Target) {
             scopeConfig = role.scopeConfig[
                 bytes32(bytes20(transaction.to)) | (~bytes32(0) >> 160)
@@ -128,7 +133,7 @@ abstract contract Authorization is RolesStorage {
          * allowFunctionGlobally).
          * Requires a selector, so empty-calldata calls never resolve here.
          */
-        if (scopeConfig == 0 && data.length != 0) {
+        if (scopeConfig == 0 && data.length >= 4) {
             scopeConfig = role.scopeConfig[bytes32(bytes4(data)) >> 160];
         }
 
