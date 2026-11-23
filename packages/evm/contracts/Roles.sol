@@ -150,29 +150,47 @@ contract Roles is RolesStorage, Setup, Membership, Authorization, Settlement {
         bool shouldRevert,
         bytes32 salt,
         bytes calldata signature
-    )
-        external
-        nonReentrant
-        moduleOnlySigned(
-            RoleTx.hashStruct(
+    ) external nonReentrant returns (bool success) {
+        return
+            _execWithRoleSigned(
+                RoleTx.hashStruct(
+                    to,
+                    value,
+                    data,
+                    operation,
+                    roleKey,
+                    shouldRevert,
+                    salt
+                ),
+                signature,
                 to,
                 value,
                 data,
                 operation,
                 roleKey,
-                shouldRevert,
-                salt
-            ),
-            signature
-        )
-        returns (bool success)
-    {
-        return _execWithRole(to, value, data, operation, roleKey, shouldRevert);
+                shouldRevert
+            );
     }
 
     /*//////////////////////////////////////////////////////////////
                                INTERNALS
     //////////////////////////////////////////////////////////////*/
+
+    /// @dev Carries `moduleOnlySigned` for execTransactionWithSignature, which
+    ///      has too many parameters to hold the modifier itself (stack depth).
+    ///      The modifier's arguments come first for the same reason.
+    function _execWithRoleSigned(
+        bytes32 structHash,
+        bytes calldata signature,
+        address to,
+        uint256 value,
+        bytes calldata data,
+        Operation operation,
+        bytes32 roleKey,
+        bool shouldRevert
+    ) private moduleOnlySigned(structHash, signature) returns (bool success) {
+        return _execWithRole(to, value, data, operation, roleKey, shouldRevert);
+    }
 
     function _execWithRole(
         address to,
