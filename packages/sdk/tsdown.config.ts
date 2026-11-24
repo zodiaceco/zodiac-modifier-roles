@@ -6,7 +6,6 @@ export default defineConfig([
       index: "./src/main/index.ts",
       kit: "./src/kit/index.ts",
       annotations: "./src/annotations/index.ts",
-      swaps: "./src/swaps/index.ts",
     },
     format: ["cjs", "esm"],
     outDir: "build",

@@ -25,10 +25,6 @@
       "import": "./build/kit.mjs",
       "require": "./build/kit.js"
     },
-    "./swaps": {
-      "import": "./build/swaps.mjs",
-      "require": "./build/swaps.js"
-    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -41,9 +37,6 @@
       ],
       "annotations": [
         "./build/annotations.d.ts"
-      ],
-      "swaps": [
-        "./build/swaps.d.ts"
       ]
     }
   },
@@ -65,7 +58,6 @@
     "generate": "yarn eth-sdk"
   },
   "dependencies": {
-    "@cowprotocol/sdk-order-book": "^1.0.0",
     "abitype": "^1.0.8",
     "ethers": "^6.16.0"
   },
