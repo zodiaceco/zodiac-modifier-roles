@@ -81,7 +81,6 @@ describe("Reentrancy", () => {
         checker.interface.encodeFunctionData("attack"),
         0,
         roleKey,
-        true,
       );
 
     // Verify attack() was executed

@@ -969,7 +969,7 @@ describe("AllowanceTracking", () => {
             ExecutionOptions.None,
           );
 
-        // Call with shouldRevert = true
+        // Call with maybe = true (inner call reverts)
         const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
           100,
           true,

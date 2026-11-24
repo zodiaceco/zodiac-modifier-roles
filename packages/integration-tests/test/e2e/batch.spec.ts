@@ -444,17 +444,9 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
         await (
           await roles
             .connect(member)
-            .execTransactionWithRole(
-              tx.to,
-              tx.value,
-              tx.data,
-              tx.op,
-              role,
-              true,
-              {
-                gasLimit: 10_000_000,
-              }
-            )
+            .execTransactionWithRole(tx.to, tx.value, tx.data, tx.op, role, {
+              gasLimit: 10_000_000,
+            })
         ).wait()
       } catch (e: any) {
         ok = false

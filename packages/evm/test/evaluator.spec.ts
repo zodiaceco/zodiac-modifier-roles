@@ -22,6 +22,8 @@ const iface = new Interface([
   "function fn(address)",
 ]);
 
+const NO_DEADLINE = 2n ** 64n - 1n;
+
 const ROLE_TX_TYPES = {
   RoleTx: [
     { name: "to", type: "address" },
@@ -29,8 +31,8 @@ const ROLE_TX_TYPES = {
     { name: "data", type: "bytes" },
     { name: "operation", type: "uint8" },
     { name: "roleKey", type: "bytes32" },
-    { name: "shouldRevert", type: "bool" },
     { name: "salt", type: "bytes32" },
+    { name: "deadline", type: "uint64" },
   ],
 };
 
@@ -347,14 +349,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
     });
 
@@ -382,17 +377,10 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
-      // Relayed execTransactionWithSignature signed by enabled non-member
+      // Relayed execTransactionWithRoleSigned signed by enabled non-member
       const chainId = (await ethers.provider.getNetwork()).chainId;
       const domain = {
         chainId,
@@ -405,23 +393,23 @@ describe("Core / Evaluator split", () => {
         data,
         operation: 0,
         roleKey,
-        shouldRevert: true,
         salt,
+        deadline: NO_DEADLINE,
       });
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: data,
+            operation: 0,
+            roleKey: roleKey,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
     });
 
@@ -438,14 +426,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            ZeroHash,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, ZeroHash),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
       // Future start timestamp rejected
@@ -457,40 +438,19 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "MembershipNotYetValid");
 
       // Advance into window: 1 use succeeds, 2nd call rejected
       await time.increaseTo(now + 1000);
       await roles
         .connect(nonMember)
-        .execTransactionWithRole(
-          testContractAddress,
-          0,
-          data,
-          0,
-          roleKey,
-          true,
-        );
+        .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey);
 
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
 
       // Expired membership rejected
@@ -501,14 +461,7 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles
           .connect(nonMember)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            data,
-            0,
-            roleKey,
-            true,
-          ),
+          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
       ).to.be.revertedWithCustomError(roles, "MembershipExpired");
     });
   });

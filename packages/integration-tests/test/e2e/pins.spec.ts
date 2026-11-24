@@ -259,7 +259,7 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
     try {
       const tx = await roles
         .connect(member)
-        .execTransactionWithRole(libAddr, 0, data, 1, role, true, {
+        .execTransactionWithRole(libAddr, 0, data, 1, role, {
           gasLimit: 3_000_000,
         })
       const receipt = await tx.wait()
@@ -273,13 +273,13 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
           ? e.data
           : (e.data?.data ?? e.info?.error?.data ?? "")
       const sel = typeof raw === "string" ? raw.slice(0, 10) : ""
-      if (sel === roles.interface.getError("ModuleTransactionFailed")!.selector)
-        return { refused: "library" }
-      if (sel === "")
-        return {
-          refused: "other:" + String(e.shortMessage ?? e.message).slice(0, 80),
-        }
-      return { refused: "roles" }
+      const rolesErr = sel ? roles.interface.getError(sel) : null
+      if (rolesErr && rolesErr.name !== "ModuleTransactionFailed")
+        return { refused: "roles" }
+      if (sel !== "") return { refused: "library" }
+      return {
+        refused: "other:" + String(e.shortMessage ?? e.message).slice(0, 80),
+      }
     }
   }
 

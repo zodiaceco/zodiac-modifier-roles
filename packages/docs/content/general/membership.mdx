@@ -52,13 +52,14 @@ This is useful in scenarios where a member's key may have been compromised: the 
 
 ## Relayed Transactions
 
-A member can sign a transaction instead of sending it; anyone can then submit it with `execTransactionWithSignature`.
-The member signs an EIP-712 `RoleTx(address to, uint256 value, bytes data, uint8 operation, bytes32 roleKey, bool shouldRevert, bytes32 salt)` for this Roles Modifier and chain, as an EOA (ECDSA) or as a contract (EIP-1271: the signature is the contract's address followed by its signature data).
+A member can sign a transaction instead of sending it; anyone can then submit it with `execTransactionWithRoleSigned`.
+The member signs an EIP-712 `RoleTx(address to, uint256 value, bytes data, uint8 operation, bytes32 roleKey, bytes32 salt, uint64 deadline)` for this Roles Modifier and chain, as an EOA (ECDSA) or as a contract (EIP-1271: the signature is the contract's address followed by its signature data).
 The transaction then runs as if the member had sent it, with the same membership checks.
 
-- Each signed transaction runs at most once: when it is submitted, its digest is recorded for the signer.
-  A signature does not expire otherwise.
-  To cancel one that has not been submitted, the signer calls `invalidate(digest)`.
-- Sign with `shouldRevert: true` unless the transaction is allowed to fail.
-  With `false`, a call that fails does not revert the submission, and the submitter chooses the gas: they can give the call too little gas to succeed, which uses up the signature without running the transaction.
+- Each signed transaction runs at most once: when it executes, its digest is recorded for the signer.
+- A signed transaction can execute until its `deadline` (a timestamp, inclusive); after that, submitting it reverts with `SignatureExpired()`.
+  Sign with the maximum `uint64` value for a signature that does not expire.
+- To cancel a transaction that has not executed, the signer calls `invalidate(digest)` with its EIP-712 digest.
+- If the inner transaction fails (including from insufficient gas), `execTransactionWithRoleSigned` reverts with `ModuleTransactionFailed(returnData)` and the digest is not recorded, so a relayer cannot burn a signature by under-supplying gas.
+  The signature stays valid until the transaction executes, is cancelled or passes its deadline.
 - A contract signature of exactly 65 bytes in total is first read as an ECDSA signature. If that recovers an address, that address is taken as the signer and the contract is not asked, so the signature is rejected. Contract signers should use signature data of another length.

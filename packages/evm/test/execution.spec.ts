@@ -12,11 +12,12 @@ import { createSetup } from "./setup.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
-const { loadFixture } = networkHelpers;
+const { loadFixture, time } = networkHelpers;
 const { deployRolesMod } = createSetup(connection);
 
 const iface = new Interface([
   "function fnThatMaybeReverts(uint256, bool) returns (uint256)",
+  "function fnThatRevertsEmpty()",
 ]);
 
 /**
@@ -26,10 +27,13 @@ const iface = new Interface([
  *
  * This file verifies the behavior of the module's execution entry points:
  * - Return Values: Ensuring success/failure flags and return data are propagated correctly.
- * - Error Handling: Verifying that failed inner transactions result in the expected outcome (revert vs. success=false).
- * - State Persistence: Confirming that side-effects (e.g., allowance consumption) are committed on success and discarded on failure.
+ * - Error Handling: Verifying that failed inner transactions result in the expected outcome
+ *   (success=false on IAvatar entrypoints; bubbling inner revert data on Roles-native entrypoints).
+ * - State Persistence: Confirming that side-effects (e.g., allowance consumption, consumed digests)
+ *   are committed on success and discarded on failure.
  *
- * Covers `execTransactionFromModule`, `execTransactionWithRole`, and their `ReturnData` variants.
+ * Covers `execTransactionFromModule`, `execTransactionFromModuleReturnData`,
+ * `execTransactionWithRole`, and `execTransactionWithRoleSigned`.
  */
 
 describe("Execution Mechanics", () => {
@@ -101,11 +105,19 @@ describe("Execution Mechanics", () => {
       packed,
       ExecutionOptions.None,
     );
+    await roles.allowFunctionPacked(
+      ROLE_KEY,
+      testContractAddress,
+      iface.getFunction("fnThatRevertsEmpty")!.selector,
+      "0x",
+      ExecutionOptions.None,
+    );
 
     return {
       roles,
       owner,
       invoker,
+      testContract,
       testContractAddress,
       ROLE_KEY,
       ALLOWANCE_KEY,
@@ -175,7 +187,7 @@ describe("Execution Mechanics", () => {
   });
 
   describe("execTransactionFromModuleReturnData", () => {
-    it("returns success=true and persists consumption on successful execution", async () => {
+    it("returns success=true, returnData, and persists consumption on successful execution", async () => {
       const { roles, invoker, testContractAddress, ALLOWANCE_KEY } =
         await loadFixture(setup);
 
@@ -184,7 +196,7 @@ describe("Execution Mechanics", () => {
         false,
       ]);
 
-      const [success] = await roles
+      const [success, returnData] = await roles
         .connect(invoker)
         .execTransactionFromModuleReturnData.staticCall(
           testContractAddress,
@@ -194,6 +206,9 @@ describe("Execution Mechanics", () => {
         );
 
       expect(success).to.be.true;
+      expect(
+        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
+      ).to.equal(100n);
 
       await roles
         .connect(invoker)
@@ -208,16 +223,21 @@ describe("Execution Mechanics", () => {
       expect(balance).to.equal(900);
     });
 
-    it("returns success=false and does not persist consumption on failed inner execution", async () => {
-      const { roles, invoker, testContractAddress, ALLOWANCE_KEY } =
-        await loadFixture(setup);
+    it("returns success=false, revert data, and does not persist consumption on failed inner execution", async () => {
+      const {
+        roles,
+        invoker,
+        testContract,
+        testContractAddress,
+        ALLOWANCE_KEY,
+      } = await loadFixture(setup);
 
       const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
         100,
         true,
       ]);
 
-      const [success] = await roles
+      const [success, returnData] = await roles
         .connect(invoker)
         .execTransactionFromModuleReturnData.staticCall(
           testContractAddress,
@@ -227,6 +247,9 @@ describe("Execution Mechanics", () => {
         );
 
       expect(success).to.be.false;
+      expect(returnData).to.equal(
+        testContract.interface.getError("AnError")!.selector,
+      );
 
       await roles
         .connect(invoker)
@@ -243,7 +266,7 @@ describe("Execution Mechanics", () => {
   });
 
   describe("execTransactionWithRole", () => {
-    it("succeeds and persists consumption when using correct role", async () => {
+    it("succeeds, returns returnData, and persists consumption when using correct role", async () => {
       const { roles, invoker, testContractAddress, ROLE_KEY, ALLOWANCE_KEY } =
         await loadFixture(setup);
       const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
@@ -251,7 +274,7 @@ describe("Execution Mechanics", () => {
         false,
       ]);
 
-      const success = await roles
+      const returnData = await roles
         .connect(invoker)
         .execTransactionWithRole.staticCall(
           testContractAddress,
@@ -259,21 +282,15 @@ describe("Execution Mechanics", () => {
           calldata,
           0,
           ROLE_KEY,
-          false,
         );
 
-      expect(success).to.be.true;
+      expect(
+        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
+      ).to.equal(100n);
 
       await roles
         .connect(invoker)
-        .execTransactionWithRole(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-        );
+        .execTransactionWithRole(testContractAddress, 0, calldata, 0, ROLE_KEY);
 
       const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
       expect(balance).to.equal(900);
@@ -296,50 +313,19 @@ describe("Execution Mechanics", () => {
             calldata,
             0,
             BAD_ROLE,
-            false,
           ),
       ).to.be.revertedWithCustomError(roles, "NoMembership");
     });
 
-    it("returns success=false and does not persist consumption when inner fail and shouldRevert=false", async () => {
-      const { roles, invoker, testContractAddress, ROLE_KEY, ALLOWANCE_KEY } =
-        await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        true,
-      ]);
-
-      const success = await roles
-        .connect(invoker)
-        .execTransactionWithRole.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-        );
-
-      expect(success).to.be.false;
-
-      await roles
-        .connect(invoker)
-        .execTransactionWithRole(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-        );
-
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(1000);
-    });
-
-    it("reverts and does not persist consumption when inner fail and shouldRevert=true", async () => {
-      const { roles, invoker, testContractAddress, ROLE_KEY, ALLOWANCE_KEY } =
-        await loadFixture(setup);
+    it("reverts with ModuleTransactionFailed carrying the inner error and does not persist consumption on failed inner execution", async () => {
+      const {
+        roles,
+        invoker,
+        testContract,
+        testContractAddress,
+        ROLE_KEY,
+        ALLOWANCE_KEY,
+      } = await loadFixture(setup);
       const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
         100,
         true,
@@ -354,17 +340,39 @@ describe("Execution Mechanics", () => {
             calldata,
             0,
             ROLE_KEY,
-            true,
           ),
-      ).to.be.revert(ethers);
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs(testContract.interface.encodeErrorResult("AnError"));
 
-      // Reverts bubble up, so state should be rolled back naturally (implicit in EVM, but good to check if we catch it)
       const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
       expect(balance).to.equal(1000);
     });
+
+    it("reverts with empty ModuleTransactionFailed when inner execution reverts without data", async () => {
+      const { roles, invoker, testContractAddress, ROLE_KEY } =
+        await loadFixture(setup);
+      const calldata = iface.encodeFunctionData("fnThatRevertsEmpty");
+
+      await expect(
+        roles
+          .connect(invoker)
+          .execTransactionWithRole(
+            testContractAddress,
+            0,
+            calldata,
+            0,
+            ROLE_KEY,
+          ),
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs("0x");
+    });
   });
 
-  describe("execTransactionWithSignature", () => {
+  describe("execTransactionWithRoleSigned", () => {
+    const NO_DEADLINE = 2n ** 64n - 1n;
+
     async function signedSetup() {
       const fixture = await setup();
       const [, , relayer] = await ethers.getSigners();
@@ -383,12 +391,12 @@ describe("Execution Mechanics", () => {
         { name: "data", type: "bytes" },
         { name: "operation", type: "uint8" },
         { name: "roleKey", type: "bytes32" },
-        { name: "shouldRevert", type: "bool" },
         { name: "salt", type: "bytes32" },
+        { name: "deadline", type: "uint64" },
       ],
     };
 
-    it("executes when the call is signed by an enabled module", async () => {
+    it("executes, returns returnData, and persists consumption when signed by an enabled module", async () => {
       const {
         roles,
         invoker,
@@ -403,47 +411,55 @@ describe("Execution Mechanics", () => {
         false,
       ]);
       const salt = ethers.id("salt-1");
+      const message = {
+        to: testContractAddress,
+        value: 0,
+        data: calldata,
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt,
+        deadline: NO_DEADLINE,
+      };
 
+      const domain = await buildDomain(roles);
       const signature = await invoker.signTypedData(
-        await buildDomain(roles),
+        domain,
         roleTxTypes,
-        {
-          to: testContractAddress,
-          value: 0,
-          data: calldata,
-          operation: 0,
-          roleKey: ROLE_KEY,
-          shouldRevert: false,
-          salt,
-        },
+        message,
       );
+      const expectedHash = TypedDataEncoder.hash(domain, roleTxTypes, message);
 
-      const expectedHash = TypedDataEncoder.hash(
-        await buildDomain(roles),
-        roleTxTypes,
-        {
-          to: testContractAddress,
-          value: 0,
-          data: calldata,
-          operation: 0,
-          roleKey: ROLE_KEY,
-          shouldRevert: false,
-          salt,
-        },
-      );
+      const returnData = await roles
+        .connect(relayer)
+        .execTransactionWithRoleSigned.staticCall(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        );
+      expect(
+        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
+      ).to.equal(100n);
+
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            false,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       )
         .to.emit(roles, "HashExecuted")
         .withArgs(expectedHash);
@@ -472,24 +488,24 @@ describe("Execution Mechanics", () => {
           data: calldata,
           operation: 0,
           roleKey: ROLE_KEY,
-          shouldRevert: false,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            false,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
     });
 
@@ -512,37 +528,37 @@ describe("Execution Mechanics", () => {
           data: calldata,
           operation: 0,
           roleKey: ROLE_KEY,
-          shouldRevert: false,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
-      await roles
-        .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-          salt,
-          signature,
-        );
+      await roles.connect(relayer).execTransactionWithRoleSigned(
+        {
+          to: testContractAddress,
+          value: 0,
+          data: calldata,
+          operation: 0,
+          roleKey: ROLE_KEY,
+          salt: salt,
+          deadline: NO_DEADLINE,
+        },
+        signature,
+      );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            false,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "HashAlreadyConsumed");
     });
 
@@ -572,171 +588,223 @@ describe("Execution Mechanics", () => {
           data: calldata,
           operation: 0,
           roleKey: ROLE_KEY,
-          shouldRevert: false,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            otherRoleKey,
-            false,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: otherRoleKey,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
 
-      await roles
-        .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-          salt,
-          signature,
-        );
-    });
-
-    it("rejects changing shouldRevert after signing", async () => {
-      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
-        await loadFixture(signedSetup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
-      const salt = ethers.id("salt-should-revert-substitution");
-      const signature = await invoker.signTypedData(
-        await buildDomain(roles),
-        roleTxTypes,
+      await roles.connect(relayer).execTransactionWithRoleSigned(
         {
           to: testContractAddress,
           value: 0,
           data: calldata,
           operation: 0,
           roleKey: ROLE_KEY,
-          shouldRevert: false,
-          salt,
+          salt: salt,
+          deadline: NO_DEADLINE,
         },
+        signature,
       );
-
-      await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            true,
-            salt,
-            signature,
-          ),
-      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
-
-      await roles
-        .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-          salt,
-          signature,
-        );
     });
 
-    it("applies the signed failure and consumption policy", async () => {
-      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
-        await loadFixture(signedSetup);
+    it("reverts with ModuleTransactionFailed and rolls back digest consumption on failed inner execution", async () => {
+      const {
+        roles,
+        invoker,
+        relayer,
+        testContract,
+        testContractAddress,
+        ROLE_KEY,
+        ALLOWANCE_KEY,
+      } = await loadFixture(signedSetup);
       const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
         100,
         true,
       ]);
       const domain = await buildDomain(roles);
 
-      const nonRevertingSalt = ethers.id("salt-failure-non-reverting");
-      const nonRevertingMessage = {
+      const salt = ethers.id("salt-failure");
+      const message = {
         to: testContractAddress,
         value: 0,
         data: calldata,
         operation: 0,
         roleKey: ROLE_KEY,
-        shouldRevert: false,
-        salt: nonRevertingSalt,
+        salt,
+        deadline: NO_DEADLINE,
       };
-      const nonRevertingHash = TypedDataEncoder.hash(
+      const hash = TypedDataEncoder.hash(domain, roleTxTypes, message);
+      const signature = await invoker.signTypedData(
         domain,
         roleTxTypes,
-        nonRevertingMessage,
-      );
-      const nonRevertingSignature = await invoker.signTypedData(
-        domain,
-        roleTxTypes,
-        nonRevertingMessage,
+        message,
       );
 
+      await expect(
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs(testContract.interface.encodeErrorResult("AnError"));
+      expect(await roles.consumed(invoker.address, hash)).to.equal(false);
+      expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
+        1000,
+      );
+
+      const emptySalt = ethers.id("salt-failure-empty");
+      const emptyCalldata = iface.encodeFunctionData("fnThatRevertsEmpty");
+      const emptyMessage = {
+        to: testContractAddress,
+        value: 0,
+        data: emptyCalldata,
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt: emptySalt,
+        deadline: NO_DEADLINE,
+      };
+      const emptyHash = TypedDataEncoder.hash(
+        domain,
+        roleTxTypes,
+        emptyMessage,
+      );
+      const emptySignature = await invoker.signTypedData(
+        domain,
+        roleTxTypes,
+        emptyMessage,
+      );
+
+      await expect(
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: emptyCalldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: emptySalt,
+            deadline: NO_DEADLINE,
+          },
+          emptySignature,
+        ),
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs("0x");
+      expect(await roles.consumed(invoker.address, emptyHash)).to.equal(false);
+    });
+
+    it("executes up to the deadline and reverts SignatureExpired after it", async () => {
+      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
+        await loadFixture(signedSetup);
+      const domain = await buildDomain(roles);
+      const deadline = (await time.latest()) + 100;
+      const roleTx = (salt: string) => ({
+        to: testContractAddress,
+        value: 0,
+        data: iface.encodeFunctionData("fnThatMaybeReverts", [100, false]),
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt,
+        deadline,
+      });
+      const onTime = roleTx(ethers.id("salt-on-time"));
+      const late = roleTx(ethers.id("salt-late"));
+
+      await time.setNextBlockTimestamp(deadline);
       await roles
         .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          false,
-          nonRevertingSalt,
-          nonRevertingSignature,
+        .execTransactionWithRoleSigned(
+          onTime,
+          await invoker.signTypedData(domain, roleTxTypes, onTime),
         );
-      expect(await roles.consumed(invoker.address, nonRevertingHash)).to.equal(
-        true,
-      );
 
-      const revertingSalt = ethers.id("salt-failure-reverting");
-      const revertingMessage = {
-        ...nonRevertingMessage,
-        shouldRevert: true,
-        salt: revertingSalt,
+      await expect(
+        roles
+          .connect(relayer)
+          .execTransactionWithRoleSigned(
+            late,
+            await invoker.signTypedData(domain, roleTxTypes, late),
+          ),
+      ).to.be.revertedWithCustomError(roles, "SignatureExpired");
+    });
+
+    it("rejects changing the deadline after signing", async () => {
+      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
+        await loadFixture(signedSetup);
+      const roleTx = {
+        to: testContractAddress,
+        value: 0,
+        data: iface.encodeFunctionData("fnThatMaybeReverts", [100, false]),
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt: ethers.id("salt-deadline"),
+        deadline: (await time.latest()) + 100,
       };
-      const revertingHash = TypedDataEncoder.hash(
-        domain,
+      const signature = await invoker.signTypedData(
+        await buildDomain(roles),
         roleTxTypes,
-        revertingMessage,
-      );
-      const revertingSignature = await invoker.signTypedData(
-        domain,
-        roleTxTypes,
-        revertingMessage,
+        roleTx,
       );
 
       await expect(
         roles
           .connect(relayer)
-          .execTransactionWithSignature(
+          .execTransactionWithRoleSigned(
+            { ...roleTx, deadline: NO_DEADLINE },
+            signature,
+          ),
+      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
+    });
+  });
+
+  describe("default role", () => {
+    it("reverts NoDefaultRole on both IAvatar entrypoints when none is set", async () => {
+      const { roles, invoker, testContractAddress } = await loadFixture(setup);
+      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
+        100,
+        false,
+      ]);
+      await roles.setDefaultRole(invoker.address, ethers.ZeroHash);
+
+      await expect(
+        roles
+          .connect(invoker)
+          .execTransactionFromModule(testContractAddress, 0, calldata, 0),
+      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
+      await expect(
+        roles
+          .connect(invoker)
+          .execTransactionFromModuleReturnData(
             testContractAddress,
             0,
             calldata,
             0,
-            ROLE_KEY,
-            true,
-            revertingSalt,
-            revertingSignature,
           ),
-      ).to.be.revertedWithCustomError(roles, "ModuleTransactionFailed");
-      expect(await roles.consumed(invoker.address, revertingHash)).to.equal(
-        false,
-      );
+      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
     });
   });
 });

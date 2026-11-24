@@ -18,12 +18,66 @@ import "./Storage.sol";
  * @author  gnosisguild
  */
 abstract contract Settlement is RolesStorage {
+    /**
+     * @dev Settles allowance consumption and membership updates after a successful execution.
+     *
+     * @param sender The address that initiated the transaction
+     * @param roleKey The role key used for execution
+     * @param consumptions Allowance consumption records to settle
+     */
+    function _settle(
+        address sender,
+        bytes32 roleKey,
+        Consumption[] memory consumptions
+    ) internal {
+        uint256 count = consumptions.length;
+        for (uint256 i; i < count; ++i) {
+            Consumption memory consumption = consumptions[i];
+
+            uint128 updatedBalance = _consume(
+                consumption.allowanceKey,
+                consumption.consumed
+            );
+
+            emit ConsumeAllowance(
+                consumption.allowanceKey,
+                consumption.consumed,
+                updatedBalance
+            );
+        }
+
+        /*
+         * Re-read membership after execution, in case the call revoked,
+         * renounced or updated it.
+         *
+         * Nothing to settle if it was cleared or has unlimited uses.
+         */
+        uint256 membership = roles[roleKey].members[sender];
+        if (membership == 0 || (~membership << 128) == 0) return;
+
+        uint128 usesLeft = uint128(membership);
+        uint256 nextMembership = usesLeft <= 1 ? 0 : membership - 1;
+
+        roles[roleKey].members[sender] = nextMembership;
+        if (nextMembership != 0) {
+            emit UpdateRole(
+                roleKey,
+                sender,
+                uint64(nextMembership >> 192),
+                uint64(nextMembership >> 128),
+                uint128(nextMembership)
+            );
+        } else {
+            emit RevokeRole(roleKey, sender);
+        }
+    }
+
     /// @dev Calculates an allowance's accrued balance and timestamp at
     ///      `blockTimestamp` from Core storage.
     function _accrue(
         bytes32 allowanceKey,
         uint64 blockTimestamp
-    ) internal view returns (uint128 balance, uint64 timestamp) {
+    ) private view returns (uint128 balance, uint64 timestamp) {
         Allowance memory a = allowances[allowanceKey];
 
         // No refill configured.
@@ -52,56 +106,9 @@ abstract contract Settlement is RolesStorage {
             : a.maxRefill;
     }
 
-    /**
-     * @dev Settles allowance consumption and membership updates after a successful execution.
-     *
-     * @param sender The address that initiated the transaction
-     * @param roleKey The role key used for execution
-     * @param nextMembership Packed membership data. uint256.max skips membership update
-     * @param consumptions Allowance consumption records to settle
-     */
-    function _settle(
-        address sender,
-        bytes32 roleKey,
-        uint256 nextMembership,
-        Consumption[] memory consumptions
-    ) internal {
-        uint256 count = consumptions.length;
-        for (uint256 i; i < count; ++i) {
-            Consumption memory consumption = consumptions[i];
-
-            uint128 updatedBalance = _persistConsumption(
-                consumption.allowanceKey,
-                consumption.consumed
-            );
-
-            emit ConsumeAllowance(
-                consumption.allowanceKey,
-                consumption.consumed,
-                updatedBalance
-            );
-        }
-
-        // uint256.max == noop
-        if (nextMembership == type(uint256).max) return;
-
-        roles[roleKey].members[sender] = nextMembership;
-        if (nextMembership != 0) {
-            emit UpdateRole(
-                roleKey,
-                sender,
-                uint64(nextMembership >> 192),
-                uint64(nextMembership >> 128),
-                uint128(nextMembership)
-            );
-        } else {
-            emit RevokeRole(roleKey, sender);
-        }
-    }
-
     /// @dev Re-accrues the allowance from Core storage, deducts `consumed`,
     ///      writes back balance and timestamp, and returns the new balance.
-    function _persistConsumption(
+    function _consume(
         bytes32 allowanceKey,
         uint128 consumed
     ) private returns (uint128 updatedBalance) {
@@ -138,5 +145,50 @@ abstract contract Settlement is RolesStorage {
                 )
             )
         }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                VIEWS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Returns a module's membership of a role.
+    /// @param module Address of the module
+    /// @param roleKey Identifier of the role
+    /// @return active Whether the module can currently execute under the
+    ///         role: it is enabled and the membership is within its validity
+    ///         window
+    /// @return start Timestamp from which the membership is valid
+    /// @return end Timestamp until which it is valid (uint64 max = no expiry)
+    /// @return usesLeft Remaining uses (uint128 max = unlimited)
+    function membershipOf(
+        address module,
+        bytes32 roleKey
+    )
+        external
+        view
+        returns (bool active, uint64 start, uint64 end, uint128 usesLeft)
+    {
+        uint256 membership = roles[roleKey].members[module];
+        start = uint64(membership >> 192);
+        end = uint64(membership >> 128);
+        usesLeft = uint128(membership);
+
+        active =
+            roleKey != 0 &&
+            membership != 0 &&
+            block.timestamp >= start &&
+            block.timestamp <= end &&
+            isModuleEnabled(module);
+    }
+
+    /// @dev Returns the accrued allowance balance at current block.timestamp.
+    ///      Read by the Evaluator (see IRolesCore).
+    /// @param allowanceKey The allowance key.
+    /// @return balance The accrued balance.
+    /// @return timestamp The timestamp of the last accrual point.
+    function accruedAllowance(
+        bytes32 allowanceKey
+    ) external view returns (uint128 balance, uint64 timestamp) {
+        return _accrue(allowanceKey, uint64(block.timestamp));
     }
 }

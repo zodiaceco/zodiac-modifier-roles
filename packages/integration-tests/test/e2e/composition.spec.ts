@@ -178,8 +178,8 @@ describe("Roles composition, end to end", () => {
       data: "0x",
       operation: 0,
       roleKey: roleB,
-      shouldRevert: true,
       salt,
+      deadline: 2n ** 64n - 1n,
     }
     const digest = TypedDataEncoder.hash(
       {
@@ -193,8 +193,8 @@ describe("Roles composition, end to end", () => {
           { name: "data", type: "bytes" },
           { name: "operation", type: "uint8" },
           { name: "roleKey", type: "bytes32" },
-          { name: "shouldRevert", type: "bool" },
           { name: "salt", type: "bytes32" },
+          { name: "deadline", type: "uint64" },
         ],
       },
       message
@@ -204,21 +204,11 @@ describe("Roles composition, end to end", () => {
       0,
       libIface.encodeFunctionData("signMessage", [digest]),
       1,
-      roleS,
-      true
+      roleS
     )
 
     // Anyone relays it with M's contract signature (address, empty payload).
-    await R.connect(relayer).execTransactionWithSignature(
-      message.to,
-      message.value,
-      message.data,
-      message.operation,
-      message.roleKey,
-      message.shouldRevert,
-      message.salt,
-      safeM
-    )
+    await R.connect(relayer).execTransactionWithRoleSigned(message, safeM)
     expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
   })
 
@@ -295,8 +285,7 @@ describe("Roles composition, end to end", () => {
         0,
         batchToZero,
         1,
-        roleP,
-        true
+        roleP
       )
     )
       .to.be.revertedWithCustomError(R, "AllowanceExceeded")
@@ -327,14 +316,13 @@ describe("Roles composition, end to end", () => {
       0,
       batchToFifty,
       1,
-      roleP,
-      true
+      roleP
     )
     expect(await ethers.provider.getBalance(Y)).to.equal(10n)
     expect((await R.allowances(K)).balance).to.equal(40n)
   })
 
-  it("settlement restores a limited membership the executed call revoked", async () => {
+  it("settlement does not restore a limited membership the executed call revoked", async () => {
     await deployMastercopies(ethers)
     const [ownerA, member] = await ethers.getSigners()
     const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
@@ -357,10 +345,9 @@ describe("Roles composition, end to end", () => {
       0,
       R.interface.encodeFunctionData("revokeRole", [memberAddr, roleP]),
       0,
-      roleP,
-      true
+      roleP
     )
-    // revoked by the call, restored (with one use less) by settlement
-    expect(await R.isMember(roleP, memberAddr)).to.equal(true)
+    // revoked by the call: settlement reads the membership after execution
+    expect((await R.membershipOf(memberAddr, roleP)).active).to.equal(false)
   })
 })

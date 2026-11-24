@@ -29,8 +29,7 @@ contract ReentrancyChecker {
                 0,
                 abi.encodeCall(this.doNothing, ()),
                 Operation.Call,
-                roleKey,
-                false
+                roleKey
             )
         {
             // If we get here, reentrancy was NOT blocked

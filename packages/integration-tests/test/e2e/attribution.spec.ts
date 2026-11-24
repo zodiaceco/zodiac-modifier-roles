@@ -12,8 +12,8 @@
  *   staticcall, during authentication);
  * - the signature parser: short signatures, the module list's sentinel,
  *   an EOA named as a contract signer, 65-byte contract signatures, replay,
- *   another Roles Modifier's digest, cancellation, a failed call with
- *   `shouldRevert` false or true;
+ *   another Roles Modifier's digest, cancellation, a failed call reverting
+ *   with ModuleTransactionFailed and rolling back digest consumption;
  * - memberships: a batch is one use; a module that renounces during its
  *   own execution; a disabled module with a membership;
  * - nesting through another Roles Modifier on the same Safe.
@@ -73,10 +73,12 @@ const Options = { None: 0, Send: 1, DelegateCall: 2, Both: 3 }
 const SENTINEL = "0x0000000000000000000000000000000000000001"
 const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
 const randomKey = () => hexlify(randomBytes(32))
-/** Enough gas for every call: with an estimated limit, a call that fails
- *  without reverting the transaction (`shouldRevert` false) can be given
- *  too little gas (see the gas case below). */
+/** Enough gas for every call: with an estimated limit, a call through
+ *  non-reverting IAvatar entrypoints (`execTransactionFromModule*`) that fails
+ *  without reverting can be given too little gas. */
 const G = { gasLimit: 15_000_000 }
+
+const NO_DEADLINE = 2n ** 64n - 1n
 
 const ROLE_TX = {
   RoleTx: [
@@ -85,8 +87,8 @@ const ROLE_TX = {
     { name: "data", type: "bytes" },
     { name: "operation", type: "uint8" },
     { name: "roleKey", type: "bytes32" },
-    { name: "shouldRevert", type: "bool" },
     { name: "salt", type: "bytes32" },
+    { name: "deadline", type: "uint64" },
   ],
 }
 type RoleTx = {
@@ -95,8 +97,8 @@ type RoleTx = {
   data: string
   operation: number
   roleKey: string
-  shouldRevert: boolean
   salt: string
+  deadline: bigint
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -272,8 +274,8 @@ const errorName = (w: World, e: any): string => {
   return `unparsed: ${e?.shortMessage ?? e?.message ?? e}`
 }
 
-/** The outcome of a transaction: "ok" / "false" (the avatar's call failed,
- *  `shouldRevert` false) or the custom error. */
+/** The outcome of a transaction: "ok" / "false" (the avatar's call failed on
+ *  an IAvatar entrypoint) or the custom error. */
 async function outcome(
   w: World,
   send: () => Promise<any>
@@ -309,8 +311,8 @@ async function reentryPlan(w: World) {
     data: "0x",
     operation: 0,
     roleKey: w.role1,
-    shouldRevert: false,
     salt: randomKey(),
+    deadline: NO_DEADLINE,
   }
   const sig = concat([w.addr.S, hexlify(randomBytes(10))])
   return [
@@ -320,7 +322,6 @@ async function reentryPlan(w: World) {
       "0x",
       0,
       w.role1,
-      false,
     ]),
     R.encodeFunctionData("execTransactionFromModule", [w.okT, 0, "0x", 0]),
     R.encodeFunctionData("execTransactionFromModuleReturnData", [
@@ -329,16 +330,7 @@ async function reentryPlan(w: World) {
       "0x",
       0,
     ]),
-    R.encodeFunctionData("execTransactionWithSignature", [
-      m.to,
-      m.value,
-      m.data,
-      m.operation,
-      m.roleKey,
-      m.shouldRevert,
-      m.salt,
-      sig,
-    ]),
+    R.encodeFunctionData("execTransactionWithRoleSigned", [m, sig]),
   ]
 }
 
@@ -397,7 +389,6 @@ describe("attribution and reentrancy, end to end", () => {
           "0x12345678",
           0,
           role1,
-          true,
         ])
       )
     )
@@ -427,14 +418,7 @@ describe("attribution and reentrancy, end to end", () => {
     )
     await R.connect(ownerA).grantRole(addr.e1, role1, 0, 0, 0)
     const r2 = await outcome(w, () =>
-      R.connect(w.e1).execTransactionWithRole(
-        addr.H,
-        0,
-        "0x12345678",
-        0,
-        role1,
-        true
-      )
+      R.connect(w.e1).execTransactionWithRole(addr.H, 0, "0x12345678", 0, role1)
     )
     expect(r2.result).to.equal("ok")
 
@@ -450,7 +434,7 @@ describe("attribution and reentrancy, end to end", () => {
       "execTransactionFromModule",
       "execTransactionFromModuleReturnData",
       "execTransactionWithRole",
-      "execTransactionWithSignature",
+      "execTransactionWithRoleSigned",
     ])
       expect(table[f]).to.equal("Reentrancy")
     console.log(
@@ -479,7 +463,6 @@ describe("attribution and reentrancy, end to end", () => {
         "0x",
         0,
         role1,
-        false,
       ])
     )
     await S.setMode(4)
@@ -489,22 +472,13 @@ describe("attribution and reentrancy, end to end", () => {
       data: "0x",
       operation: 0,
       roleKey: role1,
-      shouldRevert: true,
       salt: randomKey(),
+      deadline: NO_DEADLINE,
     }
     const sig = concat([addr.S, "0xabcdef"])
     const before = await ethers.provider.getBalance(okT)
     const r = await outcome(w, () =>
-      R.connect(relayer).execTransactionWithSignature(
-        m.to,
-        m.value,
-        m.data,
-        m.operation,
-        m.roleKey,
-        m.shouldRevert,
-        m.salt,
-        sig
-      )
+      R.connect(relayer).execTransactionWithRoleSigned(m, sig)
     )
     // mode 4 answers valid only if the reentry failed
     expect(r.result).to.equal("ok")
@@ -524,25 +498,12 @@ describe("attribution and reentrancy, end to end", () => {
       data: "0x",
       operation: 0,
       roleKey: role1,
-      shouldRevert: true,
       salt: randomKey(),
+      deadline: NO_DEADLINE,
       ...over,
     })
     const relay = (r: any, m: RoleTx, sig: string) =>
-      outcome(w, () =>
-        r
-          .connect(relayer)
-          .execTransactionWithSignature(
-            m.to,
-            m.value,
-            m.data,
-            m.operation,
-            m.roleKey,
-            m.shouldRevert,
-            m.salt,
-            sig
-          )
-      )
+      outcome(w, () => r.connect(relayer).execTransactionWithRoleSigned(m, sig))
 
     // too short: no signer
     expect((await relay(R, tx(), "0x" + "11".repeat(19))).result).to.equal(
@@ -613,22 +574,17 @@ describe("attribution and reentrancy, end to end", () => {
         .result
     ).to.equal("ok")
 
-    // a failed call with shouldRevert false: the digest is used up, nothing
-    // else changes; with shouldRevert true: everything reverts
-    const fail = tx({ to: addr.Rev, value: 0n, shouldRevert: false })
+    // a failed relayed call reverts with ModuleTransactionFailed and rolls back digest consumption
+    const fail = tx({ to: addr.Rev, value: 0n })
     await R.connect(ownerA).scopeTarget(role1, addr.Rev)
     await R.connect(ownerA).allowTarget(role1, addr.Rev, [], Options.None)
-    const fsig = await w.sign(e1, addr.R, fail)
-    expect((await relay(R, fail, fsig)).result).to.equal("false")
-    expect(await R.consumed(addr.e1, w.digest(addr.R, fail))).to.equal(true)
-    const failR = tx({ to: addr.Rev, value: 0n, shouldRevert: true })
     expect(
-      (await relay(R, failR, await w.sign(e1, addr.R, failR))).result
+      (await relay(R, fail, await w.sign(e1, addr.R, fail))).result
     ).to.equal("ModuleTransactionFailed")
-    expect(await R.consumed(addr.e1, w.digest(addr.R, failR))).to.equal(false)
+    expect(await R.consumed(addr.e1, w.digest(addr.R, fail))).to.equal(false)
   })
 
-  it("with shouldRevert false, the gas limit decides whether a relayed call runs; the signature is used either way", async () => {
+  it("under-supplying gas on a relayed call reverts instead of burning the signature", async () => {
     const w = await world()
     const { R, H, ownerA, e1, role1, addr, relayer } = w
     await R.connect(ownerA).grantRole(addr.e1, role1, 0, 0, 0)
@@ -639,30 +595,20 @@ describe("attribution and reentrancy, end to end", () => {
       plan,
       false
     )
-    const relayWithGas = async (shouldRevert: boolean, gasLimit: number) => {
+    const relayWithGas = async (gasLimit: number) => {
       const m: RoleTx = {
         to: addr.H,
         value: 0n,
         data: "0x12345678",
         operation: 0,
         roleKey: role1,
-        shouldRevert,
         salt: randomKey(),
+        deadline: NO_DEADLINE,
       }
       const sig = await w.sign(e1, addr.R, m)
       const runs = await H.runs()
       const r = await outcome(w, () =>
-        R.connect(relayer).execTransactionWithSignature(
-          m.to,
-          m.value,
-          m.data,
-          m.operation,
-          m.roleKey,
-          m.shouldRevert,
-          m.salt,
-          sig,
-          { gasLimit }
-        )
+        R.connect(relayer).execTransactionWithRoleSigned(m, sig, { gasLimit })
       )
       return {
         result: r.result,
@@ -670,24 +616,25 @@ describe("attribution and reentrancy, end to end", () => {
         consumed: await R.consumed(addr.e1, w.digest(addr.R, m)),
       }
     }
-    /** The outcome at the lowest gas limit (in steps of 2000) at which the
-     *  transaction does not revert. */
-    const lowest = async (shouldRevert: boolean) => {
-      for (let g = 40_000; g < 3_000_000; g += 2_000) {
-        const r = await relayWithGas(shouldRevert, g)
-        if (r.result === "ok" || r.result === "false") return { ...r, gas: g }
+    /** Try gas limits in steps of 2000 until the transaction succeeds:
+     *  every failing limit must revert with neither the call running nor
+     *  the digest consumed. */
+    let succeeded:
+      | { result: string; ran: boolean; consumed: boolean; gas: number }
+      | undefined
+    for (let g = 40_000; g < 3_000_000; g += 2_000) {
+      const r = await relayWithGas(g)
+      if (r.result === "ok") {
+        succeeded = { ...r, gas: g }
+        break
       }
-      throw new Error("no gas limit worked")
+      expect(r.result, `gas ${g}`).to.not.equal("false")
+      expect(r.ran, `gas ${g}`).to.equal(false)
+      expect(r.consumed, `gas ${g}`).to.equal(false)
     }
-    // shouldRevert false: the relayer can pick a limit at which the call
-    // fails for lack of gas, and the signature is used up
-    const f = await lowest(false)
-    expect(f).to.include({ result: "false", ran: false, consumed: true })
-    // shouldRevert true: either the call runs or nothing happens
-    const t = await lowest(true)
-    expect(t).to.include({ result: "ok", ran: true, consumed: true })
+    expect(succeeded).to.include({ result: "ok", ran: true, consumed: true })
     console.log(
-      `      lowest gas limits: ${f.gas} (call fails, signature used), ${t.gas} (call runs)`
+      `      lowest gas limit: ${succeeded!.gas} (call runs; every lower limit reverted without burning digest)`
     )
   })
 
@@ -716,20 +663,13 @@ describe("attribution and reentrancy, end to end", () => {
       { to: okT, value: 3n },
     ])
     const b = await outcome(w, () =>
-      R.connect(e1).execTransactionWithRole(
-        addr.multiSend,
-        0,
-        batch,
-        1,
-        role1,
-        true
-      )
+      R.connect(e1).execTransactionWithRole(addr.multiSend, 0, batch, 1, role1)
     )
     expect(b.result).to.equal("ok")
     expect(usesOf(b.receipt)).to.deep.equal(["2"])
 
-    // H renounces role 1 while executing with it (the first event): with
-    // limited uses, settlement writes the membership back (uses - 1)
+    // H renounces role 1 while executing with it: settlement reads the
+    // membership after execution, so the renouncement stays
     await R.connect(ownerA).grantRole(addr.H, role1, 0, 0, 5)
     const renounce = R.interface.encodeFunctionData("renounceRole", [role1])
     await H.setPlan([addr.R], [renounce], false)
@@ -739,19 +679,18 @@ describe("attribution and reentrancy, end to end", () => {
       "0x12345678",
       0,
       role1,
-      true,
     ])
     const r1 = await outcome(w, () => H.act(addr.R, call))
     expect(r1.result).to.equal("ok")
     expect(await H.results(0)).to.equal("0x00000000")
-    expect(usesOf(r1.receipt)).to.deep.equal(["revoked", "4"])
-    expect(await R.isMember(role1, addr.H)).to.equal(true)
-    // with unlimited uses settlement writes nothing: the renouncement stays
+    expect(usesOf(r1.receipt)).to.deep.equal(["revoked"])
+    expect((await R.membershipOf(addr.H, role1)).active).to.equal(false)
+    // the same with unlimited uses
     await R.connect(ownerA).grantRole(addr.H, role1, 0, 0, 0)
     const r2 = await outcome(w, () => H.act(addr.R, call))
     expect(r2.result).to.equal("ok")
     expect(usesOf(r2.receipt)).to.deep.equal(["revoked"])
-    expect(await R.isMember(role1, addr.H)).to.equal(false)
+    expect((await R.membershipOf(addr.H, role1)).active).to.equal(false)
 
     // a module disabled after the grant cannot execute, directly or signed
     await R.connect(ownerA).grantRole(addr.e1, role1, 0, 0, 0)
@@ -763,11 +702,12 @@ describe("attribution and reentrancy, end to end", () => {
       i === 0 ? SENTINEL : mods[i - 1],
       addr.e1
     )
-    expect(await R.isMember(role1, addr.e1)).to.equal(true)
+    expect((await R.membershipOf(addr.e1, role1)).active).to.equal(false)
+    expect((await R.membershipOf(addr.e1, role1)).usesLeft).to.not.equal(0n)
     expect(
       (
         await outcome(w, () =>
-          R.connect(e1).execTransactionWithRole(okT, 0, "0x", 0, role1, true)
+          R.connect(e1).execTransactionWithRole(okT, 0, "0x", 0, role1)
         )
       ).result
     ).to.equal("NotAuthorized")
@@ -777,23 +717,14 @@ describe("attribution and reentrancy, end to end", () => {
       data: "0x",
       operation: 0,
       roleKey: role1,
-      shouldRevert: true,
       salt: randomKey(),
+      deadline: NO_DEADLINE,
     }
     const sig = await w.sign(e1, addr.R, m)
     expect(
       (
         await outcome(w, () =>
-          R.connect(w.relayer).execTransactionWithSignature(
-            m.to,
-            m.value,
-            m.data,
-            m.operation,
-            m.roleKey,
-            m.shouldRevert,
-            m.salt,
-            sig
-          )
+          R.connect(w.relayer).execTransactionWithRoleSigned(m, sig)
         )
       ).result
     ).to.equal("NotAuthorized")
@@ -811,18 +742,10 @@ describe("attribution and reentrancy, end to end", () => {
       "0x",
       0,
       role1,
-      true,
     ])
     await H.setPlan([addr.R2], [inner], false)
     const r = await outcome(w, () =>
-      R.connect(e1).execTransactionWithRole(
-        addr.H,
-        0,
-        "0x12345678",
-        0,
-        role1,
-        true
-      )
+      R.connect(e1).execTransactionWithRole(addr.H, 0, "0x12345678", 0, role1)
     )
     expect(r.result).to.equal("ok")
     expect(await H.results(0)).to.equal("0x00000000")
@@ -948,7 +871,7 @@ describe("attribution and reentrancy, end to end", () => {
       module: string,
       role: string,
       c: Call,
-      shouldRevert: boolean
+      revertsOnFail: boolean
     ) => {
       if (role === ZeroHash) return { error: "NoMembership" }
       const mem = model.members.get(memKey(role, module))
@@ -974,7 +897,7 @@ describe("attribution and reentrancy, end to end", () => {
         }
       }
       const success = c.kind !== "revert"
-      if (!success && shouldRevert) return { error: "ModuleTransactionFailed" }
+      if (!success && revertsOnFail) return { error: "ModuleTransactionFailed" }
       return { success, charge, mem }
     }
 
@@ -1147,7 +1070,6 @@ describe("attribution and reentrancy, end to end", () => {
                 "0x",
                 0,
                 role1,
-                false,
               ])
             )
           )
@@ -1162,7 +1084,7 @@ describe("attribution and reentrancy, end to end", () => {
           "returnData",
         ] as const)
         const c = randomCall()
-        const shouldRevert = entry === "withRole" ? chance(0.5) : false
+        const revertsOnFail = entry === "withRole"
         const role =
           entry === "withRole"
             ? pick(EXEC_ROLES)
@@ -1175,7 +1097,6 @@ describe("attribution and reentrancy, end to end", () => {
                 c.data,
                 c.operation,
                 role,
-                shouldRevert,
               ])
             : R.interface.encodeFunctionData(
                 entry === "fromModule"
@@ -1183,9 +1104,11 @@ describe("attribution and reentrancy, end to end", () => {
                   : "execTransactionFromModuleReturnData",
                 [c.to, c.value, c.data, c.operation]
               )
-        const predicted = model.enabled.has(module.toLowerCase())
-          ? predictExec(module, role, c, shouldRevert)
-          : { error: "NotAuthorized" }
+        const predicted = !model.enabled.has(module.toLowerCase())
+          ? { error: "NotAuthorized" }
+          : entry !== "withRole" && role === ZeroHash
+            ? { error: "NoDefaultRole" }
+            : predictExec(module, role, c, revertsOnFail)
         const r = await at(() =>
           outcome(w, () =>
             m === "x"
@@ -1205,7 +1128,6 @@ describe("attribution and reentrancy, end to end", () => {
       } else if (a < 95) {
         // relayed execution
         const c = randomCall()
-        const shouldRevert = chance(0.5)
         const role = pick(EXEC_ROLES)
         const m: RoleTx = {
           to: c.to,
@@ -1213,8 +1135,8 @@ describe("attribution and reentrancy, end to end", () => {
           data: c.data,
           operation: c.operation,
           roleKey: role,
-          shouldRevert,
           salt: randomKey(),
+          deadline: NO_DEADLINE,
         }
         const kind = pick([
           "e1",
@@ -1292,21 +1214,10 @@ describe("attribution and reentrancy, end to end", () => {
           predicted = { error: "NotAuthorized" }
         else if (model.consumed.has(`${signer.toLowerCase()}:${d}`))
           predicted = { error: "HashAlreadyConsumed" }
-        else
-          predicted = predictExec(signer, sub.roleKey, call, sub.shouldRevert)
+        else predicted = predictExec(signer, sub.roleKey, call, true)
         const r = await at(() =>
           outcome(w, () =>
-            R.connect(relayer).execTransactionWithSignature(
-              sub.to,
-              sub.value,
-              sub.data,
-              sub.operation,
-              sub.roleKey,
-              sub.shouldRevert,
-              sub.salt,
-              sig,
-              G
-            )
+            R.connect(relayer).execTransactionWithRoleSigned(sub, sig, G)
           )
         )
         await check(
@@ -1318,7 +1229,7 @@ describe("attribution and reentrancy, end to end", () => {
           call,
           sentBefore
         )
-        if (signer && (r.result === "ok" || r.result === "false")) {
+        if (signer && r.result === "ok") {
           model.consumed.add(`${signer.toLowerCase()}:${d}`)
           digests.push({ signer, digest: d })
           if (kind !== "replay") used.push({ m: sub, sig, signer, call } as any)
@@ -1332,8 +1243,8 @@ describe("attribution and reentrancy, end to end", () => {
           data: "0x",
           operation: 0,
           roleKey: role1,
-          shouldRevert: true,
           salt: randomKey(),
+          deadline: NO_DEADLINE,
         }
         const d = w.digest(addr.R, m)
         await at(() => R.connect(s).invalidate(d))
@@ -1358,10 +1269,15 @@ describe("attribution and reentrancy, end to end", () => {
     for (const role of [role1, role2])
       for (const m of MODULES) {
         const mem = model.members.get(memKey(role, modAddr(m)))
-        const active = !!mem && model.now >= mem.start && model.now <= mem.end
-        expect(await R.isMember(role, modAddr(m)), `isMember ${m}`).to.equal(
-          active
-        )
+        const active =
+          !!mem &&
+          model.now >= mem.start &&
+          model.now <= mem.end &&
+          model.enabled.has(modAddr(m).toLowerCase())
+        expect(
+          (await R.membershipOf(modAddr(m), role)).active,
+          `membership.active ${m}`
+        ).to.equal(active)
       }
 
     const outcomes = new Map<string, number>()

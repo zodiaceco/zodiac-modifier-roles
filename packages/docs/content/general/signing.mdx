@@ -64,7 +64,7 @@ The trailing portion of the message (nonces, timestamps, session IDs) is not con
 ## What a signature authorizes
 
 A signature from the Safe is accepted wherever the Safe's EIP-1271 signature counts.
-That includes every contract that authenticates the Safe by signature: the apps the permission is meant for, but also any Roles Modifier where the Safe is a member (its `execTransactionWithSignature` takes EIP-1271 signatures), and any Safe that has this Safe as an owner.
+That includes every contract that authenticates the Safe by signature: the apps the permission is meant for, but also any Roles Modifier where the Safe is a member (its `execTransactionWithRoleSigned` takes EIP-1271 signatures), and any Safe that has this Safe as an owner.
 A signing permission therefore grants whatever the signed message authorizes in those places, not just in the intended app.
 
 Scope signing permissions as tightly as execution permissions:
