@@ -4,8 +4,8 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
+import "./ExtCode.sol";
 import "./Storage.sol";
-import "../ImmutableStorage.sol";
 import "../IEvaluator.sol";
 
 /**
@@ -475,13 +475,13 @@ abstract contract Setup is RolesStorage {
                                INTERNALS
     //////////////////////////////////////////////////////////////*/
 
-    /// @dev Stores opaque packed condition bytes in immutable storage and packs
-    ///      the resulting pointer with `options` into a `scopeConfig` word.
+    /// @dev Writes opaque packed condition bytes to a pointer contract and
+    ///      packs the resulting pointer with `options` into a `scopeConfig` word.
     function _storeScopeConfig(
         bytes memory packedConditions,
         ExecutionOptions options
     ) private returns (uint256) {
-        address pointer = ImmutableStorage.store(packedConditions);
+        address pointer = ExtCode.write(packedConditions);
         return (uint256(options) << 160) | uint160(pointer);
     }
 

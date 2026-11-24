@@ -394,7 +394,7 @@ produce exactly this.
   It's tested against the contracts (byte-identical buffers and identical
   unpacked trees) by `formal/test/lean-model.spec.ts`.
 - The EVM semantics of `mload` / `mstore` / `mcopy` / `shl` / `shr` / `or` as
-  modeled. `ImmutableStorage` returns the stored bytes.
+  modeled. The `ExtCode` pointer returns the stored bytes.
 - The Lean 4.35 kernel.
 
 ## Condition check

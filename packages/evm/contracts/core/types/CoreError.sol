@@ -72,4 +72,7 @@ interface ICoreError {
 
     /// address(0) is not allowed
     error ZeroAddressNotAllowed();
+
+    /// Deploying the pointer contract for a packed condition buffer failed
+    error ExtCodeWriteFailed();
 }

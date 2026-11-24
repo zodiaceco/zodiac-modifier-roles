@@ -61,4 +61,7 @@ interface IEvaluatorError {
 
     /// A Pluck slot is defined more than once in the condition tree
     error DuplicatePluckIndex(uint256 index, uint8 pluckIndex);
+
+    /// The scopeConfig pointer has no deployed code
+    error PointerWithoutCode();
 }
