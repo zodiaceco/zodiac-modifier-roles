@@ -513,15 +513,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@cowprotocol/sdk-common@npm:0.6.2":
-  version: 0.6.2
-  resolution: "@cowprotocol/sdk-common@npm:0.6.2"
-  dependencies:
-    "@cowprotocol/sdk-config": 0.8.1
-  checksum: b341f968e12be0c10bba2f2a850a49e21022dab4f1f827f2ea9e6ea1cd1804886fccae23f585a10c56794b5773e8142cdb25cc26302fc04bc5ca4a9170babbbc
-  languageName: node
-  linkType: hard
-
 "@cowprotocol/sdk-config@npm:0.6.3, @cowprotocol/sdk-config@npm:^0.6.3":
   version: 0.6.3
   resolution: "@cowprotocol/sdk-config@npm:0.6.3"
@@ -529,16 +520,6 @@ __metadata:
     exponential-backoff: ^3.1.1
     limiter: ^2.1.0
   checksum: 18426292c35a19eb11cdfaacc2b2821f5174dc2beaf30724834a3f48efd571f77d77c4582473ec0bb76c29f1c953c7cc267b76244b20c2b01250c8dff6a60fac
-  languageName: node
-  linkType: hard
-
-"@cowprotocol/sdk-config@npm:0.8.1":
-  version: 0.8.1
-  resolution: "@cowprotocol/sdk-config@npm:0.8.1"
-  dependencies:
-    exponential-backoff: ^3.1.1
-    limiter: ^2.1.0
-  checksum: 04dc579e64ab7fc6fbd4f501185d9fd45c85a50237e1df884ab8defd4380fafdc722d864b786a855b33dd2830d663869515fbee47a0980ae3827c431caf71f65
   languageName: node
   linkType: hard
 
@@ -552,19 +533,6 @@ __metadata:
     exponential-backoff: ^3.1.2
     limiter: ^3.0.0
   checksum: 7636e620ff157dd917773df7cf102047cadefc359a0f8fdfda243d76376bd0954f89c1a982da5fd6e4b4df2e106150c0820c6d7c795e106e4fb27ae9a4f06fbb
-  languageName: node
-  linkType: hard
-
-"@cowprotocol/sdk-order-book@npm:^1.0.0":
-  version: 1.0.0
-  resolution: "@cowprotocol/sdk-order-book@npm:1.0.0"
-  dependencies:
-    "@cowprotocol/sdk-common": 0.6.2
-    "@cowprotocol/sdk-config": 0.8.1
-    cross-fetch: ^3.2.0
-    exponential-backoff: ^3.1.2
-    limiter: ^3.0.0
-  checksum: 49447b3f9b99071e3532c9062d9f36d36862270363b978aa33f80d04d9ab66cd40249af0ca136faf01a63accee58a3d7cf0da4b0bc29a4fba3efd1a5816ef5ce
   languageName: node
   linkType: hard
 
@@ -16030,7 +15998,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "zodiac-roles-sdk@workspace:packages/sdk"
   dependencies:
-    "@cowprotocol/sdk-order-book": ^1.0.0
     "@gnosis-guild/eth-sdk": ^0.3.7
     "@gnosis-guild/eth-sdk-client": ^0.1.6
     "@gnosis-guild/typechain-ethers-v6": ^0.5.5
