@@ -31,20 +31,16 @@
  * 300), `EIP712_MUTATIONS` mutations per message (default 8), `EIP712_SEED`
  * the seed.
  */
-import { expect } from "chai";
-import {
-  AbiCoder,
-  TypedDataEncoder,
-  concat,
-  hexlify,
-  keccak256,
-  toUtf8Bytes,
-} from "ethers";
-import { network } from "hardhat";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+import { network } from "hardhat";
+import { hashTypedData, zeroHash, type Hex, type TypedDataDomain } from "viem";
+
+import { extractRevertData } from "../../test/utils.js";
 
 import {
   encodeTypedDomain,
@@ -72,7 +68,8 @@ const CASES = Number(process.env.EIP712_CASES ?? 300);
 const MUTATIONS = Number(process.env.EIP712_MUTATIONS ?? 8);
 const SEED = Number(process.env.EIP712_SEED ?? 1);
 
-const { ethers } = await network.create();
+const connection = await network.create();
+const { viem } = connection;
 
 const gen = makeGen(SEED);
 const {
@@ -89,7 +86,7 @@ const {
 
 /* -------------------------------------------------------------- mutations */
 
-function mutateBytes(hex: string): string {
+function mutateBytes(hex: string): Hex {
   let b = hex.slice(2);
   const words = Math.floor(b.length / 64);
   const setWord = (i: number, w: bigint) => {
@@ -128,7 +125,7 @@ function mutateBytes(hex: string): string {
     const p = int(b.length / 2);
     b = b.slice(0, 2 * p) + randHex(1).slice(2) + b.slice(2 * p + 2);
   }
-  return "0x" + b;
+  return ("0x" + b) as Hex;
 }
 
 function mutateTypes(ns: Node[]): Node[] {
@@ -138,7 +135,7 @@ function mutateTypes(ns: Node[]): Node[] {
   const kind = int(3);
   if (kind === 0) n.encoding = int(7);
   else if (kind === 1) n.parent = int(out.length + 1);
-  else n.typeHash = "0x" + "00".repeat(32);
+  else n.typeHash = zeroHash;
   return out;
 }
 
@@ -146,31 +143,33 @@ function mutateTypes(ns: Node[]): Node[] {
 
 const lean_ok = existsSync(LEAN_BIN);
 
-describe("EIP-712: SDK, contract encoder and Lean", function () {
-  this.timeout(0);
-
-  before(function () {
-    if (!lean_ok) this.skip();
+describe("EIP-712: SDK, contract encoder and Lean", () => {
+  after(async () => {
+    await connection.close();
   });
 
-  it("digests agree with ethers and the Lean spec; the Lean encoder matches the contract", async () => {
-    const encoder = await (
-      await ethers.getContractFactory("MockEIP712Encoder")
-    ).deploy();
-    const call = async (d: string, m: string, ns: Node[]) => {
+  it("digests agree with ethers and the Lean spec; the Lean encoder matches the contract", async (t) => {
+    if (!lean_ok) {
+      t.skip();
+      return;
+    }
+    const encoder = await viem.deployContract("MockEIP712Encoder");
+    const call = async (d: Hex, m: Hex, ns: Node[]) => {
       try {
-        return await encoder.hashTypedMessage(
+        return await encoder.read.hashTypedMessage([
           d,
           m,
-          ns.map((n) => [n.parent, n.encoding, n.typeHash]),
-        );
-      } catch (e: any) {
+          ns.map((n) => ({
+            parent: BigInt(n.parent),
+            encoding: n.encoding,
+            typeHash: n.typeHash,
+          })),
+        ]);
+      } catch (e: unknown) {
         // only a revert of the call counts; anything else is a test bug
         if (
-          !(
-            e?.code === "CALL_EXCEPTION" ||
-            /revert|out of gas/i.test(String(e?.message))
-          )
+          extractRevertData(e) === undefined &&
+          !(e instanceof Error && /revert|out of gas/i.test(e.message))
         )
           throw e;
         return "revert";
@@ -198,9 +197,14 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
       const message = randomValue(types, primary);
       const domainTypes = typesForDomain(domain as any);
 
-      const oracle = TypedDataEncoder.hash(domain, types, message);
+      const oracle = hashTypedData({
+        domain: domain as TypedDataDomain,
+        types,
+        primaryType: primary,
+        message,
+      });
       const d = encodeTypedDomain({ domain: domain as any });
-      let m: string;
+      let m: Hex;
       try {
         m = encodeTypedMessage({ types: types as any, message });
       } catch (e) {
@@ -220,7 +224,7 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
       const specLine = `es ${leanDefs(allDefs)} ${primary} ${domVal} ${msgVal}`;
       const layLine = `lay ${leanDefs(allDefs)} ${primary} ${leanTypes(ns)}`;
 
-      const inputs: [string, string, Node[]][] = [[d, m, ns]];
+      const inputs: [Hex, Hex, Node[]][] = [[d, m, ns]];
       for (let j = 0; j < MUTATIONS; j++) {
         const r = int(4);
         inputs.push([
@@ -293,9 +297,13 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
     if (failures.length > 0 && process.env.EIP712_DUMP) {
       writeFileSync(process.env.EIP712_DUMP, failures.join("\n") + "\n");
     }
-    expect(failures.slice(0, 5)).to.deep.equal([]);
+    assert.deepEqual(failures.slice(0, 5), []);
   });
-  it("allowSignTypedMessage permissions follow the type tree and admit exactly the scoped messages", () => {
+  it("allowSignTypedMessage permissions follow the type tree and admit exactly the scoped messages", (t) => {
+    if (!lean_ok) {
+      t.skip();
+      return;
+    }
     // The SDK's authoring helpers do not load under Hardhat's module loader
     // (an import cycle), so this part runs in its own tsx process.
     const res = spawnSync(
@@ -316,10 +324,10 @@ describe("EIP-712: SDK, contract encoder and Lean", function () {
     console.log(
       `      ${r.checks} permission checks (${r.slices} Slices, ${r.zips} Zips), ${r.negatives} changed messages, ${r.misfitChecks} trees outside the theorem, ${r.rejected} permissions the SDK rejected`,
     );
-    expect(r.misfitChecks).to.be.greaterThan(0);
-    expect(r.slices).to.be.greaterThan(0);
-    expect(r.zips).to.be.greaterThan(0);
-    expect(r.rejectedExamples).to.deep.equal([]);
-    expect(r.failures).to.deep.equal([]);
+    assert.ok(r.misfitChecks > 0);
+    assert.ok(r.slices > 0);
+    assert.ok(r.zips > 0);
+    assert.deepEqual(r.rejectedExamples, []);
+    assert.deepEqual(r.failures, []);
   });
 });

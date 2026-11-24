@@ -1,17 +1,20 @@
-import { expect } from "chai";
-import { AbiCoder, hexlify, zeroPadValue } from "ethers";
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
 import { network } from "hardhat";
+import { encodeAbiParameters, pad, parseAbiParameters, toHex } from "viem";
+import type { Hex } from "viem";
+import type { GetContractReturnType } from "@nomicfoundation/hardhat-viem/types";
+import type { ArtifactMap } from "hardhat/types/artifacts";
 
 import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
 import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { linkIntegrity } from "../setup.js";
-import { Encoding as E, Operator as O } from "../utils.js";
+import { Encoding as E, Operator as O, type ConditionFlat } from "../utils.js";
 
 const connection = await network.create();
-const { ethers } = connection;
-const abi = AbiCoder.defaultAbiCoder();
+const { viem } = connection;
 
-const AVATAR = "0x00000000000000000000000000000000000a7a7a";
+const AVATAR = "0x00000000000000000000000000000000000a7a7a" as const;
 
 // ---------------------------------------------------------------------------
 // Trees
@@ -20,15 +23,8 @@ const AVATAR = "0x00000000000000000000000000000000000a7a7a";
 type N = {
   paramType: number;
   operator: number;
-  compValue: string;
+  compValue: Hex;
   children: N[];
-};
-
-type Flat = {
-  parent: number;
-  paramType: number;
-  operator: number;
-  compValue: string;
 };
 
 /** A node as the unpacker returns it. */
@@ -36,24 +32,25 @@ type Unpacked = {
   parent: number;
   encoding: number;
   operator: number;
-  compValue: string;
+  compValue: Hex;
   leadingBytes: number;
   inlineSize: number;
 };
 
-const hex = (...bytes: number[]) =>
-  "0x" + bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
-const fill = (length: number, byte = 0xab) =>
-  "0x" + byte.toString(16).padStart(2, "0").repeat(length);
-const word = (n: number) => "0x" + n.toString(16).padStart(64, "0");
-const cat = (...parts: string[]) =>
-  "0x" + parts.map((p) => p.replace(/^0x/, "")).join("");
+const hex = (...bytes: number[]): Hex =>
+  ("0x" + bytes.map((b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
+const fill = (length: number, byte = 0xab): Hex =>
+  ("0x" + byte.toString(16).padStart(2, "0").repeat(length)) as Hex;
+const word = (n: number): Hex =>
+  ("0x" + n.toString(16).padStart(64, "0")) as Hex;
+const cat = (...parts: string[]): Hex =>
+  ("0x" + parts.map((p) => p.replace(/^0x/, "")).join("")) as Hex;
 const byteLength = (data: string) => (data.length - 2) / 2;
 
 const node = (
   paramType: number,
   operator: number,
-  compValue = "0x",
+  compValue: Hex = "0x",
   children: N[] = [],
 ): N => ({ paramType, operator, compValue, children });
 
@@ -77,7 +74,7 @@ function bfs(root: N): [N, number][] {
   return queue;
 }
 
-const flatten = (root: N): Flat[] =>
+const flatten = (root: N): ConditionFlat[] =>
   bfs(root).map(([n, parent]) => ({
     parent,
     paramType: n.paramType,
@@ -117,10 +114,11 @@ const model = (root: N): Unpacked[] =>
     const leading = isCall && n.compValue === "0x" ? "0x0004" : n.compValue;
     // EqualTo on a value that is not inlined: compValue is `abi.encode`
     // output, stored without its leading offset
-    const stripped =
+    const stripped = (
       n.operator === O.EqualTo && !isInlined(n)
         ? "0x" + n.compValue.slice(2 + 64)
-        : n.compValue;
+        : n.compValue
+    ) as Hex;
     return {
       parent,
       // the ether value reads no calldata: None to the evaluator
@@ -129,9 +127,9 @@ const model = (root: N): Unpacked[] =>
       operator: n.operator === O.EqualToAvatar ? O.EqualTo : n.operator,
       compValue:
         n.operator === O.EqualToAvatar
-          ? zeroPadValue(AVATAR, 32)
+          ? pad(AVATAR, { size: 32 })
           : isCall
-            ? "0x" + leading.slice(6)
+            ? (("0x" + leading.slice(6)) as Hex)
             : stripped,
       leadingBytes: isCall ? parseInt(leading.slice(2, 6), 16) : 0,
       inlineSize: size(n),
@@ -150,15 +148,15 @@ const pluckCount = (root: N) =>
 // ---------------------------------------------------------------------------
 
 describe("ConditionPacker / ConditionUnpacker", () => {
-  let mock: any;
+  let mock: GetContractReturnType<ArtifactMap["MockPackerUnpacker"]["abi"]>;
 
   before(async () => {
-    const Mock = await ethers.getContractFactory(
+    mock = await viem.deployContract(
       "MockPackerUnpacker",
-      await linkIntegrity(ethers),
+      [],
+      await linkIntegrity(viem),
     );
-    mock = await Mock.deploy();
-    await mock.setAvatar(AVATAR);
+    await mock.write.setAvatar([AVATAR]);
   });
 
   after(async () => {
@@ -166,14 +164,14 @@ describe("ConditionPacker / ConditionUnpacker", () => {
   });
 
   const sdkPack = (root: N) =>
-    hexlify(packConditions(toFlatNodes(flatten(root))));
+    toHex(packConditions(toFlatNodes(flatten(root))));
 
-  async function unpack(buffer: string) {
-    const [nodes, slots] = await mock.unpack(buffer);
+  async function unpack(buffer: Hex) {
+    const [nodes, slots] = await mock.read.unpack([buffer]);
     return {
       slots: Number(slots),
       nodes: nodes.map(
-        (n: any): Unpacked => ({
+        (n): Unpacked => ({
           parent: Number(n.parent),
           encoding: Number(n.encoding),
           operator: Number(n.operator),
@@ -181,28 +179,29 @@ describe("ConditionPacker / ConditionUnpacker", () => {
           leadingBytes: Number(n.leadingBytes),
           inlineSize: Number(n.inlineSize),
         }),
-      ) as Unpacked[],
+      ),
     };
   }
 
-  const expectUnpacked = async (buffer: string, root: N) => {
+  const expectUnpacked = async (buffer: Hex, root: N) => {
     const { nodes, slots } = await unpack(buffer);
-    expect(nodes).to.deep.equal(model(root));
-    expect(slots).to.equal(pluckCount(root));
+    assert.deepEqual(nodes, model(root));
+    assert.equal(slots, pluckCount(root));
     return nodes;
   };
 
   /** Packs and unpacks on chain, checking both references. */
   async function roundtrip(root: N) {
-    const packed: string = await mock.packUnchecked(flatten(root));
-    expect(packed, "buffer, against the SDK packer").to.equal(sdkPack(root));
+    const packed = await mock.read.packUnchecked([flatten(root)]);
+    assert.equal(packed, sdkPack(root), "buffer, against the SDK packer");
     return { packed, nodes: await expectUnpacked(packed, root) };
   }
 
   describe("buffer layout", () => {
     it("packs a single node into a header and one node word", async () => {
       const { packed } = await roundtrip(pass(E.None));
-      expect(packed).to.equal(
+      assert.equal(
+        packed,
         cat(
           "0001", // node count
           "00", // pluck slots
@@ -215,7 +214,8 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { packed } = await roundtrip(
         call(node(E.Static, O.EqualTo, word(7)), pluck(2)),
       );
-      expect(packed).to.equal(
+      assert.equal(
+        packed,
         cat(
           "0003", // node count
           "03", // pluck slots: highest slot + 1
@@ -235,7 +235,8 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { packed } = await roundtrip(
         tuple(node(E.Static, O.Bitmask, "0xaaaa"), S, pluck(0)),
       );
-      expect(packed).to.equal(
+      assert.equal(
+        packed,
         cat(
           "0004",
           "01",
@@ -255,9 +256,10 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { nodes } = await roundtrip(
         call(tuple(S, tuple(D)), S, pass(E.Array, tuple(S, S))),
       );
-      expect(nodes.map((n) => n.parent)).to.deep.equal([
-        0, 0, 0, 0, 1, 1, 3, 5, 6, 6,
-      ]);
+      assert.deepEqual(
+        nodes.map((n) => n.parent),
+        [0, 0, 0, 0, 1, 1, 3, 5, 6, 6],
+      );
     });
 
     it("keeps all 32 operator codes, but EqualToAvatar", async () => {
@@ -265,7 +267,8 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { nodes } = await roundtrip(
         tuple(...codes.map((code) => node(E.Static, code, word(code)))),
       );
-      expect(nodes.slice(1).map((n) => n.operator)).to.deep.equal(
+      assert.deepEqual(
+        nodes.slice(1).map((n) => n.operator),
         codes.map((code) => (code === O.EqualToAvatar ? O.EqualTo : code)),
       );
     });
@@ -282,59 +285,72 @@ describe("ConditionPacker / ConditionUnpacker", () => {
           pass(E.EtherValue),
         ),
       );
-      expect(nodes.slice(1, 8).map((n) => n.encoding)).to.deep.equal([
-        E.None,
-        E.Static,
-        E.Dynamic,
-        E.Tuple,
-        E.Array,
-        E.AbiEncoded,
-        E.None,
-      ]);
+      assert.deepEqual(
+        nodes.slice(1, 8).map((n) => n.encoding),
+        [E.None, E.Static, E.Dynamic, E.Tuple, E.Array, E.AbiEncoded, E.None],
+      );
     });
   });
 
   describe("compValue", () => {
     it("keeps compValues of any length, in node order", async () => {
-      const compValues = [fill(1), "0x", fill(33), "0x", fill(2), fill(64)];
+      const compValues = [
+        fill(1),
+        "0x",
+        fill(33),
+        "0x",
+        fill(2),
+        fill(64),
+      ] as Hex[];
       const { nodes } = await roundtrip(
         tuple(...compValues.map((cv) => node(E.Static, O.Custom, cv))),
       );
-      expect(nodes.slice(1).map((n) => n.compValue)).to.deep.equal(compValues);
+      assert.deepEqual(
+        nodes.slice(1).map((n) => n.compValue),
+        compValues,
+      );
     });
 
     it("keeps the compValue of an EqualTo on an inlined value", async () => {
-      const pair = abi.encode(["uint256", "uint256"], [1, 2]);
+      const pair = encodeAbiParameters(parseAbiParameters("uint256, uint256"), [
+        1n,
+        2n,
+      ]);
       const { nodes } = await roundtrip(
         call(
           node(E.Static, O.EqualTo, word(1)),
           node(E.Tuple, O.EqualTo, pair, [S, S]),
         ),
       );
-      expect(nodes[1].compValue).to.equal(word(1));
-      expect(nodes[2].compValue).to.equal(pair);
+      assert.equal(nodes[1].compValue, word(1));
+      assert.equal(nodes[2].compValue, pair);
     });
 
     it("drops the leading offset of an EqualTo on a value that is not inlined", async () => {
-      const cases: [N, string][] = [
-        [node(E.Dynamic, O.EqualTo), abi.encode(["bytes"], ["0xaabbcc"])],
+      const cases: [N, Hex][] = [
+        [
+          node(E.Dynamic, O.EqualTo),
+          encodeAbiParameters(parseAbiParameters("bytes"), ["0xaabbcc"]),
+        ],
         [
           node(E.Tuple, O.EqualTo, "0x", [S, D]),
-          abi.encode(["tuple(uint256,bytes)"], [[1, "0xaabbcc"]]),
+          encodeAbiParameters(parseAbiParameters("(uint256, bytes)"), [
+            [1n, "0xaabbcc"],
+          ]),
         ],
         [
           node(E.Array, O.EqualTo, "0x", [S]),
-          abi.encode(["uint256[]"], [[1, 2, 3]]),
+          encodeAbiParameters(parseAbiParameters("uint256[]"), [[1n, 2n, 3n]]),
         ],
       ];
       for (const [n, encoded] of cases) {
         const { nodes } = await roundtrip(call({ ...n, compValue: encoded }));
-        expect(nodes[1].compValue).to.equal("0x" + encoded.slice(2 + 64));
+        assert.equal(nodes[1].compValue, "0x" + encoded.slice(2 + 64));
       }
     });
 
     it("splits the compValue of nested calldata into a leading byte count and the bytes to match", async () => {
-      const cases: [string, number, string][] = [
+      const cases: [Hex, number, Hex][] = [
         // compValue as written, leading bytes, bytes to match
         ["0x", 4, "0x"],
         ["0x0004", 4, "0x"],
@@ -347,10 +363,11 @@ describe("ConditionPacker / ConditionUnpacker", () => {
         const { nodes } = await roundtrip(
           call(node(E.AbiEncoded, O.Matches, compValue, [S])),
         );
-        expect(
+        assert.deepEqual(
           [nodes[1].leadingBytes, nodes[1].compValue],
+          [leadingBytes, toMatch],
           compValue,
-        ).to.deep.equal([leadingBytes, toMatch]);
+        );
       }
     });
 
@@ -358,16 +375,17 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { packed, nodes } = await roundtrip(
         call(node(E.Static, O.EqualToAvatar)),
       );
-      expect(nodes[1].operator).to.equal(O.EqualTo);
-      expect(nodes[1].compValue).to.equal(zeroPadValue(AVATAR, 32));
+      assert.equal(nodes[1].operator, O.EqualTo);
+      assert.equal(nodes[1].compValue, pad(AVATAR, { size: 32 }));
 
       // the buffer does not hold the avatar: a new one shows without repacking
-      const other = "0x00000000000000000000000000000000000b0b0b";
-      await mock.setAvatar(other);
-      expect((await unpack(packed)).nodes[1].compValue).to.equal(
-        zeroPadValue(other, 32),
+      const other = "0x00000000000000000000000000000000000b0b0b" as const;
+      await mock.write.setAvatar([other]);
+      assert.equal(
+        (await unpack(packed)).nodes[1].compValue,
+        pad(other, { size: 32 }),
       );
-      await mock.setAvatar(AVATAR);
+      await mock.write.setAvatar([AVATAR]);
     });
   });
 
@@ -396,7 +414,10 @@ describe("ConditionPacker / ConditionUnpacker", () => {
     for (const [name, tree, sizes] of cases) {
       it(`${name}: ${sizes[0]}`, async () => {
         const { nodes } = await roundtrip(tree);
-        expect(nodes.map((n) => n.inlineSize)).to.deep.equal(sizes);
+        assert.deepEqual(
+          nodes.map((n) => n.inlineSize),
+          sizes,
+        );
       });
     }
   });
@@ -411,7 +432,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
     for (const [name, tree, count] of cases) {
       it(name, async () => {
         const { packed } = await roundtrip(tree);
-        expect((await unpack(packed)).slots).to.equal(count);
+        assert.equal((await unpack(packed)).slots, count);
       });
     }
   });
@@ -421,14 +442,15 @@ describe("ConditionPacker / ConditionUnpacker", () => {
       const { nodes } = await roundtrip(
         call(node(E.Dynamic, O.Custom, fill(65535)), S),
       );
-      expect(byteLength(nodes[1].compValue)).to.equal(65535);
+      assert.equal(byteLength(nodes[1].compValue), 65535);
     });
 
     it("1023 children, in a tree of more than 255 nodes", async () => {
       const tree = call(...repeat(1023, S));
       const { nodes } = await roundtrip(tree);
-      expect(nodes.length).to.equal(1024);
-      expect(nodes.filter((n, i) => i > 0 && n.parent === 0).length).to.equal(
+      assert.equal(nodes.length, 1024);
+      assert.equal(
+        nodes.filter((n, i) => i > 0 && n.parent === 0).length,
         1023,
       );
     });
@@ -436,7 +458,7 @@ describe("ConditionPacker / ConditionUnpacker", () => {
     it("the largest inlined size, 8160 bytes", async () => {
       const tree = call(tuple(...repeat(255, S)));
       const { nodes } = await roundtrip(tree);
-      expect(nodes[1].inlineSize).to.equal(8160);
+      assert.equal(nodes[1].inlineSize, 8160);
     });
   });
 

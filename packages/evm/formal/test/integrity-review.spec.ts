@@ -5,9 +5,18 @@
  * `allowFunction`, packs to the buffer the SDK produces, and is enforced as
  * intended.
  */
-import { expect } from "chai";
-import { AbiCoder, Interface, hexlify } from "ethers";
+import assert from "node:assert/strict";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  type Abi,
+  type AbiFunction,
+} from "viem";
 
 import { checkAndPack } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../../test/setup.js";
@@ -19,11 +28,11 @@ import {
 } from "../../test/utils.js";
 
 const connection = await network.create();
-const { ethers } = connection;
+const { viem } = connection;
 const { setupTestContract } = createSetup(connection);
-const abi = AbiCoder.defaultAbiCoder();
 
-const word = (n: number | bigint) => abi.encode(["uint256"], [n]);
+const word = (n: number | bigint) =>
+  encodeAbiParameters(parseAbiParameters("uint256"), [BigInt(n)]);
 const pass = (paramType: Encoding, children?: any[]) => ({
   paramType,
   operator: Operator.Pass,
@@ -52,34 +61,42 @@ const pluck = (slot: number) => ({
 
 async function setup(signature: string) {
   const env = await setupTestContract();
-  const iface = new Interface([`function ${signature}`]);
-  const fn = iface.fragments[0] as any;
+  const fullSignature: string = `function ${signature}`;
+  const abi = parseAbi([fullSignature]) as Abi;
+  const fn = abi[0] as AbiFunction;
+  const selector = toFunctionSelector(fn);
   const invoke = (...args: any[]) =>
-    env.roles
-      .connect(env.member)
-      .execTransactionFromModule(
+    env.roles.write.execTransactionFromModule(
+      [
         env.testContractAddress,
+        0n,
+        encodeFunctionData({
+          abi: [fn],
+          functionName: fn.name,
+          args,
+        }),
         0,
-        iface.encodeFunctionData(fn, args),
-        0,
-      );
-  const check = async (tree: any) => {
-    const { packed } = checkAndPack(flattenCondition(tree) as any);
-    expect(await env.roles.packConditions(flattenCondition(tree))).to.equal(
-      hexlify(packed),
+      ],
+      { account: env.member.account },
     );
-    await env.roles.allowFunction(
+  const check = async (tree: any) => {
+    const flat = flattenCondition(tree);
+    const { packed } = checkAndPack(flat as any);
+    assert.equal(await env.roles.read.packConditions([flat]), packed);
+    await env.roles.write.allowFunction([
       env.roleKey,
       env.testContractAddress,
-      fn.selector,
-      flattenCondition(tree),
+      selector,
+      flat,
       ExecutionOptions.None,
-    );
+    ]);
   };
-  const ok = async (...args: any[]) =>
-    expect(invoke(...args)).to.not.be.revert(ethers);
+  const ok = async (...args: any[]) => {
+    await invoke(...args);
+  };
   const denied = async (...args: any[]) =>
-    expect(invoke(...args)).to.be.revertedWithCustomError(
+    viem.assertions.revertWithCustomError(
+      invoke(...args),
       env.roles,
       "ConditionViolation",
     );
@@ -87,6 +104,9 @@ async function setup(signature: string) {
 }
 
 describe("Integrity review: trees Integrity used to reject, enforced as intended", () => {
+  after(async () => {
+    await connection.close();
+  });
   it("1. checks of a prefix of one tuple, side by side", async () => {
     const { check, ok, denied } = await setup("fn((bytes, uint256, uint256))");
     // x.b == 1 || x.c == 2, each branch listing only the fields it checks
@@ -136,12 +156,16 @@ describe("Integrity review: trees Integrity used to reject, enforced as intended
 
   it("3. bytes read as nested calldata by one check and as bytes by another", async () => {
     const { check, ok, denied } = await setup("fn(bytes[])");
-    const erc20 = new Interface(["function transfer(address, uint256)"]);
+    const erc20 = parseAbi(["function transfer(address, uint256)"]);
     const [a, b] = [
       "0x000000000000000000000000000000000000aaaa",
       "0x000000000000000000000000000000000000bbbb",
-    ];
-    const required = erc20.encodeFunctionData("transfer", [a, 5]);
+    ] as const;
+    const required = encodeFunctionData({
+      abi: erc20,
+      functionName: "transfer",
+      args: [a, 5n],
+    });
     // every element is transfer(_, amount < 100), and one element is exactly
     // `required`
     await check(
@@ -151,8 +175,7 @@ describe("Integrity review: trees Integrity used to reject, enforced as intended
             {
               paramType: Encoding.AbiEncoded,
               operator: Operator.Matches,
-              compValue:
-                "0x0004" + erc20.getFunction("transfer")!.selector.slice(2),
+              compValue: "0x0004" + toFunctionSelector(erc20[0]).slice(2),
               children: [pass(Encoding.Static), cmp(Operator.LessThan, 100)],
             },
           ]),
@@ -160,13 +183,20 @@ describe("Integrity review: trees Integrity used to reject, enforced as intended
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abi.encode(["bytes"], [required]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                required,
+              ]),
             },
           ]),
         ]),
       ]),
     );
-    const other = (n: number) => erc20.encodeFunctionData("transfer", [b, n]);
+    const other = (n: number) =>
+      encodeFunctionData({
+        abi: erc20,
+        functionName: "transfer",
+        args: [b, BigInt(n)],
+      });
     await ok([required, other(50)]);
     await denied([other(50)]);
     await denied([required, other(500)]);

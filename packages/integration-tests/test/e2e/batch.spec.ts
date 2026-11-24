@@ -17,18 +17,38 @@
  * list is threaded through memory (copy on write, shared entries), across
  * the transactions of a batch, and `_persist` writes every entry.
  */
-import { expect } from "chai"
+import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import path from "node:path"
+import { after, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
-import { AbiCoder, Interface, getBytes, hexlify, randomBytes } from "ethers"
 import { network } from "hardhat"
+import {
+  bytesToHex,
+  decodeErrorResult,
+  encodeAbiParameters,
+  encodeFunctionData,
+  hexToBytes,
+  parseAbi,
+  toFunctionSelector,
+  toHex,
+} from "viem"
+import type { Address, Hex } from "viem"
 
-import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
+import { extractRevertData } from "../../../evm/test/utils.js"
+import { abi as abiSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
-import { count, deployRoles, execSafe, packMultiSend, prng } from "./helpers.js"
+import {
+  count,
+  deployMultiSend,
+  deployRoles,
+  execSafe,
+  packMultiSend,
+  prng,
+} from "./helpers.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LEAN_BIN = path.resolve(
@@ -37,25 +57,25 @@ const LEAN_BIN = path.resolve(
 )
 
 const connection = await network.create()
-const { ethers } = connection
-const abi = AbiCoder.defaultAbiCoder()
+const { viem } = connection
 
 const CASES = Number(process.env.BATCH_CASES ?? 200)
 const { rnd, int, pick, chance } = prng(Number(process.env.BATCH_SEED ?? 1))
 
-const fnIface = new Interface([
+const fnAbi = parseAbi([
   "function fn(uint256 a, uint256 b, uint256[] arr)",
   "function other(uint256 x)",
   "function multiSend(bytes transactions)",
 ])
-const FN = fnIface.getFunction("fn")!.selector
-const OTHER = fnIface.getFunction("other")!.selector
+const FN = toFunctionSelector("fn(uint256,uint256,uint256[])")
+const OTHER = toFunctionSelector("other(uint256)")
+const MULTISEND = toFunctionSelector("multiSend(bytes)")
 
 /* Conditions, as the contract stores them (BFS flattened by hand). */
 type Node = {
   paramType: number
   operator: number
-  compValue?: string
+  compValue?: Hex
   children?: Node[]
 }
 const E = { None: 0, Static: 1, Array: 4, AbiEncoded: 5, EtherValue: 6 }
@@ -71,14 +91,15 @@ const O = {
   WithinAllowance: 28,
   CallWithinAllowance: 30,
 }
-const word = (v: number | bigint) => abi.encode(["uint256"], [v])
+const word = (v: number | bigint): Hex =>
+  encodeAbiParameters([{ type: "uint256" }], [BigInt(v)])
 
 function flatten(root: Node) {
   const out: {
     parent: number
     paramType: number
     operator: number
-    compValue: string
+    compValue: Hex
   }[] = []
   const queue: { node: Node; parent: number }[] = [{ node: root, parent: 0 }]
   while (queue.length) {
@@ -100,7 +121,7 @@ const leanNodes = (flat: ReturnType<typeof flatten>) =>
     .join("|")
 
 /** A condition on a `uint256`: allowances in every arrangement that matters. */
-function staticCond(keys: string[]): Node {
+function staticCond(keys: Hex[]): Node {
   const wa = (k = pick(keys)): Node => ({
     paramType: E.Static,
     operator: O.WithinAllowance,
@@ -151,7 +172,7 @@ function staticCond(keys: string[]): Node {
   }
 }
 
-function arrayCond(keys: string[]): Node {
+function arrayCond(keys: Hex[]): Node {
   const el = staticCond(keys)
   switch (int(4)) {
     case 0:
@@ -175,7 +196,7 @@ function arrayCond(keys: string[]): Node {
 
 /** A condition on `fn(uint256,uint256,uint256[])`, with the ether value or
  *  the call metered next to it sometimes. */
-function fnCond(keys: string[]): Node {
+function fnCond(keys: Hex[]): Node {
   const matches: Node = {
     paramType: E.AbiEncoded,
     operator: O.Matches,
@@ -199,7 +220,7 @@ function fnCond(keys: string[]): Node {
     : matches
 }
 
-function otherCond(keys: string[]): Node {
+function otherCond(keys: Hex[]): Node {
   return {
     paramType: E.AbiEncoded,
     operator: O.Matches,
@@ -209,17 +230,26 @@ function otherCond(keys: string[]): Node {
 
 const PASS: Node = { paramType: E.None, operator: O.Pass }
 
-type Tx = { op: number; to: string; value: bigint; data: string }
+type Tx = { op: number; to: Address; value: bigint; data: Hex }
 
-function randomData(): string {
+function randomData(): Hex {
   const r = rnd()
   if (r < 0.8)
-    return fnIface.encodeFunctionData("fn", [
-      int(8),
-      int(8),
-      Array.from({ length: int(4) }, () => int(8)),
-    ])
-  if (r < 0.95) return fnIface.encodeFunctionData("other", [int(8)])
+    return encodeFunctionData({
+      abi: fnAbi,
+      functionName: "fn",
+      args: [
+        BigInt(int(8)),
+        BigInt(int(8)),
+        Array.from({ length: int(4) }, () => BigInt(int(8))),
+      ],
+    })
+  if (r < 0.95)
+    return encodeFunctionData({
+      abi: fnAbi,
+      functionName: "other",
+      args: [BigInt(int(8))],
+    })
   if (r < 0.98) return "0x"
   return "0x1234"
 }
@@ -227,14 +257,14 @@ function randomData(): string {
 const packBatch = (txs: Tx[]) =>
   packMultiSend(txs.map(({ op, ...t }) => ({ ...t, operation: op })))
 
-function mutateBatch(data: string): string {
-  const b = getBytes(data)
+function mutateBatch(data: Hex): Hex {
+  const b = hexToBytes(data)
   if (chance(0.5)) {
     const i = 4 + int(Math.max(1, b.length - 4))
     b[i] = int(256)
-    return hexlify(b)
+    return bytesToHex(b)
   }
-  return hexlify(b.slice(0, 4 + int(Math.max(1, b.length - 4))))
+  return bytesToHex(b.slice(0, 4 + int(Math.max(1, b.length - 4))))
 }
 
 function lean(line: string): string {
@@ -248,89 +278,103 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
     await connection.close()
   })
 
-  it(`calls and MultiSend batches through a role (${CASES} cases)`, async function () {
-    if (!existsSync(LEAN_BIN)) this.skip()
-    this.timeout(0)
+  it(`calls and MultiSend batches through a role (${CASES} cases)`, async (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip()
+      return
+    }
 
-    await deployMastercopies(ethers)
-    const [owner, member] = await ethers.getSigners()
+    await deployMastercopies(viem)
+    const [owner, member] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
-        creationNonce: BigInt(hexlify(randomBytes(32))),
+        creationNonce: BigInt(toHex(randomBytes(32))),
       },
-      owner as any
+      owner
     )
-    const roles: any = await deployRoles(ethers, await owner.getAddress(), safe)
+    const roles = await deployRoles(viem, owner.account.address, safe)
     await execSafe(
       owner,
       safe,
       safe,
-      ifaceSafe.encodeFunctionData("enableModule", [await roles.getAddress()])
+      encodeFunctionData({
+        abi: abiSafe,
+        functionName: "enableModule",
+        args: [roles.address],
+      })
     )
     await owner.sendTransaction({ to: safe, value: 10n ** 18n })
-    const multisend = await (
-      await ethers.getContractFactory("MultiSend")
-    ).deploy()
-    const msAddr = (await multisend.getAddress()).toLowerCase()
-    const unwrapper = await (
-      await ethers.getContractFactory("MultiSendUnwrapper")
-    ).deploy()
-    const MULTISEND = fnIface.getFunction("multiSend")!.selector
-    await roles.setTransactionUnwrapper(
-      msAddr,
-      MULTISEND,
-      await unwrapper.getAddress()
-    )
+    const msAddr = (
+      await deployMultiSend(viem, roles, owner)
+    ).toLowerCase() as Address
 
     const tally: Record<string, number> = {}
     const refusals: Record<string, number> = {}
     for (let i = 0; i < CASES; i++) {
-      const role = hexlify(randomBytes(32))
-      await roles.grantRole(await member.getAddress(), role, 0, 0, 0)
-      const keys = [0, 1, 2].map(() => hexlify(randomBytes(32)))
+      const role = toHex(randomBytes(32))
+      await roles.write.grantRole([member.account.address, role, 0n, 0n, 0n], {
+        account: owner.account,
+      })
+      const keys = [0, 1, 2].map(() => toHex(randomBytes(32)))
       const balances = keys.map(() => BigInt(int(40)))
       for (let k = 0; k < keys.length; k++)
-        await roles.setAllowance(keys[k], balances[k], 0, 0, 0, 0)
+        await roles.write.setAllowance([keys[k], balances[k], 0n, 0n, 0n, 0n], {
+          account: owner.account,
+        })
 
       // permissions on two targets, and sometimes a global one
-      const targets = [0, 1, 2].map(() =>
-        hexlify(randomBytes(20)).toLowerCase()
+      const targets = [0, 1, 2].map(
+        () => toHex(randomBytes(20)).toLowerCase() as Address
       )
       const perms: string[] = []
       try {
-        for (const t of targets.slice(0, 2)) {
+        for (const target of targets.slice(0, 2)) {
           const options = int(4)
           const r = rnd()
           const mode = r < 0.4 ? 0 : r < 0.9 ? 1 : 2
           if (mode === 0) {
             const tree = chance(0.5) ? PASS : fnCond(keys)
             const flat = flatten(tree)
-            await roles.allowTarget(role, t, flat, options)
-            perms.push(`${t}/*/${options}/${leanNodes(flat)}`)
+            await roles.write.allowTarget([role, target, flat, options], {
+              account: owner.account,
+            })
+            perms.push(`${target}/*/${options}/${leanNodes(flat)}`)
           } else if (mode === 1) {
-            await roles.scopeTarget(role, t)
+            await roles.write.scopeTarget([role, target], {
+              account: owner.account,
+            })
             const flat = flatten(fnCond(keys))
-            await roles.allowFunction(role, t, FN, flat, options)
-            perms.push(`${t}/${FN}/${options}/${leanNodes(flat)}`)
+            await roles.write.allowFunction([role, target, FN, flat, options], {
+              account: owner.account,
+            })
+            perms.push(`${target}/${FN}/${options}/${leanNodes(flat)}`)
             if (chance(0.7)) {
               const flat2 = flatten(chance(0.5) ? PASS : otherCond(keys))
-              await roles.allowFunction(role, t, OTHER, flat2, options)
-              perms.push(`${t}/${OTHER}/${options}/${leanNodes(flat2)}`)
+              await roles.write.allowFunction(
+                [role, target, OTHER, flat2, options],
+                { account: owner.account }
+              )
+              perms.push(`${target}/${OTHER}/${options}/${leanNodes(flat2)}`)
             }
           }
         }
         if (chance(0.3)) {
           const flat = flatten(otherCond(keys))
-          await roles.allowFunctionGlobally(role, OTHER, flat)
+          await roles.write.allowFunctionGlobally([role, OTHER, flat], {
+            account: owner.account,
+          })
           perms.push(`g/${OTHER}/0/${leanNodes(flat)}`)
         }
-      } catch (e: any) {
+      } catch (e: unknown) {
         // a tree the contract's integrity check rejects: the test's bug
-        throw new Error(
-          `permission setup failed: ${e.shortMessage ?? e.message}`
-        )
+        const msg =
+          e instanceof Error
+            ? ((e as { shortMessage?: string }).shortMessage ?? e.message)
+            : String(e)
+        throw new Error(`permission setup failed: ${msg}`)
       }
 
       // one call, or a batch
@@ -343,9 +387,11 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
       let tx: Tx
       if (chance(0.65)) {
         const n = 1 + int(4)
-        let data = fnIface.encodeFunctionData("multiSend", [
-          packBatch(Array.from({ length: n }, entry)),
-        ])
+        let data = encodeFunctionData({
+          abi: fnAbi,
+          functionName: "multiSend",
+          args: [packBatch(Array.from({ length: n }, entry))],
+        })
         if (chance(0.1)) data = mutateBatch(data)
         tx = chance(0.95)
           ? { op: 1, to: msAddr, value: 0n, data }
@@ -368,42 +414,46 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
           perms.length ? perms.join(";") : "-",
         ].join(" ")
       )
-      expect(model, `driver output for ${tx.data}`).to.not.equal("bad-input")
+      assert.notEqual(model, "bad-input", `driver output for ${tx.data}`)
 
       let ok = true
       let reason = ""
       try {
-        await (
-          await roles
-            .connect(member)
-            .execTransactionWithRole(tx.to, tx.value, tx.data, tx.op, role, {
-              gasLimit: 10_000_000,
-            })
-        ).wait()
-      } catch (e: any) {
+        const hash = await roles.write.execTransactionWithRole(
+          [tx.to, tx.value, tx.data, tx.op, role],
+          { account: member.account, gas: 10_000_000n }
+        )
+        await publicClient.waitForTransactionReceipt({ hash })
+      } catch (e: unknown) {
         ok = false
-        const raw: string =
-          typeof e.data === "string"
-            ? e.data
-            : (e.data?.data ?? e.info?.error?.data ?? "")
+        const raw = extractRevertData(e) ?? ""
         try {
-          const err = roles.interface.parseError(raw)
+          const err =
+            raw.length >= 10
+              ? decodeErrorResult({ abi: roles.abi, data: raw as Hex })
+              : null
           reason =
-            err?.name === "ConditionViolation"
-              ? `status ${err.args[0]}`
-              : (err?.name ?? `unparsed ${raw.slice(0, 10)}`)
+            err?.errorName === "ConditionViolation"
+              ? `status ${err.args?.[0]}`
+              : (err?.errorName ?? `unparsed ${raw.slice(0, 10)}`)
         } catch {
-          reason = `unparsed ${raw.slice(0, 10) || String(e.shortMessage ?? e.message).slice(0, 80)}`
+          const msg =
+            e instanceof Error
+              ? ((e as { shortMessage?: string }).shortMessage ?? e.message)
+              : String(e)
+          reason = `unparsed ${raw.slice(0, 10) || msg.slice(0, 80)}`
         }
       }
 
       const ctx = `case ${i}: ${JSON.stringify({ tx: { ...tx, value: String(tx.value) }, perms, balances: balances.map(String) })}`
-      expect(ok, `${ctx}\nmodel: ${model}`).to.equal(model !== "none")
+      assert.equal(ok, model !== "none", `${ctx}\nmodel: ${model}`)
       // when the model refuses, Roles' authorization must be what refuses:
       // not the executed call (ModuleTransactionFailed), not out of gas
       if (!ok)
-        expect(reason, `${ctx}\nrefused, but not by Roles`).to.not.match(
-          /^(unparsed|ModuleTransactionFailed$)/
+        assert.doesNotMatch(
+          reason,
+          /^(unparsed|ModuleTransactionFailed$)/,
+          `${ctx}\nrefused, but not by Roles`
         )
       count(tally, ok ? "through" : "refused")
       if (!ok) count(refusals, reason)
@@ -416,18 +466,18 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
           consumed.set("0x" + key, BigInt(used))
         }
       for (let k = 0; k < keys.length; k++) {
-        const stored = (await roles.allowances(keys[k])).balance as bigint
+        const stored = (await roles.read.allowances([keys[k]]))[3]
         const expected = balances[k] - (consumed.get(keys[k]) ?? 0n)
-        expect(stored, `${ctx}\nmodel: ${model}\nkey ${k}`).to.equal(expected)
+        assert.equal(stored, expected, `${ctx}\nmodel: ${model}\nkey ${k}`)
         if (consumed.has(keys[k])) count(tally, "keys charged")
       }
     }
     console.log("batches", tally, refusals)
     for (const k of ["single through", "batch through", "keys charged"])
-      expect(tally[k] ?? 0, `${k} never reached`).to.be.greaterThan(0)
-    expect(
-      Object.keys(refusals).filter((r) => r.startsWith("status ")),
+      assert.ok((tally[k] ?? 0) > 0, `${k} never reached`)
+    assert.ok(
+      Object.keys(refusals).some((r) => r.startsWith("status ")),
       "no condition ever refused"
-    ).to.not.be.empty
+    )
   })
 })

@@ -1,17 +1,26 @@
-import { hexlify, Interface, randomBytes } from "ethers";
+import { randomBytes } from "node:crypto";
+import { encodeFunctionData, parseAbi, toFunctionSelector, toHex } from "viem";
+import type { Abi, AbiFunction, Address } from "viem";
 import type { NetworkConnection } from "hardhat/types/network";
 import { deployFactories } from "@gnosis-guild/zodiac-core/tooling";
 
-import { ExecutionOptions } from "./utils.js";
+import {
+  ExecutionOptions,
+  type ConditionFlat,
+  type RolesContract,
+} from "./utils.js";
+import type { GetContractReturnType } from "@nomicfoundation/hardhat-viem/types";
+import type { ArtifactMap } from "hardhat/types/artifacts";
+
+export type EvaluatorContract = GetContractReturnType<
+  ArtifactMap["Evaluator"]["abi"]
+>;
 import { createEIP1193 } from "../tasks/createEIP1193.js";
-import type {
-  ConditionFlatStruct,
-  Roles,
-} from "../typechain-types/contracts/Roles.js";
 
 // Side-effect imports to pull in the NetworkConnection augmentations
-// (adds `ethers` and `networkHelpers` to NetworkConnection).
-import "@nomicfoundation/hardhat-ethers";
+// (adds `viem` with `assertions` and `networkHelpers` to NetworkConnection).
+import "@nomicfoundation/hardhat-viem";
+import "@nomicfoundation/hardhat-viem-assertions";
 import "@nomicfoundation/hardhat-network-helpers";
 
 type InvokeOptions = { value?: bigint | number; operation?: number };
@@ -20,93 +29,74 @@ type InvokeOptions = { value?: bigint | number; operation?: number };
  * Factory options for the contracts that link the Integrity library
  * (Evaluator, and the mocks that call it), with a freshly deployed one.
  */
-export async function linkIntegrity(ethers: NetworkConnection["ethers"]) {
-  const Integrity = await ethers.getContractFactory("Integrity");
-  const integrity = await Integrity.deploy();
-  await integrity.waitForDeployment();
-  return { libraries: { Integrity: await integrity.getAddress() } };
+export async function linkIntegrity(viem: NetworkConnection["viem"]) {
+  const integrity = await viem.deployContract("Integrity");
+  return { libraries: { Integrity: integrity.address } };
 }
 
-export function createSetup({ ethers, provider }: NetworkConnection) {
-  async function deployEvaluator() {
-    const Evaluator = await ethers.getContractFactory(
-      "Evaluator",
-      await linkIntegrity(ethers),
-    );
-    const evaluator = await Evaluator.deploy();
-    await evaluator.waitForDeployment();
-    return evaluator;
+export function createSetup({ viem, provider }: NetworkConnection) {
+  async function deployEvaluator(): Promise<EvaluatorContract> {
+    return viem.deployContract("Evaluator", [], await linkIntegrity(viem));
   }
 
   async function deployRolesMod(
-    owner: string,
-    avatar: string,
-    target: string,
-    evaluatorAddress?: string,
-  ) {
-    const [signer] = await ethers.getSigners();
-    await deployFactories({ provider: createEIP1193(provider, signer) });
+    owner: Address,
+    avatar: Address,
+    target: Address,
+    evaluatorAddress?: Address,
+  ): Promise<RolesContract> {
+    const [walletClient] = await viem.getWalletClients();
+    await deployFactories({ provider: createEIP1193(provider, walletClient) });
 
-    const evaluator =
-      evaluatorAddress ?? (await (await deployEvaluator()).getAddress());
-
-    const Modifier = await ethers.getContractFactory("Roles");
-    const modifier = await Modifier.deploy(owner, avatar, target, evaluator);
-    await modifier.waitForDeployment();
-    return modifier;
+    const evaluator = evaluatorAddress ?? (await deployEvaluator()).address;
+    return viem.deployContract("Roles", [owner, avatar, target, evaluator]);
   }
 
   /** MultiSend and its unwrapper, registered on `roles` (as its owner). */
-  async function deployMultiSend(roles: Roles) {
-    const multisend = await (
-      await ethers.getContractFactory("MultiSend")
-    ).deploy();
-    const unwrapper = await (
-      await ethers.getContractFactory("MultiSendUnwrapper")
-    ).deploy();
-    await roles.setTransactionUnwrapper(
-      await multisend.getAddress(),
-      multisend.interface.getFunction("multiSend").selector,
-      await unwrapper.getAddress(),
-    );
+  async function deployMultiSend(roles: RolesContract) {
+    const multisend = await viem.deployContract("MultiSend");
+    const unwrapper = await viem.deployContract("MultiSendUnwrapper");
+    await roles.write.setTransactionUnwrapper([
+      multisend.address,
+      toFunctionSelector("multiSend(bytes)"),
+      unwrapper.address,
+    ]);
     return { multisend, unwrapper };
   }
 
   async function setupTestContract() {
-    const [owner, member] = await ethers.getSigners();
+    const [owner, member] = await viem.getWalletClients();
 
-    const Avatar = await ethers.getContractFactory("TestAvatar");
-    const avatar = await Avatar.deploy();
-
-    const TestContract = await ethers.getContractFactory("TestContract");
-    const testContract = await TestContract.deploy();
-
-    const avatarAddress = await avatar.getAddress();
+    const avatar = await viem.deployContract("TestAvatar");
+    const testContract = await viem.deployContract("TestContract");
     const evaluator = await deployEvaluator();
     const roles = await deployRolesMod(
-      owner.address,
-      avatarAddress,
-      avatarAddress,
-      await evaluator.getAddress(),
+      owner.account.address,
+      avatar.address,
+      avatar.address,
+      evaluator.address,
     );
 
-    const testContractAddress = await testContract.getAddress();
-    const roleKey = hexlify(randomBytes(32));
+    const testContractAddress = testContract.address;
+    const roleKey = toHex(randomBytes(32));
 
-    await roles.connect(owner).grantRole(member.address, roleKey, 0, 0, 0);
-    await roles.connect(owner).setDefaultRole(member.address, roleKey);
-    await roles.connect(owner).scopeTarget(roleKey, testContractAddress);
+    await roles.write.grantRole([member.account.address, roleKey, 0n, 0n, 0n]);
+    await roles.write.setDefaultRole([member.account.address, roleKey]);
+    await roles.write.scopeTarget([roleKey, testContractAddress]);
 
     const allowTarget = (
-      conditions: ConditionFlatStruct[],
+      conditions: ConditionFlat[],
       options = ExecutionOptions.None,
     ) =>
-      roles
-        .connect(owner)
-        .allowTarget(roleKey, testContractAddress, conditions, options);
+      roles.write.allowTarget([
+        roleKey,
+        testContractAddress,
+        conditions,
+        options,
+      ]);
 
     return {
-      roles: roles.connect(owner),
+      roles,
       evaluator,
       owner,
       member,
@@ -118,8 +108,9 @@ export function createSetup({ ethers, provider }: NetworkConnection) {
   }
 
   function setupFn(signature: string) {
-    const iface = new Interface([signature]);
-    const fn = iface.getFunction("fn")!;
+    const abi = parseAbi([signature]) as Abi;
+    const fn = abi[0] as AbiFunction;
+    const selector = toFunctionSelector(fn);
     const arity = fn.inputs.length;
 
     return async function fixture() {
@@ -127,31 +118,36 @@ export function createSetup({ ethers, provider }: NetworkConnection) {
       const { roles, member, testContractAddress, roleKey } = base;
 
       const allowFunction = (
-        conditions: ConditionFlatStruct[],
+        conditions: ConditionFlat[],
         options = ExecutionOptions.None,
       ) =>
-        roles.allowFunction(
+        roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           conditions,
           options,
-        );
+        ]);
 
       const invoke = (...args: unknown[]) => {
         const options =
           args.length > arity ? (args[arity] as InvokeOptions) : undefined;
-        return roles
-          .connect(member)
-          .execTransactionFromModule(
+        return roles.write.execTransactionFromModule(
+          [
             testContractAddress,
-            options?.value ?? 0,
-            iface.encodeFunctionData(fn, args.slice(0, arity)),
+            BigInt(options?.value ?? 0),
+            encodeFunctionData({
+              abi: [fn],
+              functionName: fn.name,
+              args: args.slice(0, arity),
+            }),
             options?.operation ?? 0,
-          );
+          ],
+          { account: member.account },
+        );
       };
 
-      return { ...base, fn, allowFunction, invoke };
+      return { ...base, fn, selector, allowFunction, invoke };
     };
   }
 

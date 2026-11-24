@@ -1,36 +1,60 @@
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types"
-import { ZeroHash, getCreate2Address, keccak256, parseEther } from "ethers"
+import {
+  type Hex,
+  type PublicClient,
+  type WalletClient,
+  concat,
+  getCreate2Address,
+  parseEther,
+  zeroHash,
+} from "viem"
 
 export async function deployViaFactory(
-  { bytecode, salt = ZeroHash }: { bytecode: string; salt?: string },
-  signer: HardhatEthersSigner
+  { bytecode, salt = zeroHash }: { bytecode: Hex; salt?: Hex },
+  signer: WalletClient,
+  publicClient: PublicClient
 ) {
-  await signer.sendTransaction({
+  const hash = await signer.sendTransaction({
+    account: signer.account!,
+    chain: signer.chain,
     to: factory.address,
-    data: `${salt}${bytecode.slice(2)}`,
-    value: 0,
+    data: concat([salt, bytecode]),
+    value: 0n,
   })
+  await publicClient.waitForTransactionReceipt({ hash })
 
-  return getCreate2Address(factory.address, salt, keccak256(bytecode))
+  return getCreate2Address({
+    from: factory.address,
+    salt,
+    bytecode,
+  })
 }
 
 const factory = {
-  address: "0x4e59b44847b379578588920ca78fbf26c0b4956c",
-  signerAddress: "0x3fab184622dc19b6109349b94811493bf2a45362",
+  address: "0x4e59b44847b379578588920ca78fbf26c0b4956c" as const,
+  signerAddress: "0x3fab184622dc19b6109349b94811493bf2a45362" as const,
   transaction:
-    "0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222",
+    "0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222" as const,
 }
 
-export async function deployFactory(signer: HardhatEthersSigner) {
+export async function deployFactory(
+  signer: WalletClient,
+  publicClient: PublicClient
+) {
   const { address, signerAddress, transaction } = factory
   // fund the presined transaction signer
-  await signer.sendTransaction({
+  const fundHash = await signer.sendTransaction({
+    account: signer.account!,
+    chain: signer.chain,
     to: signerAddress,
     value: parseEther("0.01"),
   })
+  await publicClient.waitForTransactionReceipt({ hash: fundHash })
 
   // shoot the presigned transaction
-  await (await signer.provider!.broadcastTransaction(transaction)).wait()
+  const deployHash = await publicClient.sendRawTransaction({
+    serializedTransaction: transaction,
+  })
+  await publicClient.waitForTransactionReceipt({ hash: deployHash })
 
   return address
 }

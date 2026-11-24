@@ -1,48 +1,53 @@
 import SafeProxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json" with { type: "json" }
 import {
-  AbiCoder,
-  ZeroAddress,
+  type Address,
+  type Hex,
   concat,
+  encodeAbiParameters,
+  encodeFunctionData,
   getCreate2Address,
   keccak256,
-} from "ethers"
+  zeroAddress,
+} from "viem"
 
 import { address as fallbackHandler } from "./deploy-mastercopies/fallbackHandler.js"
 import {
-  iface as ifaceSafe,
+  abi as safeAbi,
   address as mastercopy,
 } from "./deploy-mastercopies/safeMastercopy.js"
 import {
+  abi as factoryAbi,
   address as factory,
-  iface as ifaceFactory,
 } from "./deploy-mastercopies/safeProxyFactory.js"
 
-const { bytecode: creationBytecode } = SafeProxyArtifact
+const creationBytecode = SafeProxyArtifact.bytecode as Hex
 
 export function calculateSafeAddress({
   owners,
   threshold,
   creationNonce,
 }: {
-  owners: string[]
+  owners: Address[]
   threshold: number
   creationNonce: bigint | number
-}): string {
-  const abi = AbiCoder.defaultAbiCoder()
-
+}): Address {
   const salt = keccak256(
     concat([
       keccak256(initializer({ owners, threshold })),
-      abi.encode(["uint256"], [creationNonce]),
+      encodeAbiParameters([{ type: "uint256" }], [BigInt(creationNonce)]),
     ])
   )
 
   const deploymentData = concat([
     creationBytecode,
-    abi.encode(["address"], [mastercopy]),
+    encodeAbiParameters([{ type: "address" }], [mastercopy]),
   ])
 
-  return getCreate2Address(factory, salt, keccak256(deploymentData))
+  return getCreate2Address({
+    from: factory,
+    salt,
+    bytecode: deploymentData,
+  })
 }
 
 export function populateSafeCreation({
@@ -50,18 +55,18 @@ export function populateSafeCreation({
   threshold,
   creationNonce,
 }: {
-  owners: string[]
+  owners: Address[]
   threshold: number
   creationNonce: bigint
 }) {
   return {
     to: factory,
-    value: 0,
-    data: ifaceFactory.encodeFunctionData("createProxyWithNonce", [
-      mastercopy,
-      initializer({ owners, threshold }),
-      creationNonce,
-    ]),
+    value: 0n,
+    data: encodeFunctionData({
+      abi: factoryAbi,
+      functionName: "createProxyWithNonce",
+      args: [mastercopy, initializer({ owners, threshold }), creationNonce],
+    }),
   }
 }
 
@@ -69,19 +74,21 @@ function initializer({
   owners,
   threshold,
 }: {
-  owners: string[]
+  owners: Address[]
   threshold: number
 }) {
-  const initializer = ifaceSafe.encodeFunctionData("setup", [
-    owners,
-    threshold,
-    ZeroAddress,
-    "0x",
-    fallbackHandler,
-    ZeroAddress,
-    0,
-    ZeroAddress,
-  ])
-
-  return initializer
+  return encodeFunctionData({
+    abi: safeAbi,
+    functionName: "setup",
+    args: [
+      owners,
+      BigInt(threshold),
+      zeroAddress,
+      "0x",
+      fallbackHandler,
+      zeroAddress,
+      0n,
+      zeroAddress,
+    ],
+  })
 }

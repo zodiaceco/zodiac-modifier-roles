@@ -8,15 +8,27 @@
  * The random version of this check is `GAP_NORMALIZE=1` in
  * integrity-gaps.spec.ts.
  */
-import { expect } from "chai";
-import { AbiCoder, ContractFactory, concat, hexlify } from "ethers";
-import hre, { network } from "hardhat";
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
+import { network } from "hardhat";
+import {
+  concat,
+  encodeAbiParameters,
+  parseAbiParameters,
+  type Hex,
+} from "viem";
+import type { GetContractReturnType } from "@nomicfoundation/hardhat-viem/types";
+import type { ArtifactMap } from "hardhat/types/artifacts";
 
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
+import { linkIntegrity } from "../../test/setup.js";
 import { Encoding, Operator, flattenCondition } from "../../test/utils.js";
 
-const abi = AbiCoder.defaultAbiCoder();
-const word = (n: number) => abi.encode(["uint256"], [n]);
+const connection = await network.create();
+const { viem } = connection;
+
+const word = (n: number | bigint): Hex =>
+  encodeAbiParameters([{ type: "uint256" }], [BigInt(n)]);
 
 const eq = (n: number) => ({
   paramType: Encoding.Static,
@@ -29,7 +41,7 @@ const tuple = (...children: any[]) => ({
   children,
 });
 /** Calldata with a checked 4-byte selector. */
-const call = (selector: string, ...children: any[]) => ({
+const call = (selector: Hex, ...children: any[]) => ({
   paramType: Encoding.AbiEncoded,
   operator: Operator.Matches,
   compValue: concat(["0x0004", selector]),
@@ -41,43 +53,43 @@ const or = (...children: any[]) => ({
   children,
 });
 
-describe("SDK normalizeCondition keeps the calldata layout", function () {
-  let evaluator: any;
+type MockEvaluatorContract = GetContractReturnType<
+  ArtifactMap["MockEvaluator"]["abi"]
+>;
 
-  before(async function () {
-    const { ethers } = await network.create();
-    const [signer] = await ethers.getSigners();
-    const lib = async (name: string) => {
-      const { bytecode } = await hre.artifacts.readArtifact(name);
-      const c = await new ContractFactory([], bytecode, signer).deploy();
-      return c.getAddress();
-    };
-    evaluator = await (
-      await ethers.getContractFactory("MockEvaluator", {
-        libraries: {
-          CustomConditionChecker: await lib("CustomConditionChecker"),
-          WithinRatioChecker: await lib("WithinRatioChecker"),
-        },
-      })
-    ).deploy();
+describe("SDK normalizeCondition keeps the calldata layout", () => {
+  let evaluator: MockEvaluatorContract;
+
+  before(async () => {
+    evaluator = await viem.deployContract(
+      "MockEvaluator",
+      [],
+      await linkIntegrity(viem),
+    );
   });
 
-  const passes = async (tree: any, data: string) =>
-    Number(await evaluator.evaluate(data, flattenCondition(tree))) === 0;
+  after(async () => {
+    await connection.close();
+  });
 
-  async function expectSameVerdicts(tree: any, calldata: string[]) {
+  const passes = async (tree: any, data: Hex) =>
+    Number(await evaluator.read.evaluate([data, flattenCondition(tree)])) === 0;
+
+  async function expectSameVerdicts(tree: any, calldata: Hex[]) {
     const normalized = normalizeCondition(structuredClone(tree));
     for (const data of calldata) {
-      expect(await passes(normalized, data), data).to.equal(
+      assert.equal(
+        await passes(normalized, data),
         await passes(tree, data),
+        data,
       );
     }
   }
 
-  it("call variants with a struct of a different width", async function () {
+  it("call variants with a struct of a different width", async () => {
     // f((uint256) t, uint256 x) or g((uint256, uint256) t)
-    const f = "0x11111111";
-    const g = "0x22222222";
+    const f = "0x11111111" as const;
+    const g = "0x22222222" as const;
     const tree = or(call(f, tuple(eq(1)), eq(2)), call(g, tuple(eq(3), eq(4))));
     await expectSameVerdicts(tree, [
       concat([f, word(1), word(2)]),
@@ -88,7 +100,7 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
     ]);
   });
 
-  it("leaves a Zip's fields and plucked arrays as written", async function () {
+  it("leaves a Zip's fields and plucked arrays as written", async () => {
     // f(bytes[] a, uint256[] b), every (a[i], b[i]) passes: the trailing
     // Pass field must stay, a Zip has one field per plucked array
     const pass = (paramType: Encoding) => ({
@@ -107,7 +119,7 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
       compValue: "0x0102",
       children: [tuple(pass(Encoding.Dynamic), pass(Encoding.Static))],
     };
-    const f = "0x44444444";
+    const f = "0x44444444" as const;
     const tree = {
       paramType: Encoding.None,
       operator: Operator.And,
@@ -118,8 +130,11 @@ describe("SDK normalizeCondition keeps the calldata layout", function () {
     };
     const data = concat([
       f,
-      abi.encode(["bytes[]", "uint256[]"], [["0xaa"], [7]]),
+      encodeAbiParameters(parseAbiParameters("bytes[], uint256[]"), [
+        ["0xaa"],
+        [7n],
+      ]),
     ]);
-    await expectSameVerdicts(tree, [hexlify(data)]);
+    await expectSameVerdicts(tree, [data]);
   });
 });

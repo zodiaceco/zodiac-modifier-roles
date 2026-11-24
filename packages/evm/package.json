@@ -3,19 +3,20 @@
   "version": "3.0.0",
   "type": "module",
   "description": "A Zodiac modifier that allows avatars to enforce granular, role-based, permissions for attached modules.",
-  "types": "./typechain-types/index.ts",
+  "types": "./build/abis.d.ts",
   "exports": {
     ".": {
-      "types": "./typechain-types/index.ts",
-      "import": "./typechain-types/index.ts"
+      "types": "./build/abis.d.ts",
+      "import": "./build/abis.js"
     },
     "./contracts/*": "./contracts/*"
   },
   "scripts": {
-    "build": "hardhat compile",
+    "build": "hardhat compile && node scripts/export-abis.mjs",
     "clean": "hardhat clean",
     "test": "hardhat test",
-    "test:formal": "hardhat test mocha formal/test/*.spec.ts",
+    "test:formal": "hardhat test nodejs formal/test/*.spec.ts",
+    "check:types": "tsc --noEmit",
     "deploy:mastercopy": "yarn hardhat deploy:mastercopy --network",
     "verify:mastercopy": "yarn hardhat verify:mastercopy --network",
     "coverage": "hardhat test --coverage",
@@ -29,19 +30,16 @@
   },
   "devDependencies": {
     "@gnosis-guild/zodiac-core": "4.3.1",
-    "@nomicfoundation/hardhat-ethers": "^4.0.0",
-    "@nomicfoundation/hardhat-ethers-chai-matchers": "^3.0.0",
-    "@nomicfoundation/hardhat-mocha": "^4.0.1",
     "@nomicfoundation/hardhat-network-helpers": "^3.0.0",
-    "@nomicfoundation/hardhat-typechain": "^3.0.0",
-    "@types/mocha": "10.0.10",
-    "chai": "^6.3.0",
-    "ethers": "6.16.0",
+    "@nomicfoundation/hardhat-node-test-runner": "^3.0.0",
+    "@nomicfoundation/hardhat-viem": "^3.0.0",
+    "@nomicfoundation/hardhat-viem-assertions": "^3.0.0",
+    "@types/node": "^24.19.2",
     "hardhat": "^3.22.0",
-    "mocha": "^12.0.3",
     "prettier": "^3.7.4",
     "prettier-plugin-solidity": "^1.4.3",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "viem": "^2.47.6"
   },
   "installConfig": {
     "hoistingLimits": "workspaces"

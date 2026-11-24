@@ -1,8 +1,25 @@
-import { expect } from "chai";
-import { hexlify, Interface, randomBytes, ZeroAddress, ZeroHash } from "ethers";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  encodeFunctionData,
+  getAddress,
+  isAddressEqual,
+  keccak256,
+  parseAbi,
+  parseEther,
+  toBytes,
+  toFunctionSelector,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem";
+import type { Hex } from "viem";
 
 import {
+  assertRevertedWithoutReason,
+  type ConditionFlat,
   ConditionViolationStatus,
   Encoding,
   ExecutionOptions,
@@ -14,11 +31,11 @@ import { ENTRYPOINTS, NO_DEADLINE, encodeEntrypoint } from "./roleTx.js";
 import type { Entrypoint } from "./roleTx.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
 const { deployEvaluator, deployRolesMod } = createSetup(connection);
 
-const iface = new Interface([
+const abi = parseAbi([
   "function doNothing()",
   "function oneParamStatic(uint256)",
   "function fn(address)",
@@ -30,31 +47,35 @@ describe("Core / Evaluator split", () => {
   });
 
   async function setup() {
-    const [owner, member, nonMember, relayer] = await ethers.getSigners();
+    const [owner, member, nonMember, relayer] = await viem.getWalletClients();
 
-    const Avatar = await ethers.getContractFactory("TestAvatar");
-    const avatar = await Avatar.deploy();
-    const avatarAddress = await avatar.getAddress();
+    const avatar = await viem.deployContract("TestAvatar");
+    const avatarAddress = avatar.address;
 
-    const TestContract = await ethers.getContractFactory("TestContract");
-    const testContract = await TestContract.deploy();
-    const testContractAddress = await testContract.getAddress();
+    const testContract = await viem.deployContract("TestContract");
+    const testContractAddress = testContract.address;
 
     const evaluator = await deployEvaluator();
-    const evaluatorAddress = await evaluator.getAddress();
+    const evaluatorAddress = evaluator.address;
 
     const roles = await deployRolesMod(
-      owner.address,
+      owner.account.address,
       avatarAddress,
       avatarAddress,
       evaluatorAddress,
     );
 
-    const roleKey = hexlify(randomBytes(32));
+    const roleKey = toHex(randomBytes(32));
 
-    await roles.connect(owner).grantRole(member.address, roleKey, 0, 0, 0);
-    await roles.connect(owner).setDefaultRole(member.address, roleKey);
-    await roles.connect(owner).scopeTarget(roleKey, testContractAddress);
+    await roles.write.grantRole([member.account.address, roleKey, 0n, 0n, 0n], {
+      account: owner.account,
+    });
+    await roles.write.setDefaultRole([member.account.address, roleKey], {
+      account: owner.account,
+    });
+    await roles.write.scopeTarget([roleKey, testContractAddress], {
+      account: owner.account,
+    });
 
     return {
       owner,
@@ -67,7 +88,7 @@ describe("Core / Evaluator split", () => {
       testContractAddress,
       evaluator,
       evaluatorAddress,
-      roles: roles.connect(owner),
+      roles,
       roleKey,
     };
   }
@@ -77,31 +98,37 @@ describe("Core / Evaluator split", () => {
       const { owner, avatarAddress, evaluatorAddress } =
         await loadFixture(setup);
 
-      const roles = await deployRolesMod(
-        owner.address,
-        avatarAddress,
-        avatarAddress,
-        evaluatorAddress,
-      );
+      const { contract: roles, deploymentTransaction } =
+        await viem.sendDeploymentTransaction("Roles", [
+          owner.account.address,
+          avatarAddress,
+          avatarAddress,
+          evaluatorAddress,
+        ]);
 
-      expect(await roles.evaluator()).to.equal(evaluatorAddress);
-      await expect(roles.deploymentTransaction())
-        .to.emit(roles, "SetEvaluator")
-        .withArgs(evaluatorAddress);
+      assert.equal(
+        getAddress(await roles.read.evaluator()),
+        getAddress(evaluatorAddress),
+      );
+      await viem.assertions.emitWithArgs(
+        deploymentTransaction.hash,
+        roles,
+        "SetEvaluator",
+        [evaluatorAddress],
+      );
     });
 
     it("reverts ZeroAddressNotAllowed if initial evaluator is address(0)", async () => {
-      const { owner, avatarAddress } = await loadFixture(setup);
+      const { roles, owner, avatarAddress } = await loadFixture(setup);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         deployRolesMod(
-          owner.address,
+          owner.account.address,
           avatarAddress,
           avatarAddress,
-          ZeroAddress,
-        ),
-      ).to.be.revertedWithCustomError(
-        await ethers.getContractFactory("Roles"),
+          zeroAddress,
+        ) as Promise<any>,
+        roles,
         "ZeroAddressNotAllowed",
       );
     });
@@ -110,17 +137,25 @@ describe("Core / Evaluator split", () => {
       const { roles, owner } = await loadFixture(setup);
 
       const alt = await deployEvaluator();
-      const altAddress = await alt.getAddress();
+      const altAddress = alt.address;
 
-      await expect(
-        roles.connect(owner).setEvaluator(ZeroAddress),
-      ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
+      await viem.assertions.revertWithCustomError(
+        roles.write.setEvaluator([zeroAddress], { account: owner.account }),
+        roles,
+        "ZeroAddressNotAllowed",
+      );
 
-      await expect(roles.connect(owner).setEvaluator(altAddress))
-        .to.emit(roles, "SetEvaluator")
-        .withArgs(altAddress);
+      await viem.assertions.emitWithArgs(
+        roles.write.setEvaluator([altAddress], { account: owner.account }),
+        roles,
+        "SetEvaluator",
+        [altAddress],
+      );
 
-      expect(await roles.evaluator()).to.equal(altAddress);
+      assert.equal(
+        getAddress(await roles.read.evaluator()),
+        getAddress(altAddress),
+      );
     });
 
     it("swaps evaluator on an existing mod with no redeploy and preserves all state", async () => {
@@ -133,11 +168,11 @@ describe("Core / Evaluator split", () => {
         evaluatorAddress,
       } = await loadFixture(setup);
 
-      const selector = iface.getFunction("oneParamStatic")!.selector;
-      const allowanceKey = ethers.id("HOT_SWAP_ALLOWANCE");
+      const selector = toFunctionSelector("oneParamStatic(uint256)");
+      const allowanceKey = keccak256(toBytes("HOT_SWAP_ALLOWANCE"));
 
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
-      await roles.allowFunction(
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
         selector,
@@ -153,180 +188,233 @@ describe("Core / Evaluator split", () => {
           ],
         }),
         ExecutionOptions.None,
-      );
+      ]);
 
       // Works with initial evaluator and consumes 40
-      await roles
-        .connect(member)
-        .execTransactionFromModule(
+      await roles.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [40n],
+          }),
           0,
-          iface.encodeFunctionData("oneParamStatic", [40]),
-          0,
-        );
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(60);
+        ],
+        { account: member.account },
+      );
+      assert.equal((await roles.read.allowances([allowanceKey]))[3], 60n);
 
       // Swap to always-deny evaluator: same permission now fails without redeploying Core
-      const Deny = await ethers.getContractFactory("TestAlwaysDenyEvaluator");
-      const deny = await Deny.deploy();
-      await roles.connect(owner).setEvaluator(await deny.getAddress());
+      const deny = await viem.deployContract("TestAlwaysDenyEvaluator");
+      await roles.write.setEvaluator([deny.address], {
+        account: owner.account,
+      });
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [10n],
+            }),
             0,
-            iface.encodeFunctionData("oneParamStatic", [10]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 7, 4);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 7n, 4n],
+      );
 
       // Swap back to a freshly deployed real Evaluator: membership, permission, and allowance balance (60) remain intact
       const fresh = await deployEvaluator();
-      expect(await fresh.getAddress()).to.not.equal(evaluatorAddress);
-      await roles.connect(owner).setEvaluator(await fresh.getAddress());
+      assert.ok(!isAddressEqual(fresh.address, evaluatorAddress));
+      await roles.write.setEvaluator([fresh.address], {
+        account: owner.account,
+      });
 
       // 70 > remaining 60 fails
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [70n],
+            }),
             0,
-            iface.encodeFunctionData("oneParamStatic", [70]),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles, "ConditionViolation");
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+      );
 
       // 60 <= remaining 60 succeeds
-      await roles
-        .connect(member)
-        .execTransactionFromModule(
+      await roles.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [60n],
+          }),
           0,
-          iface.encodeFunctionData("oneParamStatic", [60]),
-          0,
-        );
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
+        ],
+        { account: member.account },
+      );
+      assert.equal((await roles.read.allowances([allowanceKey]))[3], 0n);
     });
 
     it("reverts EvaluatorNotAContract if evaluator has no code", async () => {
       const { roles, owner, member, nonMember, testContractAddress, roleKey } =
         await loadFixture(setup);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         testContractAddress,
         "0x",
         ExecutionOptions.None,
-      );
-      await roles.connect(owner).setEvaluator(nonMember.address);
+      ]);
+      await roles.write.setEvaluator([nonMember.account.address], {
+        account: owner.account,
+      });
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
             0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "EvaluatorNotAContract")
-        .withArgs(nonMember.address);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "EvaluatorNotAContract",
+        [nonMember.account.address],
+      );
 
-      await expect(
-        roles.packConditions([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
+      await assertRevertedWithoutReason(
+        roles.read.packConditions([
+          [
+            {
+              parent: 0,
+              paramType: Encoding.None,
+              operator: Operator.Pass,
+              compValue: "0x",
+            },
+          ],
         ]),
-      ).to.be.revertedWithoutReason(ethers);
+      );
     });
 
     describe("validated setters pack through the Evaluator, *Packed setters bypass it", () => {
       async function setupWithRevertingEvaluator() {
         const ctx = await setup();
-        const Reverting = await ethers.getContractFactory(
-          "TestRevertingEvaluator",
-        );
-        const reverting = await Reverting.deploy();
-        await ctx.roles
-          .connect(ctx.owner)
-          .setEvaluator(await reverting.getAddress());
+        const reverting = await viem.deployContract("TestRevertingEvaluator");
+        await ctx.roles.write.setEvaluator([reverting.address], {
+          account: ctx.owner.account,
+        });
         return { ...ctx, reverting };
       }
 
-      const selector = iface.getFunction("doNothing")!.selector;
+      const selector = toFunctionSelector("doNothing()");
       type Ctx = Awaited<ReturnType<typeof setupWithRevertingEvaluator>>;
-      type Conditions = ReturnType<typeof flattenCondition>;
+      type Conditions = ConditionFlat[];
 
-      const VALIDATED: Record<string, (c: Ctx, conditions: Conditions) => any> =
-        {
-          packConditions: ({ roles }, conditions) =>
-            roles.packConditions(conditions),
-          allowTarget: ({ roles, roleKey, testContractAddress }, conditions) =>
-            roles.allowTarget(
-              roleKey,
-              testContractAddress,
-              conditions,
-              ExecutionOptions.None,
-            ),
-          allowFunction: (
-            { roles, roleKey, testContractAddress },
+      const VALIDATED: Record<
+        string,
+        (c: Ctx, conditions: Conditions) => Promise<Hex>
+      > = {
+        packConditions: ({ roles }, conditions) =>
+          roles.read.packConditions([conditions]),
+        allowTarget: ({ roles, roleKey, testContractAddress }, conditions) =>
+          roles.write.allowTarget([
+            roleKey,
+            testContractAddress,
             conditions,
-          ) =>
-            roles.allowFunction(
-              roleKey,
-              testContractAddress,
-              selector,
-              conditions,
-              ExecutionOptions.None,
-            ),
-          allowFunctionGlobally: ({ roles, roleKey }, conditions) =>
-            roles.allowFunctionGlobally(roleKey, selector, conditions),
-        };
+            ExecutionOptions.None,
+          ]),
+        allowFunction: ({ roles, roleKey, testContractAddress }, conditions) =>
+          roles.write.allowFunction([
+            roleKey,
+            testContractAddress,
+            selector,
+            conditions,
+            ExecutionOptions.None,
+          ]),
+        allowFunctionGlobally: ({ roles, roleKey }, conditions) =>
+          roles.write.allowFunctionGlobally([roleKey, selector, conditions]),
+      };
 
       // any bytes: a *Packed setter stores them without calling the
       // Evaluator. Each is listed with its arguments, which are also those
       // of the event it emits.
-      const BUFFER = "0x00";
-      const PACKED = {
-        allowTargetPacked: ({ roleKey, testContractAddress }: Ctx) =>
-          [
-            roleKey,
-            testContractAddress,
-            BUFFER,
-            ExecutionOptions.None,
-          ] as const,
-        allowFunctionPacked: ({ roleKey, testContractAddress }: Ctx) =>
-          [
-            roleKey,
-            testContractAddress,
-            selector,
-            BUFFER,
-            ExecutionOptions.None,
-          ] as const,
-        allowFunctionGloballyPacked: ({ roleKey }: Ctx) =>
-          [roleKey, selector, BUFFER] as const,
-      };
-      const EVENTS = {
-        allowTargetPacked: "AllowTarget",
-        allowFunctionPacked: "AllowFunction",
-        allowFunctionGloballyPacked: "AllowFunctionGlobally",
-      } as const;
+      const BUFFER = "0x00" as const;
+      const PACKED = [
+        {
+          name: "allowTargetPacked",
+          run: ({ roles, roleKey, testContractAddress }: Ctx) => {
+            const args = [
+              roleKey,
+              testContractAddress,
+              BUFFER,
+              ExecutionOptions.None,
+            ] as const;
+            return viem.assertions.emitWithArgs(
+              roles.write.allowTargetPacked([...args]),
+              roles,
+              "AllowTarget",
+              [...args],
+            );
+          },
+        },
+        {
+          name: "allowFunctionPacked",
+          run: ({ roles, roleKey, testContractAddress }: Ctx) => {
+            const args = [
+              roleKey,
+              testContractAddress,
+              selector,
+              BUFFER,
+              ExecutionOptions.None,
+            ] as const;
+            return viem.assertions.emitWithArgs(
+              roles.write.allowFunctionPacked([...args]),
+              roles,
+              "AllowFunction",
+              [...args],
+            );
+          },
+        },
+        {
+          name: "allowFunctionGloballyPacked",
+          run: ({ roles, roleKey }: Ctx) => {
+            const args = [roleKey, selector, BUFFER] as const;
+            return viem.assertions.emitWithArgs(
+              roles.write.allowFunctionGloballyPacked([...args]),
+              roles,
+              "AllowFunctionGlobally",
+              [...args],
+            );
+          },
+        },
+      ] as const;
 
       for (const [name, call] of Object.entries(VALIDATED))
         it(`${name} packs conditions through the Evaluator, and none without calling it`, async () => {
           const ctx = await loadFixture(setupWithRevertingEvaluator);
 
-          await expect(
+          await viem.assertions.revertWithCustomError(
             call(
               ctx,
               flattenCondition({
@@ -334,24 +422,20 @@ describe("Core / Evaluator split", () => {
                 operator: Operator.Pass,
               }),
             ),
-          ).to.be.revertedWithCustomError(
             ctx.reverting,
             "IntentionalEvaluatorRevert",
           );
           // empty conditions skip packing: stored (or returned) as empty
           const result = await call(ctx, []);
-          if (name === "packConditions") expect(result).to.equal("0x");
+          if (name === "packConditions") assert.equal(result, "0x");
         });
 
-      for (const name of Object.keys(PACKED) as (keyof typeof PACKED)[])
+      for (const { name, run } of PACKED)
         it(`${name} stores the buffer without calling the Evaluator`, async () => {
           const ctx = await loadFixture(setupWithRevertingEvaluator);
-          const args = PACKED[name](ctx);
 
           // the buffer is emitted as given, not as an Evaluator packed it
-          await expect((ctx.roles[name] as any)(...args))
-            .to.emit(ctx.roles, EVENTS[name])
-            .withArgs(...args);
+          await run(ctx);
         });
     });
   });
@@ -359,20 +443,17 @@ describe("Core / Evaluator split", () => {
   describe("authentication, independent of the Evaluator", () => {
     async function setupWithAlwaysAllowEvaluator() {
       const ctx = await setup();
-      const AlwaysAllow = await ethers.getContractFactory(
-        "TestAlwaysAllowEvaluator",
-      );
-      const alwaysAllow = await AlwaysAllow.deploy();
-      await ctx.roles
-        .connect(ctx.owner)
-        .setEvaluator(await alwaysAllow.getAddress());
+      const alwaysAllow = await viem.deployContract("TestAlwaysAllowEvaluator");
+      await ctx.roles.write.setEvaluator([alwaysAllow.address], {
+        account: ctx.owner.account,
+      });
 
-      await ctx.roles.allowTargetPacked(
+      await ctx.roles.write.allowTargetPacked([
         ctx.roleKey,
         ctx.testContractAddress,
         "0x",
         ExecutionOptions.Both,
-      );
+      ]);
 
       return { ...ctx, alwaysAllow };
     }
@@ -389,13 +470,13 @@ describe("Core / Evaluator split", () => {
       const sender =
         entrypoint === "execTransactionWithRoleSigned" ? relayer : module;
       return sender.sendTransaction({
-        to: await roles.getAddress(),
+        to: roles.address,
         data: await encodeEntrypoint(
           roles,
           entrypoint,
           {
             to,
-            data: iface.encodeFunctionData("doNothing"),
+            data: encodeFunctionData({ abi, functionName: "doNothing" }),
             roleKey,
             deadline,
           },
@@ -406,7 +487,11 @@ describe("Core / Evaluator split", () => {
 
     const REJECTIONS: {
       who: string;
-      error: string;
+      error:
+        | "NotAuthorized"
+        | "NoMembership"
+        | "NoDefaultRole"
+        | "SignatureExpired";
       entrypoints: readonly Entrypoint[];
       arrange: (
         ctx: Ctx,
@@ -423,8 +508,11 @@ describe("Core / Evaluator split", () => {
         error: "NoMembership",
         entrypoints: ENTRYPOINTS,
         arrange: async ({ roles, nonMember, roleKey }) => {
-          await roles.enableModule(nonMember.address);
-          await roles.setDefaultRole(nonMember.address, roleKey);
+          await roles.write.enableModule([nonMember.account.address]);
+          await roles.write.setDefaultRole([
+            nonMember.account.address,
+            roleKey,
+          ]);
           return { module: nonMember };
         },
       },
@@ -436,7 +524,7 @@ describe("Core / Evaluator split", () => {
           "execTransactionFromModuleReturnData",
         ],
         arrange: async ({ roles, member }) => {
-          await roles.setDefaultRole(member.address, ZeroHash);
+          await roles.write.setDefaultRole([member.account.address, zeroHash]);
           return { module: member };
         },
       },
@@ -455,9 +543,7 @@ describe("Core / Evaluator split", () => {
       it(`lets a member through ${entrypoint} (the control)`, async () => {
         const ctx = await loadFixture(setupWithAlwaysAllowEvaluator);
 
-        await expect(execThrough(ctx, entrypoint, ctx.member)).to.not.be.revert(
-          ethers,
-        );
+        await execThrough(ctx, entrypoint, ctx.member);
       });
 
     for (const { who, error, entrypoints, arrange } of REJECTIONS)
@@ -466,54 +552,64 @@ describe("Core / Evaluator split", () => {
           const ctx = await loadFixture(setupWithAlwaysAllowEvaluator);
           const { module, deadline } = await arrange(ctx);
 
-          await expect(
+          await viem.assertions.revertWithCustomError(
             execThrough(ctx, entrypoint, module, deadline),
-          ).to.be.revertedWithCustomError(ctx.roles, error);
+            ctx.roles,
+            error,
+          );
         });
 
     it("enforces zero role, validity window, and finite uses", async () => {
       const { roles, owner, nonMember, testContractAddress, roleKey } =
         await loadFixture(setupWithAlwaysAllowEvaluator);
 
-      const data = iface.encodeFunctionData("doNothing");
-      const exec = (role: string) =>
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, role);
+      const data = encodeFunctionData({ abi, functionName: "doNothing" });
+      const exec = (role: Hex) =>
+        roles.write.execTransactionWithRole(
+          [testContractAddress, 0n, data, 0, role],
+          { account: nonMember.account },
+        );
 
       // Zero role is always rejected
-      await roles
-        .connect(owner)
-        .grantRole(nonMember.address, ZeroHash, 0, 0, 0);
-      await expect(exec(ZeroHash)).to.be.revertedWithCustomError(
+      await roles.write.grantRole(
+        [nonMember.account.address, zeroHash, 0n, 0n, 0n],
+        { account: owner.account },
+      );
+      await viem.assertions.revertWithCustomError(
+        exec(zeroHash),
         roles,
         "NoMembership",
       );
 
       // Future start timestamp rejected
-      const now = await time.latest();
-      await roles
-        .connect(owner)
-        .grantRole(nonMember.address, roleKey, now + 1000, now + 2000, 1);
-      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+      const now = BigInt(await time.latest());
+      await roles.write.grantRole(
+        [nonMember.account.address, roleKey, now + 1000n, now + 2000n, 1n],
+        { account: owner.account },
+      );
+      await viem.assertions.revertWithCustomError(
+        exec(roleKey),
         roles,
         "MembershipNotYetValid",
       );
 
       // Advance into window: 1 use succeeds, 2nd call rejected
-      await time.increaseTo(now + 1000);
+      await time.increaseTo(now + 1000n);
       await exec(roleKey);
-      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+      await viem.assertions.revertWithCustomError(
+        exec(roleKey),
         roles,
         "NoMembership",
       );
 
       // Expired membership rejected
-      await roles
-        .connect(owner)
-        .grantRole(nonMember.address, roleKey, now, now + 1500, 0);
-      await time.increaseTo(now + 1501);
-      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+      await roles.write.grantRole(
+        [nonMember.account.address, roleKey, now, now + 1500n, 0n],
+        { account: owner.account },
+      );
+      await time.increaseTo(now + 1501n);
+      await viem.assertions.revertWithCustomError(
+        exec(roleKey),
         roles,
         "MembershipExpired",
       );
@@ -525,167 +621,186 @@ describe("Core / Evaluator split", () => {
       const { roles, owner, member, avatar, testContractAddress, roleKey } =
         await loadFixture(setup);
 
-      const AlwaysAllow = await ethers.getContractFactory(
-        "TestAlwaysAllowEvaluator",
-      );
-      const alwaysAllow = await AlwaysAllow.deploy();
-      await roles.connect(owner).setEvaluator(await alwaysAllow.getAddress());
+      const alwaysAllow = await viem.deployContract("TestAlwaysAllowEvaluator");
+      await roles.write.setEvaluator([alwaysAllow.address], {
+        account: owner.account,
+      });
 
       // Unpermitted selector still reverts TransactionNotAllowed
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
             0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "TransactionNotAllowed",
+      );
 
       // Allow target with ExecutionOptions.None
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         testContractAddress,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
       // 1-3 byte calldata still reverts FunctionSignatureTooShort
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, "0x1234", 0),
-      ).to.be.revertedWithCustomError(roles, "FunctionSignatureTooShort");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, "0x1234", 0],
+          { account: member.account },
+        ),
+        roles,
+        "FunctionSignatureTooShort",
+      );
 
       // ETH value still reverts SendNotAllowed
       await owner.sendTransaction({
-        to: await avatar.getAddress(),
-        value: ethers.parseEther("1"),
+        to: avatar.address,
+        value: parseEther("1"),
       });
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            ethers.parseEther("0.1"),
-            "0x",
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles, "SendNotAllowed");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, parseEther("0.1"), "0x", 0],
+          { account: member.account },
+        ),
+        roles,
+        "SendNotAllowed",
+      );
 
       // DelegateCall still reverts DelegateCallNotAllowed
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, "0x", 1),
-      ).to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, "0x", 1],
+          { account: member.account },
+        ),
+        roles,
+        "DelegateCallNotAllowed",
+      );
     });
 
     it("invokes Evaluator via STATICCALL so a state-mutating Evaluator reverts", async () => {
       const { roles, owner, member, testContractAddress, roleKey } =
         await loadFixture(setup);
 
-      const Mutating = await ethers.getContractFactory("TestMutatingEvaluator");
-      const mutating = await Mutating.deploy();
-      await roles.connect(owner).setEvaluator(await mutating.getAddress());
-      await roles.allowTargetPacked(
+      const mutating = await viem.deployContract("TestMutatingEvaluator");
+      await roles.write.setEvaluator([mutating.address], {
+        account: owner.account,
+      });
+      await roles.write.allowTargetPacked([
         roleKey,
         testContractAddress,
         "0x",
         ExecutionOptions.None,
+      ]);
+
+      await viem.assertions.revert(
+        roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+            0,
+          ],
+          { account: member.account },
+        ),
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      ).to.be.revert(ethers);
-
-      expect(await mutating.counter()).to.equal(0);
+      assert.equal(await mutating.read.counter(), 0n);
     });
 
     it("propagates Evaluator reverts and rejects malformed return data", async () => {
       const { roles, owner, member, testContractAddress, roleKey } =
         await loadFixture(setup);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         testContractAddress,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
-      const Reverting = await ethers.getContractFactory(
-        "TestRevertingEvaluator",
-      );
-      const reverting = await Reverting.deploy();
-      await roles.connect(owner).setEvaluator(await reverting.getAddress());
+      const reverting = await viem.deployContract("TestRevertingEvaluator");
+      await roles.write.setEvaluator([reverting.address], {
+        account: owner.account,
+      });
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
             0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(reverting, "IntentionalEvaluatorRevert");
+          ],
+          { account: member.account },
+        ),
+        reverting,
+        "IntentionalEvaluatorRevert",
+      );
 
-      const Malformed = await ethers.getContractFactory(
+      const malformed = await viem.deployContract(
         "TestMalformedReturnEvaluator",
       );
-      const malformed = await Malformed.deploy();
-      await roles.connect(owner).setEvaluator(await malformed.getAddress());
+      await roles.write.setEvaluator([malformed.address], {
+        account: owner.account,
+      });
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revert(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
             0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      ).to.be.revert(ethers);
+          ],
+          { account: member.account },
+        ),
+      );
     });
 
     describe("a forging Evaluator", () => {
       async function setupWithForgingEvaluator() {
         const ctx = await setup();
-        const Forging = await ethers.getContractFactory(
+        const forging = await viem.deployContract(
           "TestForgingConsumptionEvaluator",
         );
-        const forging = await Forging.deploy();
-        await ctx.roles
-          .connect(ctx.owner)
-          .setEvaluator(await forging.getAddress());
-        await ctx.roles.allowTargetPacked(
+        await ctx.roles.write.setEvaluator([forging.address], {
+          account: ctx.owner.account,
+        });
+        await ctx.roles.write.allowTargetPacked([
           ctx.roleKey,
           ctx.testContractAddress,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        const allowanceKey = ethers.id("FORGE_TEST");
+        const allowanceKey = keccak256(toBytes("FORGE_TEST"));
         // refills 10 every 600s
-        await ctx.roles.setAllowance(allowanceKey, 100, 1000, 10, 600, 0);
+        await ctx.roles.write.setAllowance([
+          allowanceKey,
+          100n,
+          1000n,
+          10n,
+          600n,
+          0n,
+        ]);
 
         const exec = () =>
-          ctx.roles
-            .connect(ctx.member)
-            .execTransactionFromModule(
+          ctx.roles.write.execTransactionFromModule(
+            [
               ctx.testContractAddress,
+              0n,
+              encodeFunctionData({ abi, functionName: "doNothing" }),
               0,
-              iface.encodeFunctionData("doNothing"),
-              0,
-            );
+            ],
+            { account: ctx.member.account },
+          );
 
         return { ...ctx, forging, allowanceKey, exec };
       }
@@ -694,41 +809,43 @@ describe("Core / Evaluator split", () => {
         const { roles, forging, allowanceKey, exec } = await loadFixture(
           setupWithForgingEvaluator,
         );
-        const before = await roles.allowances(allowanceKey);
+        const before = await roles.read.allowances([allowanceKey]);
 
-        await forging.setForged([
-          { allowanceKey, balance: 999999n, consumed: 5n, timestamp: 12345n },
+        await forging.write.setForged([
+          [{ allowanceKey, balance: 999999n, consumed: 5n, timestamp: 12345n }],
         ]);
         // two periods later: Core accrues 120 itself, from storage
-        await time.setNextBlockTimestamp(before.timestamp + 1200n);
-        await expect(exec())
-          .to.emit(roles, "ConsumeAllowance")
-          .withArgs(allowanceKey, 5, 115);
+        await time.setNextBlockTimestamp(before[4] + 1200n);
+        await viem.assertions.emitWithArgs(exec(), roles, "ConsumeAllowance", [
+          allowanceKey,
+          5n,
+          115n,
+        ]);
 
-        expect(await roles.allowances(allowanceKey)).to.deep.equal([
+        assert.deepEqual(await roles.read.allowances([allowanceKey]), [
           10n,
           1000n,
           600n,
           115n,
-          before.timestamp + 1200n,
+          before[4] + 1200n,
         ]);
       });
 
       const OVERSPENDS = {
         "a consumption above the stored balance, whatever balance it claims": (
-          allowanceKey: string,
+          allowanceKey: Hex,
         ) => [
           { allowanceKey, balance: 999999n, consumed: 101n, timestamp: 0n },
         ],
         "entries for one key that together exceed its balance": (
-          allowanceKey: string,
+          allowanceKey: Hex,
         ) => [
           { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
           { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
         ],
         "a consumption of an allowance never set": () => [
           {
-            allowanceKey: ethers.id("NEVER_SET"),
+            allowanceKey: keccak256(toBytes("NEVER_SET")),
             balance: 999999n,
             consumed: 1n,
             timestamp: 0n,
@@ -741,14 +858,17 @@ describe("Core / Evaluator split", () => {
           const { roles, forging, allowanceKey, exec } = await loadFixture(
             setupWithForgingEvaluator,
           );
-          const before = await roles.allowances(allowanceKey);
+          const before = await roles.read.allowances([allowanceKey]);
           const consumptions = forged(allowanceKey);
 
-          await forging.setForged(consumptions);
-          await expect(exec())
-            .to.be.revertedWithCustomError(roles, "AllowanceExceeded")
-            .withArgs(consumptions[consumptions.length - 1].allowanceKey);
-          expect(await roles.allowances(allowanceKey)).to.deep.equal(before);
+          await forging.write.setForged([consumptions]);
+          await viem.assertions.revertWithCustomErrorWithArgs(
+            exec(),
+            roles,
+            "AllowanceExceeded",
+            [consumptions[consumptions.length - 1].allowanceKey],
+          );
+          assert.deepEqual(await roles.read.allowances([allowanceKey]), before);
         });
     });
 
@@ -757,39 +877,46 @@ describe("Core / Evaluator split", () => {
         await loadFixture(setup);
 
       // Current Evaluator bounds-checks raw uint8 values cleanly (not Panic 0x21)
-      await expect(
-        roles.packConditions([
-          {
-            parent: 0,
-            paramType: 99,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.read.packConditions([
+          [
+            {
+              parent: 0,
+              paramType: 99,
+              operator: Operator.Pass,
+              compValue: "0x",
+            },
+          ],
         ]),
-      )
-        .to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType")
-        .withArgs(0);
+        evaluator,
+        "UnsuitableParameterType",
+        [0n],
+      );
 
-      await expect(
-        roles.packConditions([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: 99,
-            compValue: "0x",
-          },
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.read.packConditions([
+          [
+            {
+              parent: 0,
+              paramType: Encoding.None,
+              operator: 99,
+              compValue: "0x",
+            },
+          ],
         ]),
-      )
-        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
-        .withArgs(0);
+        evaluator,
+        "UnsupportedOperator",
+        [0n],
+      );
 
       // Install a future Evaluator that accepts new Encoding/Operator codes
       // and returns a new Status code (200)
-      const Future = await ethers.getContractFactory("TestFutureEvaluator");
-      const future = await Future.deploy();
-      await roles.connect(owner).setEvaluator(await future.getAddress());
+      const future = await viem.deployContract("TestFutureEvaluator");
+      await roles.write.setEvaluator([future.address], {
+        account: owner.account,
+      });
 
-      const futureConditions = [
+      const futureConditions: ConditionFlat[] = [
         {
           parent: 0,
           paramType: 99,
@@ -797,30 +924,32 @@ describe("Core / Evaluator split", () => {
           compValue: "0x",
         },
       ];
+      assert.equal(
+        await roles.read.packConditions([futureConditions]),
+        "0x63c8",
+      );
 
-      expect(await roles.packConditions(futureConditions)).to.equal("0x63c8");
+      await roles.write.allowTarget([
+        roleKey,
+        testContractAddress,
+        futureConditions,
+        ExecutionOptions.None,
+      ]);
 
-      await expect(
-        roles.allowTarget(
-          roleKey,
-          testContractAddress,
-          futureConditions,
-          ExecutionOptions.None,
-        ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
             0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(200, 3, 36);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [200, 3n, 36n],
+      );
     });
   });
 
@@ -829,135 +958,187 @@ describe("Core / Evaluator split", () => {
       const { owner, member, testContractAddress, evaluatorAddress } =
         await loadFixture(setup);
 
-      const Avatar = await ethers.getContractFactory("TestAvatar");
-      const avatar1 = await Avatar.deploy();
-      const avatar2 = await Avatar.deploy();
-      const avatar1Address = await avatar1.getAddress();
-      const avatar2Address = await avatar2.getAddress();
+      const avatar1 = await viem.deployContract("TestAvatar");
+      const avatar2 = await viem.deployContract("TestAvatar");
+      const avatar1Address = avatar1.address;
+      const avatar2Address = avatar2.address;
 
       const roles1 = await deployRolesMod(
-        owner.address,
+        owner.account.address,
         avatar1Address,
         avatar1Address,
         evaluatorAddress,
       );
       const roles2 = await deployRolesMod(
-        owner.address,
+        owner.account.address,
         avatar2Address,
         avatar2Address,
         evaluatorAddress,
       );
 
-      const roleKey = ethers.id("SHARED_ROLE");
-      const allowanceKey = ethers.id("SHARED_ALLOWANCE");
-      const fnAddrSelector = iface.getFunction("fn")!.selector;
-      const fnUintSelector = iface.getFunction("oneParamStatic")!.selector;
+      const roleKey = keccak256(toBytes("SHARED_ROLE"));
+      const allowanceKey = keccak256(toBytes("SHARED_ALLOWANCE"));
+      const fnAddrSelector = toFunctionSelector("fn(address)");
+      const fnUintSelector = toFunctionSelector("oneParamStatic(uint256)");
 
       for (const mod of [roles1, roles2]) {
-        await mod.connect(owner).grantRole(member.address, roleKey, 0, 0, 0);
-        await mod.connect(owner).setDefaultRole(member.address, roleKey);
-        await mod.connect(owner).scopeTarget(roleKey, testContractAddress);
-        await mod.connect(owner).allowFunction(
-          roleKey,
-          testContractAddress,
-          fnAddrSelector,
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              {
-                paramType: Encoding.Static,
-                operator: Operator.EqualToAvatar,
-              },
-            ],
-          }),
-          ExecutionOptions.None,
+        await mod.write.grantRole(
+          [member.account.address, roleKey, 0n, 0n, 0n],
+          { account: owner.account },
         );
-        await mod.connect(owner).allowFunction(
-          roleKey,
-          testContractAddress,
-          fnUintSelector,
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              {
-                paramType: Encoding.Static,
-                operator: Operator.WithinAllowance,
-                compValue: allowanceKey,
-              },
-            ],
-          }),
-          ExecutionOptions.None,
+        await mod.write.setDefaultRole([member.account.address, roleKey], {
+          account: owner.account,
+        });
+        await mod.write.scopeTarget([roleKey, testContractAddress], {
+          account: owner.account,
+        });
+        await mod.write.allowFunction(
+          [
+            roleKey,
+            testContractAddress,
+            fnAddrSelector,
+            flattenCondition({
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [
+                {
+                  paramType: Encoding.Static,
+                  operator: Operator.EqualToAvatar,
+                },
+              ],
+            }),
+            ExecutionOptions.None,
+          ],
+          { account: owner.account },
+        );
+        await mod.write.allowFunction(
+          [
+            roleKey,
+            testContractAddress,
+            fnUintSelector,
+            flattenCondition({
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [
+                {
+                  paramType: Encoding.Static,
+                  operator: Operator.WithinAllowance,
+                  compValue: allowanceKey,
+                },
+              ],
+            }),
+            ExecutionOptions.None,
+          ],
+          { account: owner.account },
         );
       }
 
       // Different allowance balances on roles1 (50) and roles2 (200)
-      await roles1.connect(owner).setAllowance(allowanceKey, 50, 0, 0, 0, 0);
-      await roles2.connect(owner).setAllowance(allowanceKey, 200, 0, 0, 0, 0);
+      await roles1.write.setAllowance([allowanceKey, 50n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
+      await roles2.write.setAllowance([allowanceKey, 200n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
 
       // EqualToAvatar checks each Core's own avatar
-      await roles1
-        .connect(member)
-        .execTransactionFromModule(
+      await roles1.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [avatar1Address],
+          }),
           0,
-          iface.encodeFunctionData("fn", [avatar1Address]),
-          0,
-        );
-      await expect(
-        roles1
-          .connect(member)
-          .execTransactionFromModule(
+        ],
+        { account: member.account },
+      );
+      await viem.assertions.revertWithCustomError(
+        roles1.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [avatar2Address],
+            }),
             0,
-            iface.encodeFunctionData("fn", [avatar2Address]),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles1, "ConditionViolation");
+          ],
+          { account: member.account },
+        ),
+        roles1,
+        "ConditionViolation",
+      );
 
-      await roles2
-        .connect(member)
-        .execTransactionFromModule(
+      await roles2.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [avatar2Address],
+          }),
           0,
-          iface.encodeFunctionData("fn", [avatar2Address]),
-          0,
-        );
-      await expect(
-        roles2
-          .connect(member)
-          .execTransactionFromModule(
+        ],
+        { account: member.account },
+      );
+      await viem.assertions.revertWithCustomError(
+        roles2.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [avatar1Address],
+            }),
             0,
-            iface.encodeFunctionData("fn", [avatar1Address]),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles2, "ConditionViolation");
+          ],
+          { account: member.account },
+        ),
+        roles2,
+        "ConditionViolation",
+      );
 
       // WithinAllowance reads and settles each Core's own allowance balance
-      await expect(
-        roles1
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomError(
+        roles1.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [100n],
+            }),
             0,
-            iface.encodeFunctionData("oneParamStatic", [100]),
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles1, "ConditionViolation");
+          ],
+          { account: member.account },
+        ),
+        roles1,
+        "ConditionViolation",
+      );
 
-      await roles2
-        .connect(member)
-        .execTransactionFromModule(
+      await roles2.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [100n],
+          }),
           0,
-          iface.encodeFunctionData("oneParamStatic", [100]),
-          0,
-        );
+        ],
+        { account: member.account },
+      );
 
-      expect((await roles1.allowances(allowanceKey)).balance).to.equal(50);
-      expect((await roles2.allowances(allowanceKey)).balance).to.equal(100);
+      assert.equal((await roles1.read.allowances([allowanceKey]))[3], 50n);
+      assert.equal((await roles2.read.allowances([allowanceKey]))[3], 100n);
     });
   });
 });

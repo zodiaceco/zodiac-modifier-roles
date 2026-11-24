@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
+// Needed so Hardhat tests importing extensionless CJS/TS files from packages/sdk/src resolve.
 import { register as registerTsxCjs } from "tsx/cjs/api";
 import { defineConfig } from "hardhat/config";
-import hardhatEthers from "@nomicfoundation/hardhat-ethers";
-import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
-import hardhatMocha from "@nomicfoundation/hardhat-mocha";
 import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
-import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
+import hardhatNodeTestRunner from "@nomicfoundation/hardhat-node-test-runner";
+import hardhatViem from "@nomicfoundation/hardhat-viem";
+import hardhatViemAssertions from "@nomicfoundation/hardhat-viem-assertions";
 
 import { compiler } from "./solidity.config.js";
 import deployMastercopy from "./tasks/deploy-mastercopy.js";
@@ -26,11 +26,10 @@ const accounts = PK
 
 export default defineConfig({
   plugins: [
-    hardhatEthers,
-    hardhatEthersChaiMatchers,
-    hardhatMocha,
+    hardhatViem,
+    hardhatViemAssertions,
+    hardhatNodeTestRunner,
     hardhatNetworkHelpers,
-    hardhatTypechain,
   ],
   paths: {
     artifacts: "build/artifacts",
@@ -42,10 +41,6 @@ export default defineConfig({
     npmFilesToBuild: [
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
     ],
-  },
-  typechain: {
-    outDir: "typechain-types",
-    tsNocheck: true,
   },
   // Initial release networks; zodiac handles deployment to additional chains.
   networks: {

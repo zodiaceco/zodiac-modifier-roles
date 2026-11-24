@@ -5,7 +5,7 @@
  * For random messages, the Safe delegatecalls SignTypedMessageLib:
  * - the key `personalSign` / `signMessage` store (the `SignMsg` event) is
  *   the key the Lean model computes;
- * - the Lean EIP-191 hash is ethers' `hashMessage`, and the handler's
+ * - the Lean EIP-191 hash is viem's `hashMessage`, and the handler's
  *   `isValidSignature(hash, "0x")` accepts it after `personalSign`, and
  *   rejects a random other hash;
  * - `signMessage(abi.encode(h))` makes `isValidSignature(h, "0x")` valid
@@ -16,30 +16,32 @@
  * Skipped without the Lean driver (`cd packages/evm/formal && lake build
  * roles-model`).
  */
-import { expect } from "chai"
-import {
-  AbiCoder,
-  Interface,
-  ZeroAddress,
-  ZeroHash,
-  concat,
-  getBytes,
-  hashMessage,
-  hexlify,
-  randomBytes,
-} from "ethers"
-import type { Signer } from "ethers"
-import { network } from "hardhat"
+import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
+import { after, describe, it } from "node:test"
 import { fileURLToPath } from "node:url"
-
 import {
-  address as fallbackHandler,
-  iface as ifaceFallback,
-} from "./setup/deploy-mastercopies/fallbackHandler.js"
-import { iface as ifaceSafe } from "./setup/deploy-mastercopies/safeMastercopy.js"
+  type Address,
+  type Hex,
+  type PublicClient,
+  type WalletClient,
+  concat,
+  decodeEventLog,
+  encodeAbiParameters,
+  encodeFunctionData,
+  hashMessage,
+  parseAbi,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem"
+import { network } from "hardhat"
+
+import { address as fallbackHandler } from "./setup/deploy-mastercopies/fallbackHandler.js"
+import { abi as safeAbi } from "./setup/deploy-mastercopies/safeMastercopy.js"
 import { deploySafe } from "./setup/safe.js"
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
 
@@ -64,53 +66,64 @@ const lean = (lines: string[]): string[] => {
 }
 
 const connection = await network.create()
-const { ethers } = connection
+const { viem } = connection
 
-const libIface = new Interface([
+const libAbi = parseAbi([
   "function signMessage(bytes message)",
   "function personalSign(bytes message)",
   "event SignMsg(bytes32 indexed msgHash)",
 ])
+const safeDomainSeparatorAbi = parseAbi([
+  "function domainSeparator() view returns (bytes32)",
+])
+const getMessageHashForSafeAbi = parseAbi([
+  "function getMessageHashForSafe(address safe, bytes message) view returns (bytes32)",
+])
+const isValidSignatureBytes32Abi = parseAbi([
+  "function isValidSignature(bytes32 _dataHash, bytes _signature) view returns (bytes4)",
+])
 
-describe("SignTypedMessageLib and the Safe's handler against Lean", function () {
+describe("SignTypedMessageLib and the Safe's handler against Lean", () => {
   after(async () => {
     await connection.close()
   })
 
-  it(`stores the keys the Lean model computes, and the handler accepts exactly the signed hashes (${CASES} messages)`, async function () {
-    if (!existsSync(LEAN_BIN)) this.skip()
-    this.timeout(0)
-    await deployMastercopies(ethers)
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
-    const libAddr = await lib.getAddress()
-    const [owner, relayer] = await ethers.getSigners()
+  it(`stores the keys the Lean model computes, and the handler accepts exactly the signed hashes (${CASES} messages)`, async (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip()
+      return
+    }
+    await deployMastercopies(viem)
+    const lib = await viem.deployContract("SignTypedMessageLib")
+    const libAddr = lib.address
+    const [owner] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
-        creationNonce: BigInt(hexlify(randomBytes(32))),
+        creationNonce: BigInt(toHex(randomBytes(32))),
       },
       owner
     )
-    const ds = await relayer.call({
-      to: safe,
-      data: ifaceSafe.encodeFunctionData("domainSeparator"),
+    const ds = await publicClient.readContract({
+      address: safe,
+      abi: safeDomainSeparatorAbi,
+      functionName: "domainSeparator",
     })
 
     // the handler's constant is keccak256("SafeMessage(bytes message)")
-    expect(lean(["th"])[0]).to.equal(SAFE_MSG_TYPEHASH)
+    assert.equal(lean(["th"])[0], SAFE_MSG_TYPEHASH)
 
     const lengths = [0, 1, 9, 10, 11, 99, 100, 101, 1000]
     const messages = Array.from({ length: CASES }, (_, i) =>
-      hexlify(
+      toHex(
         randomBytes(
           i < lengths.length ? lengths[i] : Math.floor(Math.random() * 200)
         )
       )
     )
-    const raws = messages.map(() => hexlify(randomBytes(32)))
+    const raws = messages.map(() => toHex(randomBytes(32)))
 
     const queries = messages.flatMap((m, i) => [
       `ph ${m}`,
@@ -125,48 +138,65 @@ describe("SignTypedMessageLib and the Safe's handler against Lean", function () 
       const m = messages[i]
       const [ph, keyPersonal, keyRaw, smh] = out.slice(4 * i, 4 * i + 4)
 
-      if (ph !== hashMessage(getBytes(m)))
+      if (ph !== hashMessage({ raw: m }))
         failures.push(
-          `EIP-191 hash of ${m}: Lean ${ph}, ethers ${hashMessage(getBytes(m))}`
+          `EIP-191 hash of ${m}: Lean ${ph}, viem ${hashMessage({ raw: m })}`
         )
 
-      const viaHandler = ifaceFallback.decodeFunctionResult(
-        "getMessageHashForSafe",
-        await relayer.call({
-          to: fallbackHandler,
-          data: ifaceFallback.encodeFunctionData("getMessageHashForSafe", [
-            safe,
-            m,
-          ]),
-        })
-      )[0]
+      const viaHandler = await publicClient.readContract({
+        address: fallbackHandler,
+        abi: getMessageHashForSafeAbi,
+        functionName: "getMessageHashForSafe",
+        args: [safe, m],
+      })
       if (viaHandler !== smh)
         failures.push(
           `getMessageHashForSafe(${m}): handler ${viaHandler}, Lean ${smh}`
         )
 
       // personalSign(m): stored key, and the handler accepts the EIP-191 hash
-      const stored = await execLib(owner, safe, libAddr, "personalSign", m)
+      const stored = await execLib(
+        owner,
+        publicClient,
+        safe,
+        libAddr,
+        "personalSign",
+        m
+      )
       if (stored !== keyPersonal)
         failures.push(
           `personalSign(${m}): stored ${stored}, Lean ${keyPersonal}`
         )
-      if (!(await isValid(relayer, safe, ph)))
+      if (!(await isValid(publicClient, safe, ph as Hex)))
         failures.push(`isValidSignature(${ph}) rejected after personalSign`)
-      if (await isValid(relayer, safe, hexlify(randomBytes(32))))
+      if (await isValid(publicClient, safe, toHex(randomBytes(32))))
         failures.push(`isValidSignature accepted a random hash`)
 
       // signMessage(abi.encode(h)): the raw hash h becomes valid
       const h = raws[i]
-      const storedRaw = await execLib(owner, safe, libAddr, "signMessage", h)
+      const storedRaw = await execLib(
+        owner,
+        publicClient,
+        safe,
+        libAddr,
+        "signMessage",
+        h
+      )
       if (storedRaw !== keyRaw)
         failures.push(`signMessage(${h}): stored ${storedRaw}, Lean ${keyRaw}`)
-      if (!(await isValid(relayer, safe, h)))
+      if (!(await isValid(publicClient, safe, h)))
         failures.push(`isValidSignature(${h}) rejected after signMessage(${h})`)
 
       // signMessage of an EIP-191 hash stores personalSign's key
       if (i < 4) {
-        const again = await execLib(owner, safe, libAddr, "signMessage", ph)
+        const again = await execLib(
+          owner,
+          publicClient,
+          safe,
+          libAddr,
+          "signMessage",
+          ph as Hex
+        )
         if (again !== keyPersonal)
           failures.push(
             `signMessage(hashMessage(${m})) stored ${again}, personalSign ${keyPersonal}`
@@ -174,68 +204,72 @@ describe("SignTypedMessageLib and the Safe's handler against Lean", function () 
       }
     }
     console.log(`      ${CASES} messages`)
-    expect(failures.slice(0, 5)).to.deep.equal([])
+    assert.deepEqual(failures.slice(0, 5), [])
   })
 })
 
 /** The Safe delegatecalls the library; returns the key of `SignMsg`. */
 async function execLib(
-  owner: Signer,
-  safe: string,
-  lib: string,
+  owner: WalletClient,
+  publicClient: PublicClient,
+  safe: Address,
+  lib: Address,
   fn: "personalSign" | "signMessage",
-  message: string
-): Promise<string> {
-  const tx = await owner.sendTransaction({
+  message: Hex
+): Promise<Hex> {
+  const hash = await owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      lib,
-      0,
-      libIface.encodeFunctionData(fn, [message]),
-      1, // DelegateCall
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      concat([
-        AbiCoder.defaultAbiCoder().encode(
-          ["address"],
-          [await owner.getAddress()]
-        ),
-        ZeroHash,
-        "0x01",
-      ]),
-    ]),
+    data: encodeFunctionData({
+      abi: safeAbi,
+      functionName: "execTransaction",
+      args: [
+        lib,
+        0n,
+        encodeFunctionData({
+          abi: libAbi,
+          functionName: fn,
+          args: [message],
+        }),
+        1, // DelegateCall
+        0n,
+        0n,
+        0n,
+        zeroAddress,
+        zeroAddress,
+        concat([
+          encodeAbiParameters([{ type: "address" }], [owner.account!.address]),
+          zeroHash,
+          "0x01",
+        ]),
+      ],
+    }),
   })
-  const rc = await tx.wait()
-  const ev = rc!.logs
-    .map((l) => {
-      try {
-        return libIface.parseLog(l)
-      } catch {
-        return null
-      }
-    })
-    .find((e) => e?.name === "SignMsg")
-  if (!ev) throw new Error(`${fn}: no SignMsg event (execution failed)`)
-  return ev.args.msgHash
+  const rc = await publicClient.waitForTransactionReceipt({ hash })
+  for (const l of rc.logs) {
+    try {
+      const ev = decodeEventLog({
+        abi: libAbi,
+        data: l.data,
+        topics: l.topics,
+      })
+      if (ev.eventName === "SignMsg") return ev.args.msgHash
+    } catch {}
+  }
+  throw new Error(`${fn}: no SignMsg event (execution failed)`)
 }
 
 /** `isValidSignature(bytes32 hash, "0x")` through the Safe's fallback. */
-async function isValid(caller: Signer, safe: string, hash: string) {
+async function isValid(publicClient: PublicClient, safe: Address, hash: Hex) {
   try {
-    const res = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes32,bytes)",
-      await caller.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes32,bytes)",
-          [hash, "0x"]
-        ),
-      })
-    )
-    return res[0] === MAGIC
+    const res = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytes32Abi,
+      functionName: "isValidSignature",
+      args: [hash, "0x"],
+    })
+    return res === MAGIC
   } catch {
     return false
   }

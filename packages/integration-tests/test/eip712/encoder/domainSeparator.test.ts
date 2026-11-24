@@ -1,18 +1,18 @@
-import { expect } from "chai"
+import assert from "node:assert/strict"
+import { after, describe, it } from "node:test"
 import { network } from "hardhat"
-import { TypedDataEncoder, keccak256, toUtf8Bytes } from "ethers"
+import { getTypesForEIP712Domain, hashDomain, keccak256, toBytes } from "viem"
 
 import { __integration } from "zodiac-roles-sdk"
 
 const { encodeTypedDomain, toAbiTypes } = __integration
 
 const connection = await network.create()
-const { ethers, networkHelpers } = connection
+const { viem, networkHelpers } = connection
 const { loadFixture } = networkHelpers
 
 async function deployEIP712Encoder() {
-  const EIP7127Encoder = await ethers.getContractFactory("MockEIP712Encoder")
-  const encoder = await EIP7127Encoder.deploy()
+  const encoder = await viem.deployContract("MockEIP712Encoder")
 
   return { encoder }
 }
@@ -32,15 +32,23 @@ describe("EIP712Encoder", () => {
         chainId: 9,
         verifyingContract:
           "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC" as `0x${string}`,
-        salt: keccak256(toUtf8Bytes("Hello World")) as `0x${string}`,
+        salt: keccak256(toBytes("Hello World")),
       }
 
-      expect(
-        await encoder.hashTypedDomain(
+      assert.equal(
+        await encoder.read.hashTypedDomain([
           encodeTypedDomain({ domain }),
-          toAbiTypes({ domain })
-        )
-      ).to.equal(TypedDataEncoder.hashDomain(domain))
+          toAbiTypes({ domain }).map((n) => ({
+            parent: BigInt(n.parent),
+            encoding: n.encoding,
+            typeHash: n.typeHash,
+          })),
+        ]),
+        hashDomain<Record<string, unknown>>({
+          domain,
+          types: { EIP712Domain: getTypesForEIP712Domain({ domain }) },
+        })
+      )
     })
 
     it("should handle custom salt usage in the domain separator", async () => {
@@ -50,15 +58,23 @@ describe("EIP712Encoder", () => {
         chainId: 35377,
         verifyingContract:
           "0x00000000000000000000000000000000000fffff" as `0x${string}`,
-        salt: keccak256(toUtf8Bytes("Here is a custom salt")) as `0x${string}`,
+        salt: keccak256(toBytes("Here is a custom salt")),
       }
 
-      expect(
-        await encoder.hashTypedDomain(
+      assert.equal(
+        await encoder.read.hashTypedDomain([
           encodeTypedDomain({ domain }),
-          toAbiTypes({ domain })
-        )
-      ).to.equal(TypedDataEncoder.hashDomain(domain))
+          toAbiTypes({ domain }).map((n) => ({
+            parent: BigInt(n.parent),
+            encoding: n.encoding,
+            typeHash: n.typeHash,
+          })),
+        ]),
+        hashDomain<Record<string, unknown>>({
+          domain,
+          types: { EIP712Domain: getTypesForEIP712Domain({ domain }) },
+        })
+      )
     })
   })
 })

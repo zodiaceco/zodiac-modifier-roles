@@ -1,6 +1,7 @@
-import { expect } from "chai";
+import assert from "node:assert/strict";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
-import { AbiCoder, ZeroHash } from "ethers";
+import { encodeAbiParameters, getAddress, zeroHash } from "viem";
 import {
   deployFactories,
   deployProxy,
@@ -10,7 +11,7 @@ import { createEIP1193 } from "../tasks/createEIP1193.js";
 import { createSetup } from "./setup.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers, provider } = connection;
+const { viem, networkHelpers, provider } = connection;
 const { loadFixture } = networkHelpers;
 const { deployEvaluator } = createSetup(connection);
 
@@ -31,35 +32,36 @@ describe("Module works with factory", () => {
     await connection.close();
   });
 
-  const paramsTypes = ["address", "address", "address", "address"];
-
   async function setup() {
-    const [deployer] = await ethers.getSigners();
+    const [deployer] = await viem.getWalletClients();
 
     const evaluator = await deployEvaluator();
-    const evaluatorAddress = await evaluator.getAddress();
+    const evaluatorAddress = evaluator.address;
 
-    const Modifier = await ethers.getContractFactory("Roles");
-    const masterCopy = await Modifier.deploy(
+    const masterCopy = await viem.deployContract("Roles", [
       AddressOne,
       AddressOne,
       AddressOne,
       AddressOne,
-    );
+    ]);
     const eip1193Provider = createEIP1193(provider, deployer);
     return { masterCopy, evaluatorAddress, eip1193Provider };
   }
 
   it("should throw because master copy is already initialized", async () => {
     const { masterCopy } = await loadFixture(setup);
-    const encodedParams = AbiCoder.defaultAbiCoder().encode(paramsTypes, [
-      AddressOne,
-      AddressOne,
-      AddressOne,
-      AddressOne,
-    ]);
+    const encodedParams = encodeAbiParameters(
+      [
+        { type: "address" },
+        { type: "address" },
+        { type: "address" },
+        { type: "address" },
+      ],
+      [AddressOne, AddressOne, AddressOne, AddressOne],
+    );
 
-    await expect(masterCopy.setUp(encodedParams)).to.be.revertedWithCustomError(
+    await viem.assertions.revertWithCustomError(
+      masterCopy.write.setUp([encodedParams]),
       masterCopy,
       "AlreadyInitialized",
     );
@@ -68,26 +70,35 @@ describe("Module works with factory", () => {
   it("should deploy new roles module proxy", async () => {
     const { masterCopy, evaluatorAddress, eip1193Provider } =
       await loadFixture(setup);
-    const [avatar, owner, target] = await ethers.getSigners();
+    const [avatar, owner, target] = await viem.getWalletClients();
     await deployFactories({ provider: eip1193Provider });
     const { address: deployProxyAddress } = await deployProxy({
-      mastercopy: await masterCopy.getAddress(),
+      mastercopy: masterCopy.address,
       setupArgs: {
         types: ["address", "address", "address", "address"],
         values: [
-          owner.address,
-          avatar.address,
-          target.address,
+          owner.account.address,
+          avatar.account.address,
+          target.account.address,
           evaluatorAddress,
         ],
       },
-      saltNonce: ZeroHash,
+      saltNonce: zeroHash,
       provider: eip1193Provider,
     });
 
-    const proxy = await ethers.getContractAt("Roles", deployProxyAddress);
+    const proxy = await viem.getContractAt(
+      "Roles",
+      getAddress(deployProxyAddress),
+    );
 
-    expect(await proxy.avatar()).to.be.eq(avatar.address);
-    expect(await proxy.evaluator()).to.be.eq(evaluatorAddress);
+    assert.equal(
+      getAddress(await proxy.read.avatar()),
+      getAddress(avatar.account.address),
+    );
+    assert.equal(
+      getAddress(await proxy.read.evaluator()),
+      getAddress(evaluatorAddress),
+    );
   });
 });

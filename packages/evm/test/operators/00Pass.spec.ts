@@ -1,5 +1,6 @@
-import { expect } from "chai";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import type { Hex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../utils.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
@@ -40,8 +41,8 @@ describe("Operator - Pass", () => {
       );
 
       // Any value passes - the operator performs no validation
-      await expect(invoke(0)).to.not.be.revert(ethers);
-      await expect(invoke(999)).to.not.be.revert(ethers);
+      await invoke(0);
+      await invoke(999);
     });
   });
 
@@ -49,16 +50,18 @@ describe("Operator - Pass", () => {
     it("reverts UnsuitableCompValue when compValue is not empty", async () => {
       const { roles, evaluator } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         packConditions(roles, [
           {
             parent: 0,
             paramType: Encoding.Static,
             operator: Operator.Pass,
-            compValue: "0x".padEnd(66, "0"),
+            compValue: "0x".padEnd(66, "0") as Hex,
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+        evaluator,
+        "UnsuitableCompValue",
+      );
     });
   });
 });

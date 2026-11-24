@@ -23,14 +23,16 @@
  * is missing. `SDK_CHECK_CASES` sets the number of arrays (default 3000),
  * `SDK_CHECK_SEED` the seed.
  */
-import { expect } from "chai";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { network } from "hardhat";
+import { decodeFunctionResult, encodeFunctionData, type Hex } from "viem";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import {
   checkStored,
   opsOk,
@@ -38,6 +40,7 @@ import {
   tyKey,
   type FlatNode,
 } from "../../../sdk/src/main/condition/checkStored.js";
+import { linkIntegrity } from "../../test/setup.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
@@ -270,7 +273,7 @@ const node = (
   e: number,
   o: number,
   ch: N[] = [],
-  cv = new Uint8Array(0),
+  cv: Uint8Array = new Uint8Array(0),
 ): N => ({ e, o, cv, ch });
 
 function randT(depth: number): T {
@@ -1015,14 +1018,15 @@ const tsVerdict = (fs: FlatNode[], s: boolean) => {
       : `ok ${tyKey(v.type)}`;
 };
 
-describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
-  this.timeout(0);
-
-  it(`agrees on ${CASES} random flat arrays (both strictness modes)`, function () {
-    if (!existsSync(LEAN_BIN)) this.skip();
+describe("SDK checkStored vs Lean ConditionCheck.checkStored", () => {
+  it(`agrees on ${CASES} random flat arrays (both strictness modes)`, (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     // the empty array is not `Packable` (the driver cannot express it)
     for (const s of [false, true])
-      expect(checkStored([], s)).to.equal(undefined);
+      assert.equal(checkStored([], s), undefined);
     rand = mulberry32(SEED);
     const cases: Case[] = [
       ...Array.from({ length: CASES }, () => {
@@ -1038,9 +1042,9 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
       input: queries.map((q) => line(q.s, q.fs)).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const out = String(res.stdout).trim().split("\n");
-    expect(out.length).to.equal(queries.length);
+    assert.equal(out.length, queries.length);
 
     const tally = new Map<string, number>();
     const mismatches: string[] = [];
@@ -1082,11 +1086,14 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
     }
     for (const [k, n] of [...why].sort()) console.log(`      ${k}: ${n}`);
     for (const m of mismatches.slice(0, 5)) console.log(`      MISMATCH ${m}`);
-    expect(mismatches.length).to.equal(0);
+    assert.equal(mismatches.length, 0);
   });
 
-  it(`packs byte for byte like ConditionPacker (${CASES} random flat arrays)`, async function () {
-    if (!existsSync(LEAN_BIN)) this.skip();
+  it(`packs byte for byte like ConditionPacker (${CASES} random flat arrays)`, async (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     rand = mulberry32(SEED + 1);
     const arrays = Array.from({ length: CASES }, () => {
       if (chance(0.3)) return genFlat();
@@ -1105,9 +1112,9 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
         "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const out = String(res.stdout).trim().split("\n");
-    expect(out.length).to.equal(arrays.length);
+    assert.equal(out.length, arrays.length);
     const leanDiff = arrays.filter(
       (fs, i) => out[i] !== "0x" + hex(packConditions(fs)),
     );
@@ -1117,35 +1124,61 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
       );
 
     // the contract, on arrays checkStored accepts
-    const { ethers } = await network.create();
-    const mock = await (
-      await ethers.getContractFactory("MockPackerUnpacker")
-    ).deploy();
-    const accepted = arrays
-      .filter((fs) => checkStored(fs, true) !== undefined)
-      .slice(0, 600);
-    let chainDiff = 0;
-    for (const fs of accepted) {
-      const sol = await mock.packUnchecked(
-        fs.map((f) => ({ ...f, compValue: "0x" + hex(f.compValue) })),
-        { gasLimit: 100_000_000 },
+    const connection = await network.create();
+    try {
+      const { viem } = connection;
+      const publicClient = await viem.getPublicClient();
+      const mock = await viem.deployContract(
+        "MockPackerUnpacker",
+        [],
+        await linkIntegrity(viem),
       );
-      if (sol !== "0x" + hex(packConditions(fs))) {
-        if (chainDiff++ < 3)
-          console.log(
-            `      CHAIN MISMATCH ${line(0, fs)}\n        sol ${sol}\n        ts  0x${hex(packConditions(fs))}`,
-          );
+      const accepted = arrays
+        .filter((fs) => checkStored(fs, true) !== undefined)
+        .slice(0, 600);
+      let chainDiff = 0;
+      for (const fs of accepted) {
+        const { data } = await publicClient.call({
+          to: mock.address,
+          data: encodeFunctionData({
+            abi: mock.abi,
+            functionName: "packUnchecked",
+            args: [
+              fs.map((f) => ({
+                ...f,
+                compValue: ("0x" + hex(f.compValue)) as Hex,
+              })),
+            ],
+          }),
+          gas: 100_000_000n,
+        });
+        const sol = decodeFunctionResult({
+          abi: mock.abi,
+          functionName: "packUnchecked",
+          data: data ?? "0x",
+        });
+        if (sol !== "0x" + hex(packConditions(fs))) {
+          if (chainDiff++ < 3)
+            console.log(
+              `      CHAIN MISMATCH ${line(0, fs)}\n        sol ${sol}\n        ts  0x${hex(packConditions(fs))}`,
+            );
+        }
       }
+      console.log(
+        `      ${arrays.length} packable arrays vs Lean, ${accepted.length} accepted arrays vs ConditionPacker`,
+      );
+      assert.equal(leanDiff.length, 0);
+      assert.equal(chainDiff, 0);
+    } finally {
+      await connection.close();
     }
-    console.log(
-      `      ${arrays.length} packable arrays vs Lean, ${accepted.length} accepted arrays vs ConditionPacker`,
-    );
-    expect(leanDiff.length).to.equal(0);
-    expect(chainDiff).to.equal(0);
   });
 
-  it(`accepted arrays are well-typed (${CASES} random flat arrays)`, function () {
-    if (!existsSync(LEAN_BIN)) this.skip();
+  it(`accepted arrays are well-typed (${CASES} random flat arrays)`, (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     rand = mulberry32(SEED + 2);
     const arrays = [
       ...Array.from({ length: CASES }, () => {
@@ -1174,9 +1207,9 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
           .join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const all = String(res.stdout).trim().split("\n");
-    expect(all.length).to.equal(queries.length + rejected.length);
+    assert.equal(all.length, queries.length + rejected.length);
     const out = all.slice(0, queries.length);
     const rejBad = all.slice(queries.length).filter((r) => r !== "ok").length;
     const bad = queries
@@ -1195,6 +1228,6 @@ describe("SDK checkStored vs Lean ConditionCheck.checkStored", function () {
       console.log(
         `      s=${b.s ? 1 : 0} ${b.r} on ${line(0, b.fs).slice(5, 2000)}`,
       );
-    expect(bad.length).to.equal(0);
+    assert.equal(bad.length, 0);
   });
 });

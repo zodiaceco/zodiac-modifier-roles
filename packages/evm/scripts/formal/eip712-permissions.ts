@@ -33,27 +33,67 @@ import { flattenCondition } from "../../../sdk/src/main/condition/flattenConditi
 import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored";
 import { writeFileSync } from "node:fs";
 import {
-  AbiCoder,
-  Interface,
-  ParamType,
-  getBytes,
-  hexlify,
-  toUtf8Bytes,
-  zeroPadValue,
-} from "ethers";
+  type AbiParameter,
+  type Hex,
+  decodeFunctionData,
+  encodeAbiParameters,
+  encodeFunctionData,
+  hexToBytes,
+  pad,
+  parseAbi,
+  parseAbiParameter,
+  parseAbiParameters,
+  toBytes,
+  toFunctionSelector,
+  toHex,
+} from "viem";
 import { Encoding, Operator } from "../../../sdk/src/main/types";
 import { describeStructure } from "../../../sdk/src/main/target/authoring/c/helpers/describeStructure";
-import { Field, Types, lean, leanDefs, makeGen } from "../../formal/test/eip712-gen";
+import {
+  Field,
+  Types,
+  lean,
+  leanDefs,
+  makeGen,
+} from "../../formal/test/eip712-gen";
 
 const CASES = Number(process.env.EIP712_CASES ?? 300);
 const SEED = Number(process.env.EIP712_SEED ?? 1);
-const lib = new Interface([
+const libAbi = parseAbi([
   "function signTypedMessage(bytes domain, bytes message, (uint256 parent, uint8 encoding, bytes32 typeHash)[] types)",
 ]);
+const signTypedMessageSelector = toFunctionSelector(libAbi[0]);
 const { int, chance, pick, randomTypes, randomDomain, randomValue, leanValue } =
   makeGen(SEED + 1000);
 
-const abi = AbiCoder.defaultAbiCoder();
+type ParamTypeLike = {
+  baseType: string;
+  arrayLength: number | null;
+  arrayChildren?: ParamTypeLike;
+  components?: ParamTypeLike[];
+};
+
+function toParamTypeLike(param: AbiParameter): ParamTypeLike {
+  const arr = param.type.match(/^(.*)\[(\d*)\]$/);
+  if (arr) {
+    return {
+      baseType: "array",
+      arrayLength: arr[2] === "" ? null : Number(arr[2]),
+      arrayChildren: toParamTypeLike({ ...param, type: arr[1] }),
+    };
+  }
+  if (param.type === "tuple") {
+    const comps =
+      (param as { components?: readonly AbiParameter[] }).components ?? [];
+    return {
+      baseType: "tuple",
+      arrayLength: null,
+      components: comps.map(toParamTypeLike),
+    };
+  }
+  return { baseType: param.type, arrayLength: null };
+}
+
 const parseArr = (t: string) => {
   const m = t.match(/^(.*)\[(\d*)\]$/);
   return m ? { elem: m[1], len: m[2] === "" ? -1 : Number(m[2]) } : null;
@@ -62,7 +102,7 @@ const abiType = (types: Types, t: string): string => {
   const arr = parseArr(t);
   if (arr) return `${abiType(types, arr.elem)}[${arr.len >= 0 ? arr.len : ""}]`;
   if (types[t])
-    return `tuple(${types[t].map((f) => abiType(types, f.type)).join(",")})`;
+    return `(${types[t].map((f) => abiType(types, f.type)).join(",")})`;
   return t;
 };
 const hx = (n: number, bytes: number) =>
@@ -74,29 +114,36 @@ const isAtom = (types: Types, t: string) =>
  *  of `bytes` / `string`. */
 const sliceable = (types: Types, t: string, v: any) =>
   t === "bytes"
-    ? { enc: Encoding.Dynamic, bytes: getBytes(v) }
+    ? { enc: Encoding.Dynamic, bytes: hexToBytes(v) }
     : t === "string"
-      ? { enc: Encoding.Dynamic, bytes: toUtf8Bytes(v) }
+      ? { enc: Encoding.Dynamic, bytes: toBytes(v) }
       : isAtom(types, t)
-        ? { enc: Encoding.Static, bytes: getBytes(abi.encode([t], [v])) }
+        ? {
+            enc: Encoding.Static,
+            bytes: hexToBytes(
+              encodeAbiParameters(parseAbiParameters(t), [v]),
+            ),
+          }
         : null;
 
 /** A value of type `t` with the byte at `pos` of its word / content
  *  changed, if the type has room for any value there. */
 const flipByte = (t: string, v: any, pos: number): any => {
   if (t === "bytes") {
-    const b = getBytes(v).slice();
+    const b = hexToBytes(v).slice();
     b[pos] ^= 0xff;
-    return hexlify(b);
+    return toHex(b);
   }
-  const word = getBytes(abi.encode([t], [v])).slice();
+  const word = hexToBytes(
+    encodeAbiParameters(parseAbiParameters(t), [v]),
+  ).slice();
   word[pos] ^= 0xff;
   const m = t.match(/^(uint|bytes)(\d+)$/);
   if (m && m[1] === "uint" && pos >= 32 - Number(m[2]) / 8)
-    return BigInt(hexlify(word));
+    return BigInt(toHex(word));
   if (m && m[1] === "bytes" && pos < Number(m[2]))
-    return hexlify(word.slice(0, Number(m[2])));
-  if (t === "address" && pos >= 12) return hexlify(word.slice(12));
+    return toHex(word.slice(0, Number(m[2])));
+  if (t === "address" && pos >= 12) return toHex(word.slice(12));
   return undefined;
 };
 
@@ -173,20 +220,26 @@ for (let k = 0; k < CASES; k++) {
 
   // change the type tree: the permission must reject
   {
-    const args = lib.decodeFunctionData(
-      "signTypedMessage",
-      "0x" +
-        lib.getFunction("signTypedMessage")!.selector.slice(2) +
-        data.slice(10),
-    );
-    const nodes = args[2].map((n: any) => [n[0], n[1], n[2]]);
+    const { args } = decodeFunctionData({
+      abi: libAbi,
+      data: (signTypedMessageSelector + data.slice(10)) as Hex,
+    });
+    const nodes = args[2].map((n) => ({
+      parent: n.parent,
+      encoding: n.encoding,
+      typeHash: n.typeHash,
+    }));
     const i = int(nodes.length);
-    nodes[i] = [nodes[i][0], nodes[i][1], "0x" + "11".repeat(32)];
-    const bad = lib.encodeFunctionData("signTypedMessage", [
-      args[0],
-      args[1],
-      nodes,
-    ]);
+    nodes[i] = {
+      parent: nodes[i].parent,
+      encoding: nodes[i].encoding,
+      typeHash: ("0x" + "11".repeat(32)) as Hex,
+    };
+    const bad = encodeFunctionData({
+      abi: libAbi,
+      functionName: "signTypedMessage",
+      args: [args[0], args[1], nodes],
+    });
     lines.push(`evb ${data.slice(0, 10)}${bad.slice(10)} ${packed}`);
     expect_.push("not 0");
     labels.push(`${label} changed type node ${i}`);
@@ -197,7 +250,7 @@ for (let k = 0; k < CASES; k++) {
   for (const mf of misfits) {
     const root = structuredClone(perm.condition);
     mf.change(root);
-    const raw = hexlify(
+    const raw = toHex(
       packConditions(toFlatNodes(flattenCondition(root as any))),
     );
     lines.push(`fit ${leanDefs(withDomain)} ${primary} ${raw}`);
@@ -279,7 +332,7 @@ function inject(
       const leaf = {
         paramType: Encoding.Static,
         operator: Operator.EqualTo,
-        compValue: zeroPadValue(hexlify(window), 32),
+        compValue: pad(toHex(window), { size: 32 }),
       };
       add({
         paramType: sl.enc,
@@ -307,12 +360,14 @@ function inject(
     }
     const arr = parseArr(f.type);
     if (arr && arr.len < 0 && slot < 6 && chance(0.5)) {
-      const elemAbi = ParamType.from(abiType(types, arr.elem));
+      const elemAbi = toParamTypeLike(
+        parseAbiParameter(abiType(types, arr.elem)),
+      );
       const pluck = (s: number) => ({
         paramType: Encoding.Array,
         operator: Operator.Pluck,
         compValue: "0x" + hx(s, 1),
-        children: [describeStructure(elemAbi)],
+        children: [describeStructure(elemAbi as any)],
       });
       const [a, b] = [slot, slot + 1];
       slot += 2;
@@ -324,9 +379,11 @@ function inject(
           ? {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abi.encode([arr.elem], [v[j]]),
+              compValue: encodeAbiParameters(parseAbiParameters(arr.elem), [
+                v[j],
+              ]),
             }
-          : describeStructure(elemAbi);
+          : describeStructure(elemAbi as any);
       add([
         pluck(a),
         pluck(b),

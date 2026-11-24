@@ -117,55 +117,6 @@ Validates permissions against preset configurations.
 
 **Returns:** Validation results
 
-## `zodiac-roles-sdk/kit`
-
-Type-safe permission builders generated from contract ABIs.
-
-<Callout type="warning">
-  Deprecated in favor of
-  [`@zodiaceco/sdk`](https://github.com/gnosisguild/zodiac-sdk). The Zodiac
-  SDK generates the same kit from `zodiac.config.ts` via `zodiac pull` and
-  integrates with `push()` directly. This entrypoint remains available for
-  projects still using the [eth-sdk](https://github.com/gnosisguild/eth-sdk)
-  workflow.
-</Callout>
-
-### Permission Builders
-
-#### `allow`
-
-Type-safe permission builder from eth-sdk generated contracts.
-
-**Usage:**
-
-```typescript
-import { allow } from "zodiac-roles-sdk/kit";
-
-// Access by network and contract name
-allow.mainnet.dai.approve(spender);
-allow.gnosis.gno.transfer(recipient, amount);
-```
-
-**Structure:**
-
-- `allow[network][contract][function](...conditions, options)`
-- Contracts: Defined in your `eth-sdk/config.ts`
-- Conditions: Each function parameters can be scoped using a condition expression in the respective position
-- Options: Define execution options (delegate call, send value) or Ether allowances
-
-#### `EVERYTHING`
-
-Wildcard permission that allows all operations.
-
-**Usage:**
-
-```typescript
-import { EVERYTHING } from "zodiac-roles-sdk/kit";
-
-// Allow all functions on a target
-allow.mainnet.dai[EVERYTHING]();
-```
-
 ## `zodiac-roles-sdk/annotations`
 
 Annotation processing for enhanced role documentation.

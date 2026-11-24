@@ -16,15 +16,23 @@
  *  - the empty array (`packConditions` returns before Integrity runs);
  *  - `ConditionNodeCountExceedsMax` (decoding 65,536 nodes runs out of gas).
  */
-import { expect } from "chai";
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
 import { network } from "hardhat";
+import { decodeErrorResult } from "viem";
+import type { Hex } from "viem";
 
 import { checkStoredConditions } from "../../../sdk/src/main/condition/checkStored.js";
-import { createSetup } from "../setup.js";
-import { Encoding as E, Operator as O } from "../utils.js";
+import { createSetup, type EvaluatorContract } from "../setup.js";
+import {
+  Encoding as E,
+  Operator as O,
+  extractRevertData,
+  type RolesContract,
+} from "../utils.js";
 
 const connection = await network.create();
-const { ethers } = connection;
+const { viem } = connection;
 const { deployEvaluator, deployRolesMod } = createSetup(connection);
 
 // ---------------------------------------------------------------------------
@@ -34,7 +42,7 @@ const { deployEvaluator, deployRolesMod } = createSetup(connection);
 type N = {
   paramType: E;
   operator: O;
-  compValue: string;
+  compValue: Hex;
   children: N[];
   marked?: boolean;
 };
@@ -43,20 +51,20 @@ type Flat = {
   parent: number;
   paramType: number;
   operator: number;
-  compValue: string;
+  compValue: Hex;
 };
 
-const hex = (...bytes: number[]) =>
-  "0x" + bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
-const zeros = (length: number) => "0x" + "00".repeat(length);
-const word = (n = 0) => "0x" + n.toString(16).padStart(64, "0");
-const cat = (...parts: string[]) =>
-  "0x" + parts.map((p) => p.slice(2)).join("");
+const hex = (...bytes: number[]): Hex =>
+  ("0x" + bytes.map((b) => b.toString(16).padStart(2, "0")).join("")) as Hex;
+const zeros = (length: number): Hex => ("0x" + "00".repeat(length)) as Hex;
+const word = (n = 0): Hex => ("0x" + n.toString(16).padStart(64, "0")) as Hex;
+const cat = (...parts: string[]): Hex =>
+  ("0x" + parts.map((p) => p.slice(2)).join("")) as Hex;
 
 const node = (
   paramType: E,
   operator: O,
-  compValue = "0x",
+  compValue: Hex = "0x",
   children: N[] = [],
 ): N => ({ paramType, operator, compValue, children });
 
@@ -89,12 +97,12 @@ const pluck = (slot: number, paramType: E = E.Static) =>
 const plucks = (slot: number, ...element: N[]) =>
   node(E.Array, O.Pluck, hex(slot), element.length ? element : [S]);
 
-const zipOf = (compValue: string, children: N[] = [tuple(S, S)]) =>
+const zipOf = (compValue: Hex, children: N[] = [tuple(S, S)]) =>
   node(E.None, O.ZipEvery, compValue, children);
 const zip = (slots: number[], ...fields: N[]) =>
   zipOf(hex(...slots), [tuple(...fields)]);
 
-const u32 = (n: number) => "0x" + n.toString(16).padStart(8, "0");
+const u32 = (n: number): Hex => ("0x" + n.toString(16).padStart(8, "0")) as Hex;
 const ratioCv = ({
   ref = 0,
   refDecimals = 18,
@@ -153,23 +161,28 @@ const ratioAfter = (r: N, a: N = pluck(0), b: N = pluck(1)) =>
 const ACCEPTED = "accepted";
 const NO_INDEX = ["UnsuitableRootNode", "NotBFS"];
 
-let roles: Awaited<ReturnType<typeof deployRolesMod>>;
-let evaluator: Awaited<ReturnType<typeof deployEvaluator>>;
+let roles: RolesContract;
+let evaluator: EvaluatorContract;
 
 /** What the contract does with `flat`: `accepted`, or `Error(args)`. */
 async function outcome(flat: Flat[]): Promise<string> {
   try {
-    await roles.packConditions(flat);
+    await roles.read.packConditions([flat]);
     return ACCEPTED;
-  } catch (e: any) {
-    const data = e.data ?? e.info?.error?.data ?? e.error?.data;
-    const parsed =
-      typeof data === "string" && data.length >= 10
-        ? evaluator.interface.parseError(data)
-        : null;
-    return parsed
-      ? `${parsed.name}(${parsed.args.join(", ")})`
-      : String(e.shortMessage ?? e.message);
+  } catch (e: unknown) {
+    const data = extractRevertData(e);
+    if (data && data.length >= 10) {
+      try {
+        const parsed = decodeErrorResult({ abi: evaluator.abi, data });
+        const args = parsed.args ? parsed.args.join(", ") : "";
+        return `${parsed.errorName}(${args})`;
+      } catch {
+        // Fall through if error signature is not in evaluator.abi
+      }
+    }
+    return e instanceof Error
+      ? ((e as { shortMessage?: string }).shortMessage ?? e.message)
+      : String(e);
   }
 }
 
@@ -184,7 +197,7 @@ async function check(flat: Flat[], expected: string, options: Options = {}) {
     if (actual === wanted) return;
     const message = `${label ? `${label}: ` : ""}${subject}: expected ${wanted}, got ${actual}`;
     if (collected) collected.push(message);
-    else expect.fail(message);
+    else assert.fail(message);
   };
   if (reference) {
     report(
@@ -205,7 +218,7 @@ const each = (name: string, body: () => Promise<void>) =>
     } finally {
       const mismatches = collected;
       collected = null;
-      if (mismatches.length) expect.fail("\n" + mismatches.join("\n"));
+      if (mismatches.length) assert.fail("\n" + mismatches.join("\n"));
     }
   });
 
@@ -239,12 +252,11 @@ const rejects = (name: string, tree: N, error: string, ...args: unknown[]) =>
  */
 function compValues(
   name: string,
-  build: (compValue: string) => N,
-  { ok, bad }: { ok: (number | string)[]; bad: (number | string)[] },
+  build: (compValue: Hex) => N,
+  { ok, bad }: { ok: (number | Hex)[]; bad: (number | Hex)[] },
 ) {
-  const cv = (v: number | string) => (typeof v === "number" ? zeros(v) : v);
-  const show = (v: number | string) =>
-    typeof v === "number" ? `${v} bytes` : v;
+  const cv = (v: number | Hex): Hex => (typeof v === "number" ? zeros(v) : v);
+  const show = (v: number | Hex) => (typeof v === "number" ? `${v} bytes` : v);
   each(name, async () => {
     for (const v of ok) {
       await expectAccepted(build(cv(v)), { label: show(v) });
@@ -261,13 +273,13 @@ function compValues(
 
 describe("Integrity", () => {
   before(async () => {
-    const [owner] = await ethers.getSigners();
+    const [owner] = await viem.getWalletClients();
     evaluator = await deployEvaluator();
     roles = await deployRolesMod(
-      owner.address,
-      owner.address,
-      owner.address,
-      await evaluator.getAddress(),
+      owner.account.address,
+      owner.account.address,
+      owner.account.address,
+      evaluator.address,
     );
   });
 
@@ -339,7 +351,7 @@ describe("Integrity", () => {
     });
 
     describe("compValue of up to 65535 bytes", () => {
-      const unbounded: [string, (compValue: string) => N, number][] = [
+      const unbounded: [string, (compValue: Hex) => N, number][] = [
         ["EqualTo:Dynamic", (cv) => node(E.Dynamic, O.EqualTo, cv), 65535],
         ["EqualTo:Tuple", (cv) => node(E.Tuple, O.EqualTo, cv, [S, D]), 65535],
         ["EqualTo:Array", (cv) => node(E.Array, O.EqualTo, cv, [S]), 65535],
@@ -693,7 +705,7 @@ describe("Integrity", () => {
           ],
           bad: [
             zeros(0),
-            ratioCv().slice(0, -2),
+            ratioCv().slice(0, -2) as Hex,
             ratioCv({ adapters: adapter(19) }),
             ratioCv({ adapters: adapter(20).slice(0, -2) }),
             ratioCv({ adapters: cat(adapter(20), adapter(1)) }),

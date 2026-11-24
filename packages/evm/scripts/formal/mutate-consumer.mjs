@@ -103,9 +103,9 @@ const TESTS = [
 ];
 
 function run(t) {
-  const r = spawnSync("npx", ["hardhat", "test", ...t.cmd], {
+  const r = spawnSync("npx", ["hardhat", "test", "nodejs", ...t.cmd], {
     cwd: t.cwd,
-    env: { ...process.env, ...t.env },
+    env: { ...process.env, HARDHAT_DISABLE_TELEMETRY: "true", ...t.env },
     encoding: "utf8",
     timeout: 900_000,
   });
@@ -118,7 +118,7 @@ function run(t) {
   if (
     r.status === 0 &&
     /\b[1-9]\d* passing/.test(out) &&
-    !/\d+ pending/.test(out)
+    !/\d+ (pending|skipped)/.test(out)
   )
     return "survived";
   return r.status === 0 ? "skipped" : "killed";

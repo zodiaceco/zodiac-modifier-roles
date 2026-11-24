@@ -16,15 +16,12 @@ export default task(
 )
   .setInlineAction(async (_, hre) => {
     const connection = await hre.network.create();
-    const [signer] = await connection.ethers.getSigners();
-    const provider = createEIP1193(connection.provider, signer);
+    const [walletClient] = await connection.viem.getWalletClients();
+    const provider = createEIP1193(connection.provider, walletClient);
 
     await deployFactories({ provider });
 
-    for (const deployment of await buildMastercopyDeployments(
-      hre,
-      connection,
-    )) {
+    for (const deployment of await buildMastercopyDeployments(hre)) {
       await deployOne(deployment, provider);
     }
   })

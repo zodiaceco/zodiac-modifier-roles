@@ -6,9 +6,19 @@
  * correctly (INTEGRITY_BACKLOG.md items 4 and 10). Integrity now accepts
  * them too.
  */
-import { expect } from "chai";
-import { AbiCoder, Interface } from "ethers";
+import assert from "node:assert/strict";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  parseAbi,
+  toFunctionSelector,
+  type Abi,
+  type AbiFunction,
+  type Hex,
+} from "viem";
 
 import { checkAndPack } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../../test/setup.js";
@@ -20,11 +30,11 @@ import {
 } from "../../test/utils.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem } = connection;
 const { setupTestContract } = createSetup(connection);
-const abi = AbiCoder.defaultAbiCoder();
 
-const word = (n: number | bigint) => abi.encode(["uint256"], [n]);
+const word = (n: number | bigint): Hex =>
+  encodeAbiParameters([{ type: "uint256" }], [BigInt(n)]);
 const pass = (paramType: Encoding, children?: any[]) => ({
   paramType,
   operator: Operator.Pass,
@@ -38,13 +48,14 @@ const eq = (n: number | bigint) => ({
 const pluck = (paramType: Encoding, slot: number, children?: any[]) => ({
   paramType,
   operator: Operator.Pluck,
-  compValue: "0x" + slot.toString(16).padStart(2, "0"),
+  compValue: ("0x" + slot.toString(16).padStart(2, "0")) as Hex,
   children,
 });
 const zipEvery = (slots: number[], fields: any[]) => ({
   paramType: Encoding.None,
   operator: Operator.ZipEvery,
-  compValue: "0x" + slots.map((s) => s.toString(16).padStart(2, "0")).join(""),
+  compValue: ("0x" +
+    slots.map((s) => s.toString(16).padStart(2, "0")).join("")) as Hex,
   children: [
     { paramType: Encoding.Tuple, operator: Operator.Matches, children: fields },
   ],
@@ -52,41 +63,49 @@ const zipEvery = (slots: number[], fields: any[]) => ({
 
 async function setup(signature: string) {
   const env = await setupTestContract();
-  const iface = new Interface([`function ${signature}`]);
-  const fn = iface.fragments[0] as any;
-  const invoke = (...args: any[]) =>
-    env.roles
-      .connect(env.member)
-      .execTransactionFromModule(
+  const abi = parseAbi([`function ${signature}`] as readonly string[]) as Abi;
+  const fn = abi[0] as AbiFunction;
+  const selector = toFunctionSelector(fn);
+  const invoke = (...args: unknown[]) =>
+    env.roles.write.execTransactionFromModule(
+      [
         env.testContractAddress,
+        0n,
+        encodeFunctionData({
+          abi: [fn],
+          functionName: fn.name,
+          args: args as never,
+        }),
         0,
-        iface.encodeFunctionData(fn, args),
-        0,
-      );
+      ],
+      { account: env.member.account },
+    );
   const store = (tree: any) => {
     const { packed } = checkAndPack(flattenCondition(tree) as any);
-    return env.roles.allowFunctionPacked(
+    return env.roles.write.allowFunctionPacked([
       env.roleKey,
       env.testContractAddress,
-      fn.selector,
+      selector,
       packed,
       ExecutionOptions.None,
-    );
+    ]);
   };
   const storeValidated = (tree: any) =>
-    env.roles.allowFunction(
+    env.roles.write.allowFunction([
       env.roleKey,
       env.testContractAddress,
-      fn.selector,
+      selector,
       flattenCondition(tree),
       ExecutionOptions.None,
-    );
+    ]);
   return { ...env, invoke, store, storeValidated };
 }
 
-const violation = (roles: any) => [roles, "ConditionViolation"] as const;
-
 describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
+  after(async () => {
+    await connection.close();
+  });
+
   it("stores the same buffer allowFunction would, and enforces it", async () => {
     const { roles, invoke, store, storeValidated } = await setup(
       "fn(uint256, uint256)",
@@ -97,19 +116,18 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
       children: [pass(Encoding.Static), eq(1000)],
     };
     const { packed } = checkAndPack(flattenCondition(tree) as any);
-    await expect(storeValidated(tree))
-      .to.emit(roles, "AllowFunction")
-      .withArgs(
-        (x: any) => true,
-        (x: any) => true,
-        (x: any) => true,
-        packed,
-        (x: any) => true,
-      );
+    await viem.assertions.emitWithArgs(
+      storeValidated(tree),
+      roles,
+      "AllowFunction",
+      [anyValue, anyValue, anyValue, packed, anyValue],
+    );
     await store(tree);
-    await expect(invoke(1, 1000)).to.not.be.revert(ethers);
-    await expect(invoke(1, 999)).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await invoke(1n, 1000n);
+    await viem.assertions.revertWithCustomError(
+      invoke(1n, 999n),
+      roles,
+      "ConditionViolation",
     );
   });
 
@@ -132,9 +150,11 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
       ],
     };
     await store(tree);
-    await expect(invoke([5, 5], [1, 2])).to.not.be.revert(ethers);
-    await expect(invoke([5, 6], [1, 2])).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await invoke([5n, 5n], [1n, 2n]);
+    await viem.assertions.revertWithCustomError(
+      invoke([5n, 6n], [1n, 2n]),
+      roles,
+      "ConditionViolation",
     );
   });
 
@@ -164,12 +184,18 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
         },
       ],
     };
-    await expect(storeValidated(tree)).to.not.be.revert(ethers);
+    await storeValidated(tree);
     await store(tree);
-    await expect(invoke(257)).to.not.be.revert(ethers);
-    await expect(invoke(2)).to.be.revertedWithCustomError(...violation(roles));
-    await expect(invoke(1025)).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await invoke(257n);
+    await viem.assertions.revertWithCustomError(
+      invoke(2n),
+      roles,
+      "ConditionViolation",
+    );
+    await viem.assertions.revertWithCustomError(
+      invoke(1025n),
+      roles,
+      "ConditionViolation",
     );
   });
 
@@ -200,15 +226,17 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
         },
       ],
     };
-    await expect(storeValidated(tree)).to.not.be.revert(ethers);
+    await storeValidated(tree);
     await store(tree);
-    await expect(invoke([[1, 2], [7, 7], "hi"])).to.not.be.revert(ethers);
-    await expect(invoke([[1, 2], [7, 8], "hi"])).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await invoke([[1n, 2n], [7n, 7n], "hi"]);
+    await viem.assertions.revertWithCustomError(
+      invoke([[1n, 2n], [7n, 8n], "hi"]),
+      roles,
+      "ConditionViolation",
     );
   });
 
-  it("refuses to pack a tree the check rejects (Zip among parameters)", async () => {
+  it("refuses to pack a tree the check rejects (Zip among parameters)", () => {
     const el = () => [pass(Encoding.Static)];
     const bypass = {
       paramType: Encoding.AbiEncoded,
@@ -220,8 +248,9 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
         eq(5),
       ],
     };
-    expect(() => checkAndPack(flattenCondition(bypass) as any)).to.throw(
-      "rejected",
+    assert.throws(
+      () => checkAndPack(flattenCondition(bypass) as any),
+      /rejected/,
     );
   });
   it("enforces a parameter after a fixed-size array (described as a tuple, as the SDK does)", async () => {
@@ -235,13 +264,17 @@ describe("SDK checkAndPack + allowFunctionPacked on Roles", () => {
       ],
     };
     await store(tree);
-    await expect(invoke([1, 2], 5)).to.not.be.revert(ethers);
-    await expect(invoke([1, 2], 999)).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await invoke([1n, 2n], 5n);
+    await viem.assertions.revertWithCustomError(
+      invoke([1n, 2n], 999n),
+      roles,
+      "ConditionViolation",
     );
     // array elements are values, not offsets
-    await expect(invoke([32, 5], 999)).to.be.revertedWithCustomError(
-      ...violation(roles),
+    await viem.assertions.revertWithCustomError(
+      invoke([32n, 5n], 999n),
+      roles,
+      "ConditionViolation",
     );
   });
 });

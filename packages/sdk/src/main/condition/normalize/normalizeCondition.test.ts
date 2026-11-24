@@ -3,12 +3,23 @@ import { Encoding, Condition, Operator } from "../../types"
 
 import { normalizeCondition } from "."
 
-import { FunctionPermissionCoerced, mergePermissions } from "../../permission"
+import {
+  FunctionPermissionCoerced,
+  coercePermission,
+  mergePermissions,
+} from "../../permission"
 import { abiEncode } from "../../abiEncode"
 
 import { c } from "../../target/authoring"
-import { allow } from "../../../kit"
 import { encodeKey } from "../../keys"
+
+// stETH `transfer(address,uint256)`, scoped parameter by parameter
+const allowTransfer = (...scopings: any[]) =>
+  coercePermission({
+    targetAddress: "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",
+    signature: "transfer(address,uint256)",
+    condition: c.calldataMatches(scopings, ["address", "uint256"])(),
+  })
 
 const DUMMY_COMP = (id: number) => ({
   paramType: Encoding.Static,
@@ -245,12 +256,8 @@ suite("normalizeCondition()", () => {
     const {
       permissions: [functionVariants],
     } = mergePermissions([
-      allow.mainnet.lido.stETH.transfer(
-        "0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0x1234123412341234123412341234123412341234"
-      ),
+      allowTransfer("0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"),
+      allowTransfer("0x1234123412341234123412341234123412341234"),
     ])
     const { condition } = functionVariants as FunctionPermissionCoerced
 
@@ -348,14 +355,8 @@ suite("normalizeCondition()", () => {
     const {
       permissions: [functionVariants],
     } = mergePermissions([
-      allow.mainnet.lido.stETH.transfer(
-        "0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd",
-        c.lt(1000)
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0x1234123412341234123412341234123412341234",
-        c.lt(2000)
-      ),
+      allowTransfer("0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd", c.lt(1000)),
+      allowTransfer("0x1234123412341234123412341234123412341234", c.lt(2000)),
     ])
     const { condition } = functionVariants as FunctionPermissionCoerced
 
@@ -408,21 +409,11 @@ suite("normalizeCondition()", () => {
       permissions: [functionVariants],
     } = mergePermissions([
       // by using a greater number of branches we increase likelihood of differences in the normalized branch orders
-      allow.mainnet.lido.stETH.transfer(
-        "0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0x1234123412341234123412341234123412341234"
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0x9876987698769876987698769876987698769876"
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"
-      ),
-      allow.mainnet.lido.stETH.transfer(
-        "0xdef1def1def1def1def1def1def1def1def1def1"
-      ),
+      allowTransfer("0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"),
+      allowTransfer("0x1234123412341234123412341234123412341234"),
+      allowTransfer("0x9876987698769876987698769876987698769876"),
+      allowTransfer("0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"),
+      allowTransfer("0xdef1def1def1def1def1def1def1def1def1def1"),
     ])
     const { condition } = functionVariants as FunctionPermissionCoerced
 

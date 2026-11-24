@@ -1,6 +1,13 @@
-import { expect } from "chai";
-import { AbiCoder, Interface, solidityPacked } from "ethers";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbi,
+  parseAbiParameters,
+} from "viem";
+import type { Hex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -9,13 +16,13 @@ import {
   ExecutionOptions,
   Operator,
   flattenCondition,
+  type RolesContract,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
 const SEL = "0xaabbccdd";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract } = createSetup(connection);
 
@@ -29,12 +36,12 @@ interface RawNode {
   compValue?: string;
 }
 
-const enc = (types: string[], values: unknown[]) =>
-  abiCoder.encode(types, values);
+const enc = (types: string[], values: readonly unknown[]) =>
+  encodeAbiParameters(parseAbiParameters(types.join(", ")), values);
 
 const word = (n: bigint | number) => BigInt(n).toString(16).padStart(64, "0");
 
-const calldata = (...words: string[]) => SEL + words.join("");
+const calldata = (...words: string[]): Hex => (SEL + words.join("")) as Hex;
 
 const pass = (
   paramType: Encoding,
@@ -62,7 +69,7 @@ const eq = (
 });
 
 /** Packs raw nodes without running Integrity, matching ConditionUnpacker format. */
-function packRaw(nodes: RawNode[], maxPluck = 0): string {
+function packRaw(nodes: RawNode[], maxPluck = 0): Hex {
   const header =
     nodes.length.toString(16).padStart(4, "0") +
     maxPluck.toString(16).padStart(2, "0");
@@ -82,7 +89,7 @@ function packRaw(nodes: RawNode[], maxPluck = 0): string {
       compChunks.push((cv.length / 2).toString(16).padStart(4, "0") + cv);
     }
   }
-  return "0x" + header + nodeWords.join("") + compChunks.join("");
+  return ("0x" + header + nodeWords.join("") + compChunks.join("")) as Hex;
 }
 
 async function setup() {
@@ -92,30 +99,39 @@ async function setup() {
   const allow = (condition: ConditionInput, options = ExecutionOptions.None) =>
     base.allowTarget(flattenCondition(condition), options);
 
-  const allowRaw = (packed: string, options = ExecutionOptions.None) =>
-    roles.allowTargetPacked(roleKey, testContractAddress, packed, options);
+  const allowRaw = (packed: Hex, options = ExecutionOptions.None) =>
+    roles.write.allowTargetPacked([
+      roleKey,
+      testContractAddress,
+      packed,
+      options,
+    ]);
 
-  const invoke = (data: string, value: bigint | number = 0) =>
-    roles
-      .connect(member)
-      .execTransactionFromModule(testContractAddress, value, data, 0);
+  const invoke = (data: Hex, value: bigint | number = 0) =>
+    roles.write.execTransactionFromModule(
+      [testContractAddress, BigInt(value), data, 0],
+      { account: member.account },
+    );
 
   return { ...base, allow, allowRaw, invoke };
 }
 
 const expectOverflow = (
-  roles: Awaited<ReturnType<typeof setup>>["roles"],
-  tx: Promise<unknown>,
+  roles: RolesContract,
+  tx: Promise<Hex>,
   nodeIndex?: number,
   offset?: number,
 ) =>
-  expect(tx)
-    .to.be.revertedWithCustomError(roles, "ConditionViolation")
-    .withArgs(
+  viem.assertions.revertWithCustomErrorWithArgs(
+    tx,
+    roles,
+    "ConditionViolation",
+    [
       ConditionViolationStatus.CalldataOverflow,
-      nodeIndex ?? ((i: bigint) => i >= 0n),
-      offset ?? ((o: bigint) => o >= 0n),
-    );
+      nodeIndex !== undefined ? BigInt(nodeIndex) : (i: bigint) => i >= 0n,
+      offset !== undefined ? BigInt(offset) : (o: bigint) => o >= 0n,
+    ],
+  );
 
 describe("Calldata slicing and traversal safety", () => {
   after(async () => {
@@ -271,7 +287,7 @@ describe("Calldata slicing and traversal safety", () => {
 
       // Even if root calldata starts with a valid array count (0), unwritten
       // pluck slots hold Span(0) (length 0), so Zip fails with CalldataOverflow.
-      const data = "0x" + word(0) + word(0);
+      const data = ("0x" + word(0) + word(0)) as Hex;
       await expectOverflow(roles, invoke(data), 0);
     });
 
@@ -282,8 +298,7 @@ describe("Calldata slicing and traversal safety", () => {
       // Slice(shift=28, size=4), equal 0x11223344, or the full word equals
       // 0x55667788. The Slice window must not leak into the sibling EqualTo
       // or into the next element.
-      const iface = new Interface(["function fn(uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[])"]);
 
       await allow(
         matches([
@@ -298,7 +313,7 @@ describe("Calldata slicing and traversal safety", () => {
                   {
                     paramType: Encoding.Static,
                     operator: Operator.Slice,
-                    compValue: solidityPacked(["uint16", "uint8"], [28, 4]),
+                    compValue: encodePacked(["uint16", "uint8"], [28, 4]),
                     children: [
                       eq(Encoding.Static, enc(["uint256"], [0x11223344])),
                     ],
@@ -315,19 +330,28 @@ describe("Calldata slicing and traversal safety", () => {
       // Elem 1 fails Slice and falls through to full 32-byte EqualTo.
       const elem0 = (1n << 200n) | 0x11223344n;
       const elem1 = 0x55667788n;
-      await expect(
-        invoke(iface.encodeFunctionData(fn, [[elem0, elem1]])),
-      ).to.not.be.revert(ethers);
+      await invoke(
+        encodeFunctionData({ abi, functionName: "fn", args: [[elem0, elem1]] }),
+      );
 
       // Elem 2 has upper bytes set + low 4 bytes 0x55667788 -> must fail both branches
       const elem2 = (1n << 200n) | 0x55667788n;
-      await expect(invoke(iface.encodeFunctionData(fn, [[elem0, elem2]])))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [[elem0, elem2]],
+          }),
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryArrayElementPasses,
-          2,
+          2n,
           (o: bigint) => o > 0n,
-        );
+        ],
+      );
     });
 
     it("bounds even a raw-packed navigation child under Slice to the slice window", async () => {
@@ -347,7 +371,7 @@ describe("Calldata slicing and traversal safety", () => {
           operator: Operator.Slice,
           childCount: 1,
           inlineSize: 32,
-          compValue: solidityPacked(["uint16", "uint8"], [0, 4]),
+          compValue: encodePacked(["uint16", "uint8"], [0, 4]),
         },
         {
           encoding: Encoding.Tuple,
@@ -376,7 +400,7 @@ describe("Calldata slicing and traversal safety", () => {
       await allow(matches([pass(Encoding.Static)]));
 
       // selector + 31 bytes
-      await expectOverflow(roles, invoke(SEL + "00".repeat(31)), 0);
+      await expectOverflow(roles, invoke((SEL + "00".repeat(31)) as Hex), 0);
     });
 
     it("accepts exactly 32 bytes for a static param", async () => {
@@ -384,7 +408,7 @@ describe("Calldata slicing and traversal safety", () => {
 
       await allow(matches([pass(Encoding.Static)]));
 
-      await expect(invoke(calldata(word(0)))).to.not.be.revert(ethers);
+      await invoke(calldata(word(0)));
     });
 
     it("rejects calldata one byte short of a dynamic head pointer", async () => {
@@ -393,7 +417,7 @@ describe("Calldata slicing and traversal safety", () => {
       await allow(matches([pass(Encoding.Dynamic)]));
 
       // selector + 31 bytes
-      await expectOverflow(roles, invoke(SEL + "00".repeat(31)), 0);
+      await expectOverflow(roles, invoke((SEL + "00".repeat(31)) as Hex), 0);
     });
 
     it("rejects a truncated second dynamic head pointer", async () => {
@@ -404,7 +428,7 @@ describe("Calldata slicing and traversal safety", () => {
       // selector + ptr0 + 16 bytes of ptr1
       await expectOverflow(
         roles,
-        invoke(SEL + word(0x40) + "00".repeat(16)),
+        invoke((SEL + word(0x40) + "00".repeat(16)) as Hex),
         0,
       );
     });
@@ -423,7 +447,7 @@ describe("Calldata slicing and traversal safety", () => {
       // Partial tail length word (only 16 bytes at offset 0x20)
       await expectOverflow(
         roles,
-        invoke(SEL + word(0x20) + "00".repeat(16)),
+        invoke((SEL + word(0x20) + "00".repeat(16)) as Hex),
         0,
       );
       // Declared length = 64, only 32 bytes follow
@@ -441,7 +465,7 @@ describe("Calldata slicing and traversal safety", () => {
       // Declared length = 5 fits in 5 bytes present, but ceil32(5) = 32 padding is missing
       await expectOverflow(
         roles,
-        invoke(SEL + word(0x20) + word(5) + "aabbccddee"),
+        invoke((SEL + word(0x20) + word(5) + "aabbccddee") as Hex),
         1,
       );
     });
@@ -716,7 +740,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(5),
         "aabbccddee" + "00".repeat(27),
       );
-      await expect(invoke(clean)).to.not.be.revert(ethers);
+      await invoke(clean);
 
       // first padding byte set
       const dirtyFirst = calldata(
@@ -743,9 +767,7 @@ describe("Calldata slicing and traversal safety", () => {
         matches([eq(Encoding.Dynamic, enc(["bytes"], ["0x" + fullWord]))]),
       );
 
-      await expect(
-        invoke(calldata(word(0x20), word(32), fullWord)),
-      ).to.not.be.revert(ethers);
+      await invoke(calldata(word(0x20), word(32), fullWord));
     });
 
     it("accepts empty bytes, which has no payload word at all", async () => {
@@ -753,9 +775,7 @@ describe("Calldata slicing and traversal safety", () => {
 
       await allow(matches([eq(Encoding.Dynamic, enc(["bytes"], ["0x"]))]));
 
-      await expect(invoke(calldata(word(0x20), word(0)))).to.not.be.revert(
-        ethers,
-      );
+      await invoke(calldata(word(0x20), word(0)));
     });
 
     it("rejects dirty padding on a Dynamic field inside a Tuple", async () => {
@@ -777,7 +797,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(1), // tuple.1 length
         "aa" + "00".repeat(31),
       );
-      await expect(invoke(clean)).to.not.be.revert(ethers);
+      await invoke(clean);
 
       const dirty = calldata(
         word(0x20),
@@ -807,7 +827,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(1), // arr[0] length
         "aa" + "00".repeat(31),
       );
-      await expect(invoke(clean)).to.not.be.revert(ethers);
+      await invoke(clean);
 
       const dirty = calldata(
         word(0x20),
@@ -840,7 +860,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(36), // tuple.1 length
         "aabbccdd" + word(7) + "00".repeat(28),
       );
-      await expect(invoke(clean)).to.not.be.revert(ethers);
+      await invoke(clean);
 
       const dirty = calldata(
         word(0x20),
@@ -874,7 +894,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(0x40),
         tail("aa"),
       );
-      await expect(invoke(sharedTuple)).to.not.be.revert(ethers);
+      await invoke(sharedTuple);
 
       // ArrayEvery on bytes[] with out-of-order tails
       await allow(
@@ -903,7 +923,7 @@ describe("Calldata slicing and traversal safety", () => {
         tail("bb"),
         tail("aa"),
       );
-      await expect(invoke(reorderedArray)).to.not.be.revert(ethers);
+      await invoke(reorderedArray);
     });
 
     it("ignores dirty padding under Pass, where the value is never read", async () => {
@@ -916,7 +936,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(5),
         "aabbccddee" + "00".repeat(26) + "01",
       );
-      await expect(invoke(dirty)).to.not.be.revert(ethers);
+      await invoke(dirty);
     });
   });
 
@@ -944,36 +964,30 @@ describe("Calldata slicing and traversal safety", () => {
 
       const maxU256 = (1n << 256n) - 1n;
       // Huge array count in branch 0 -> CalldataOverflow -> branch 1 passes
-      await expect(
-        invoke(calldata(word(0x20), word(maxU256))),
-      ).to.not.be.revert(ethers);
+      await invoke(calldata(word(0x20), word(maxU256)));
       // Overflow offset in branch 0 -> CalldataOverflow -> branch 1 passes
-      await expect(invoke(calldata(word(maxU256)))).to.not.be.revert(ethers);
+      await invoke(calldata(word(maxU256)));
       // Shared tail in branch 0 -> CalldataOverflow -> branch 1 passes
-      await expect(
-        invoke(
-          calldata(
-            word(0x20),
-            word(2),
-            word(0x40),
-            word(0x40),
-            word(1),
-            "aa" + "00".repeat(31),
-          ),
+      await invoke(
+        calldata(
+          word(0x20),
+          word(2),
+          word(0x40),
+          word(0x40),
+          word(1),
+          "aa" + "00".repeat(31),
         ),
-      ).to.not.be.revert(ethers);
+      );
       // Dirty padding in branch 0 -> CalldataOverflow -> branch 1 passes
-      await expect(
-        invoke(
-          calldata(
-            word(0x20),
-            word(1),
-            word(0x20),
-            word(1),
-            "aa" + "00".repeat(30) + "01",
-          ),
+      await invoke(
+        calldata(
+          word(0x20),
+          word(1),
+          word(0x20),
+          word(1),
+          "aa" + "00".repeat(30) + "01",
         ),
-      ).to.not.be.revert(ethers);
+      );
     });
 
     it("falls through ArraySome when an earlier element overflows and a later element passes", async () => {
@@ -1000,7 +1014,7 @@ describe("Calldata slicing and traversal safety", () => {
         word(1),
         "aa" + "00".repeat(31), // valid -> passes!
       );
-      await expect(invoke(data)).to.not.be.revert(ethers);
+      await invoke(data);
     });
   });
 
@@ -1024,9 +1038,7 @@ describe("Calldata slicing and traversal safety", () => {
       // Empty calldata must fail closed, not pass EqualTo(0)
       await expectOverflow(roles, invoke("0x"), 0, 0);
       // 32 zero bytes + trailing bytes reads exactly the 32-byte slice
-      await expect(
-        invoke("0x" + "00".repeat(32) + "ff".repeat(32)),
-      ).to.not.be.revert(ethers);
+      await invoke(("0x" + "00".repeat(32) + "ff".repeat(32)) as Hex);
     });
 
     it("fails closed on raw-packed malformed Static node with inlineSize = 0", async () => {
@@ -1060,9 +1072,12 @@ describe("Calldata slicing and traversal safety", () => {
         },
       ]);
       await allowRaw(shortComp);
-      await expect(invoke("0x" + word(0)))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 0, 0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(("0x" + word(0)) as Hex),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 0n, 0n],
+      );
 
       // 2. Dynamic operand (> 32 bytes) compared against a 32-byte compValue
       const shortDynamicComp = packRaw([
@@ -1079,19 +1094,19 @@ describe("Calldata slicing and traversal safety", () => {
         },
       ]);
       await allowRaw(shortDynamicComp);
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         invoke(calldata(word(0x20), word(1), "aa" + "00".repeat(31))),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, 36);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, 36n],
+      );
     });
 
     it("bounds-checks Custom operands via sliceEncoded and passes size = 0 for EtherValue", async () => {
       const { roles, allow, invoke } = await loadFixture(setup);
 
-      const Custom = await ethers.getContractFactory("TestCustomChecker");
-      const custom = await Custom.deploy();
-      const customAddr = await custom.getAddress();
+      const custom = await viem.deployContract("TestCustomChecker");
+      const customAddr = custom.address;
 
       // 1. Dynamic Tuple with gap must fail CalldataOverflow before reaching adapter
       await allow(
@@ -1127,9 +1142,12 @@ describe("Calldata slicing and traversal safety", () => {
         },
         ExecutionOptions.Send,
       );
-      await expect(invoke("0x", 123))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.CustomConditionViolation, 0, 0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x", 123),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CustomConditionViolation, 0n, 0n],
+      );
     });
 
     it("reverts with UnsupportedOperator on a raw-packed placeholder operator", async () => {
@@ -1140,27 +1158,36 @@ describe("Calldata slicing and traversal safety", () => {
           { encoding: Encoding.None, operator: Operator._Placeholder03 },
         ]),
       );
-      await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
-        .withArgs(0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(calldata(word(0))),
+        evaluator,
+        "UnsupportedOperator",
+        [0n],
+      );
 
       await allowRaw(
         packRaw([
           { encoding: Encoding.None, operator: Operator._Placeholder24 },
         ]),
       );
-      await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
-        .withArgs(0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(calldata(word(0))),
+        evaluator,
+        "UnsupportedOperator",
+        [0n],
+      );
 
       await allowRaw(
         packRaw([
           { encoding: Encoding.None, operator: Operator._Placeholder31 },
         ]),
       );
-      await expect(invoke(calldata(word(0))))
-        .to.be.revertedWithCustomError(evaluator, "UnsupportedOperator")
-        .withArgs(0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(calldata(word(0))),
+        evaluator,
+        "UnsupportedOperator",
+        [0n],
+      );
     });
 
     it("rejects raw-packed root Dynamic with fewer than 32 bytes of calldata", async () => {
@@ -1175,7 +1202,12 @@ describe("Calldata slicing and traversal safety", () => {
           },
         ]),
       );
-      await expectOverflow(roles, invoke("0x" + "00".repeat(16)), 0, 0);
+      await expectOverflow(
+        roles,
+        invoke(("0x" + "00".repeat(16)) as Hex),
+        0,
+        0,
+      );
     });
 
     it("delegates sliceEncoded through Encoding.None to inlined children and fails when exhausted", async () => {
@@ -1213,9 +1245,7 @@ describe("Calldata slicing and traversal safety", () => {
       );
 
       // Full 64-byte tail at offset 0x20 succeeds through None -> Static(64)
-      await expect(
-        invoke(calldata(word(0x20), word(0x20), word(1), word(2))),
-      ).to.not.be.revert(ethers);
+      await invoke(calldata(word(0x20), word(0x20), word(1), word(2)));
 
       // Only 32 bytes at offset 0x20 -> Static(64) overflows -> None returns ok = false
       await expectOverflow(

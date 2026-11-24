@@ -1,6 +1,4 @@
-import { Roles__factory } from "../typechain"
-
-export const rolesAbi = Roles__factory.abi
+export { rolesAbi } from "@gnosis-guild/zodiac-core-modifier-roles"
 
 export const posterAbi = [
   {
