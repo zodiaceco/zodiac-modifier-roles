@@ -2,14 +2,18 @@
  * Random EIP-712 typed data for the differential tests (eip712.spec.ts,
  * scripts/formal/eip712-permissions.ts), and the Lean driver.
  */
-import { AbiCoder, hexlify, toUtf8Bytes } from "ethers";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  encodeAbiParameters,
+  parseAbiParameters,
+  stringToHex,
+  type Hex,
+} from "viem";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const LEAN_BIN = path.resolve(here, "../.lake/build/bin/roles-model");
-const abi = AbiCoder.defaultAbiCoder();
 
 function mulberry32(seed: number) {
   return () => {
@@ -29,11 +33,11 @@ export function makeGen(seed: number) {
   const int = (n: number) => Math.floor(rand() * n);
   const chance = (p: number) => rand() < p;
   const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)];
-  const randHex = (n: number) =>
-    "0x" +
-    Array.from({ length: n }, () =>
-      int(256).toString(16).padStart(2, "0"),
-    ).join("");
+  const randHex = (n: number): Hex =>
+    ("0x" +
+      Array.from({ length: n }, () =>
+        int(256).toString(16).padStart(2, "0"),
+      ).join("")) as Hex;
   const randBig = (bits: number) =>
     BigInt(randHex(Math.ceil(bits / 8))) % (1n << BigInt(bits));
 
@@ -149,9 +153,9 @@ export function makeGen(seed: number) {
       return `l(${v.map((x: any) => leanValue(types, arr.elem, x)).join(",")})`;
     if (types[t])
       return `l(${types[t].map((f) => leanValue(types, f.type, v[f.name])).join(",")})`;
-    if (t === "string") return "d" + hexlify(toUtf8Bytes(v)).slice(2);
+    if (t === "string") return "d" + stringToHex(v).slice(2);
     if (t === "bytes") return "d" + v.slice(2);
-    return "a" + abi.encode([t], [v]).slice(2);
+    return "a" + encodeAbiParameters(parseAbiParameters(t), [v]).slice(2);
   }
 
   return {
@@ -172,7 +176,7 @@ export const leanDefs = (types: Types) =>
     .map(([n, fs]) => `${n}=${fs.map((f) => `${f.type}:${f.name}`).join(",")}`)
     .join(";");
 
-export type Node = { parent: number; encoding: number; typeHash: string };
+export type Node = { parent: number; encoding: number; typeHash: Hex };
 export const leanTypes = (ns: Node[]) =>
   ns.length === 0
     ? "-"

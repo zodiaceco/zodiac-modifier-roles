@@ -1,6 +1,15 @@
-import { expect } from "chai";
-import { AbiCoder, Interface, hexlify, solidityPacked } from "ethers";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  toHex,
+} from "viem";
+import type { Abi, AbiFunction, Hex } from "viem";
 
 import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
 import { packConditions as sdkPackConditions } from "../../../sdk/src/main/condition/packConditions.js";
@@ -14,10 +23,8 @@ import {
   packConditions,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract } = createSetup(connection);
 
@@ -33,8 +40,8 @@ interface MatrixCase {
   rawPack?: boolean;
 }
 
-const enc = (types: string[], values: unknown[]) =>
-  abiCoder.encode(types, values);
+const enc = (types: string[], values: readonly unknown[]) =>
+  encodeAbiParameters(parseAbiParameters(types.join(", ")), values);
 
 const pass = (
   paramType: Encoding,
@@ -62,42 +69,47 @@ const eq = (
 });
 
 async function runCase(c: MatrixCase) {
-  const iface = new Interface([c.sig]);
-  const fn = iface.getFunction("fn")!;
+  const abi = parseAbi([c.sig]) as Abi;
+  const fn = abi[0] as AbiFunction;
+  const selector = toFunctionSelector(fn);
   const { roles, member, testContractAddress, roleKey } =
     await loadFixture(setupTestContract);
 
   const flat = flattenCondition(c.condition);
   const packed = c.rawPack
-    ? hexlify(sdkPackConditions(toFlatNodes(flat as any)))
+    ? toHex(sdkPackConditions(toFlatNodes(flat as any)))
     : await packConditions(roles, flat);
 
-  await roles.allowFunctionPacked(
+  await roles.write.allowFunctionPacked([
     roleKey,
     testContractAddress,
-    fn.selector,
+    selector,
     packed,
     ExecutionOptions.Both,
-  );
+  ]);
 
-  const exec = (args: unknown[]) =>
-    roles
-      .connect(member)
-      .execTransactionFromModule(
+  const exec = (args: readonly unknown[]) =>
+    roles.write.execTransactionFromModule(
+      [
         testContractAddress,
+        0n,
+        encodeFunctionData({ abi, functionName: fn.name, args }),
         0,
-        iface.encodeFunctionData(fn, args),
-        0,
-      );
-
-  await expect(exec(c.valid)).to.not.be.revert(ethers);
-  await expect(exec(c.invalid))
-    .to.be.revertedWithCustomError(roles, "ConditionViolation")
-    .withArgs(
-      ConditionViolationStatus.ParameterNotAllowed,
-      c.violatedIndex ?? 1,
-      (offset: bigint) => offset >= 4n,
+      ],
+      { account: member.account },
     );
+
+  await exec(c.valid);
+  await viem.assertions.revertWithCustomErrorWithArgs(
+    exec(c.invalid),
+    roles,
+    "ConditionViolation",
+    [
+      ConditionViolationStatus.ParameterNotAllowed,
+      BigInt(c.violatedIndex ?? 1),
+      (offset: bigint) => offset >= 4n,
+    ],
+  );
 }
 
 describe("AbiLocation", () => {
@@ -628,13 +640,13 @@ describe("AbiLocation", () => {
     it("static second param: 4 (selector) + 32 (param0) = 36", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
-      const iface = new Interface(["function fn(uint256, uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256, uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition(
           matches([
             pass(Encoding.Static),
@@ -642,62 +654,66 @@ describe("AbiLocation", () => {
           ]),
         ),
         ExecutionOptions.None,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "fn", args: [0n, 2n] }),
             0,
-            iface.encodeFunctionData(fn, [0, 2]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, 36);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, 36n],
+      );
     });
 
     it("dynamic tail: 4 (selector) + 32 (head offset) = 36", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
-      const iface = new Interface(["function fn(bytes)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(bytes)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition(
           matches([eq(Encoding.Dynamic, enc(["bytes"], ["0x11"]))]),
         ),
         ExecutionOptions.None,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "fn", args: ["0x22"] }),
             0,
-            iface.encodeFunctionData(fn, ["0x22"]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, 36);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, 36n],
+      );
     });
 
     it("nested AbiEncoded: 4 (selector) + 32 (ptr) + 32 (bytes len) + 4 (inner selector) + 32 (inner param0) = 104", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
-      const iface = new Interface(["function fn(bytes)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(bytes)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition(
           matches([
             {
@@ -712,70 +728,79 @@ describe("AbiLocation", () => {
           ]),
         ),
         ExecutionOptions.None,
-      );
+      ]);
 
-      const inner = "0x11223344" + enc(["uint256", "uint256"], [0, 2]).slice(2);
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const inner = ("0x11223344" +
+        enc(["uint256", "uint256"], [0, 2]).slice(2)) as Hex;
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "fn", args: [inner] }),
             0,
-            iface.encodeFunctionData(fn, [inner]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 3, 104);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 3n, 104n],
+      );
     });
 
     it("Slice on Dynamic (shift = 5): 4 (selector) + 32 (ptr) + 32 (len) + 5 (shift) = 73", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
-      const iface = new Interface(["function fn(bytes)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(bytes)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition(
           matches([
             {
               paramType: Encoding.Dynamic,
               operator: Operator.Slice,
-              compValue: solidityPacked(["uint16", "uint8"], [5, 4]),
+              compValue: encodePacked(["uint16", "uint8"], [5, 4]),
               children: [eq(Encoding.Static, enc(["uint256"], [1]))],
             },
           ]),
         ),
         ExecutionOptions.None,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [("0x" + "00".repeat(10)) as Hex],
+            }),
             0,
-            iface.encodeFunctionData(fn, ["0x" + "00".repeat(10)]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, 73);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, 73n],
+      );
     });
 
     it("ZipEvery failing on element 1 of the second array: 4 (selector) + 64 (2 head ptrs) + 96 (arr0) + 32 (arr1 count) + 32 (arr1[0]) = 228", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
-      const iface = new Interface(["function fn(uint256[], uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[], uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.None,
           operator: Operator.And,
@@ -812,21 +837,29 @@ describe("AbiLocation", () => {
           ],
         }),
         ExecutionOptions.None,
-      );
+      ]);
 
-      await expect(
-        roles.connect(member).execTransactionFromModule(
-          testContractAddress,
-          0,
-          iface.encodeFunctionData(fn, [
-            [1, 1],
-            [2, 99],
-          ]),
-          0,
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [
+                [1n, 1n],
+                [2n, 99n],
+              ],
+            }),
+            0,
+          ],
+          { account: member.account },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.NotEveryZippedElementPasses, 9, 228);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.NotEveryZippedElementPasses, 9n, 228n],
+      );
     });
   });
 });

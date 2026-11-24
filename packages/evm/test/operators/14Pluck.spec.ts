@@ -1,11 +1,11 @@
-import { expect } from "chai";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
 
 import { createSetup } from "../setup.js";
 import { Encoding, Operator } from "../utils.js";
 
 const connection = await network.create();
-const { networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract } = createSetup(connection);
 
@@ -26,7 +26,7 @@ describe("Operator - Pluck", () => {
         Encoding.Tuple,
         Encoding.AbiEncoded,
       ]) {
-        await expect(
+        await viem.assertions.revertWithCustomErrorWithArgs(
           allowTarget([
             {
               parent: 0,
@@ -35,9 +35,10 @@ describe("Operator - Pluck", () => {
               compValue: "0x00",
             },
           ]),
-        )
-          .to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType")
-          .withArgs(0);
+          evaluator,
+          "UnsuitableParameterType",
+          [0n],
+        );
       }
     });
 
@@ -45,7 +46,7 @@ describe("Operator - Pluck", () => {
       it("reverts UnsuitableCompValue when compValue is not 1 byte", async () => {
         const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -54,13 +55,15 @@ describe("Operator - Pluck", () => {
               compValue: "0x0000", // 2 bytes instead of 1
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+          evaluator,
+          "UnsuitableCompValue",
+        );
       });
 
       it("reverts UnsuitableCompValue when index is 255 (reserved)", async () => {
         const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -69,14 +72,16 @@ describe("Operator - Pluck", () => {
               compValue: "0xff", // index 255 is reserved
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+          evaluator,
+          "UnsuitableCompValue",
+        );
       });
     });
 
     it("reverts LeafNodeCannotHaveChildren when Pluck has children", async () => {
       const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         allowTarget([
           {
             parent: 0,
@@ -91,7 +96,9 @@ describe("Operator - Pluck", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
+        evaluator,
+        "LeafNodeCannotHaveChildren",
+      );
     });
 
     it("reverts UnsuitableChildCount when Pluck(Array) has a non-structural child", async () => {
@@ -99,7 +106,7 @@ describe("Operator - Pluck", () => {
 
       // The evaluator reads children[0] as the array element template, so a
       // child that reads no calldata must be rejected.
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         allowTarget([
           {
             parent: 0,
@@ -126,9 +133,10 @@ describe("Operator - Pluck", () => {
             compValue: "0x",
           },
         ]),
-      )
-        .to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount")
-        .withArgs(1);
+        evaluator,
+        "UnsuitableChildCount",
+        [1n],
+      );
     });
   });
 });

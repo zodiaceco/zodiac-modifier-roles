@@ -1,6 +1,13 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface, solidityPacked } from "ethers";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+} from "viem";
 
 import { network } from "hardhat";
 
@@ -13,10 +20,8 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
@@ -38,7 +43,9 @@ describe("Operator - LessThan", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.LessThan,
-            compValue: abiCoder.encode(["uint256"], [100]),
+            compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+              100n,
+            ]),
           },
         ],
       }),
@@ -46,7 +53,7 @@ describe("Operator - LessThan", () => {
     );
 
     // 99 < 100 passes
-    await expect(invoke(99)).to.not.be.revert(ethers);
+    await invoke(99n);
   });
 
   it("fails when value >= compValue", async () => {
@@ -60,7 +67,9 @@ describe("Operator - LessThan", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.LessThan,
-            compValue: abiCoder.encode(["uint256"], [100]),
+            compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+              100n,
+            ]),
           },
         ],
       }),
@@ -68,22 +77,20 @@ describe("Operator - LessThan", () => {
     );
 
     // 100 == 100 fails
-    await expect(invoke(100))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(100n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
 
     // 101 > 100 fails
-    await expect(invoke(101))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(101n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
   });
 
   it("integrates with Slice operator", async () => {
@@ -99,12 +106,14 @@ describe("Operator - LessThan", () => {
           {
             paramType: Encoding.Dynamic,
             operator: Operator.Slice,
-            compValue: solidityPacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
+            compValue: encodePacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
             children: [
               {
                 paramType: Encoding.Static,
                 operator: Operator.LessThan,
-                compValue: abiCoder.encode(["uint256"], [100]),
+                compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                  100n,
+                ]),
               },
             ],
           },
@@ -114,66 +123,62 @@ describe("Operator - LessThan", () => {
     );
 
     // 0x00000063 = 99 < 100 passes
-    await expect(invoke("0x00000063")).to.not.be.revert(ethers);
+    await invoke("0x00000063");
 
     // 0x00000064 = 100 >= 100 fails
-    await expect(invoke("0x00000064"))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        2,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke("0x00000064"),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
   });
 
   it("compares ether value (msg.value)", async () => {
-    const iface = new Interface(["function fn()"]);
-    const fn = iface.getFunction("fn")!;
+    const abi = parseAbi(["function fn()"]);
+    const selector = toFunctionSelector(abi[0]);
     const { roles, member, testContractAddress, roleKey } =
       await loadFixture(setupTestContract);
 
     // LessThan on EtherValue: msg.value must be < 1000 wei
-    await roles.allowFunction(
+    await roles.write.allowFunction([
       roleKey,
       testContractAddress,
-      fn.selector,
+      selector,
       flattenCondition({
         paramType: Encoding.EtherValue,
         operator: Operator.LessThan,
-        compValue: abiCoder.encode(["uint256"], [1000]),
+        compValue: encodeAbiParameters(parseAbiParameters("uint256"), [1000n]),
       }),
       ExecutionOptions.Send,
-    );
+    ]);
 
     // 999 < 1000 passes
-    await expect(
-      roles
-        .connect(member)
-        .execTransactionFromModule(
-          testContractAddress,
-          999,
-          iface.encodeFunctionData(fn),
-          0,
-        ),
-    ).to.not.be.revert(ethers);
+    await roles.write.execTransactionFromModule(
+      [
+        testContractAddress,
+        999n,
+        encodeFunctionData({ abi, functionName: "fn" }),
+        0,
+      ],
+      { account: member.account },
+    );
 
     // 1000 >= 1000 fails
-    await expect(
-      roles
-        .connect(member)
-        .execTransactionFromModule(
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      roles.write.execTransactionFromModule(
+        [
           testContractAddress,
-          1000,
-          iface.encodeFunctionData(fn),
+          1000n,
+          encodeFunctionData({ abi, functionName: "fn" }),
           0,
-        ),
-    )
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        0,
-        anyValue,
-      );
+        ],
+        { account: member.account },
+      ),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 0n, anyValue],
+    );
   });
 
   describe("violation context", () => {
@@ -188,20 +193,25 @@ describe("Operator - LessThan", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.LessThan,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
         ExecutionOptions.None,
       );
 
-      await expect(invoke(150))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(150n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterGreaterThanAllowed,
-          1, // LessThan node at BFS index 1
+          1n, // LessThan node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -215,20 +225,25 @@ describe("Operator - LessThan", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.LessThan,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
         ExecutionOptions.None,
       );
 
-      await expect(invoke(150))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(150n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterGreaterThanAllowed,
           anyValue,
-          4, // calldataOffset: parameter starts at byte 4
-        );
+          4n, // calldataOffset: parameter starts at byte 4
+        ],
+      );
     });
   });
 
@@ -243,23 +258,27 @@ describe("Operator - LessThan", () => {
         Encoding.Array,
         Encoding.AbiEncoded,
       ]) {
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
               paramType: encoding,
               operator: Operator.LessThan,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
+          evaluator,
+          "UnsuitableParameterType",
+        );
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
       const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         allowTarget([
           {
             parent: 0,
@@ -268,19 +287,23 @@ describe("Operator - LessThan", () => {
             compValue: "0x0000", // Not 32 bytes
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+        evaluator,
+        "UnsuitableCompValue",
+      );
     });
 
     it("reverts LeafNodeCannotHaveChildren when LessThan has children", async () => {
       const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         allowTarget([
           {
             parent: 0,
             paramType: Encoding.Static,
             operator: Operator.LessThan,
-            compValue: abiCoder.encode(["uint256"], [100]),
+            compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+              100n,
+            ]),
           },
           {
             parent: 0,
@@ -289,7 +312,9 @@ describe("Operator - LessThan", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
+        evaluator,
+        "LeafNodeCannotHaveChildren",
+      );
     });
   });
 });

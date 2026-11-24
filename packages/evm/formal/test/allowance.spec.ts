@@ -19,13 +19,28 @@
  *
  * Needs the Lean driver (`cd formal && lake build roles-model`).
  */
-import { expect } from "chai";
-import { network } from "hardhat";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { Interface, hexlify, randomBytes, solidityPacked } from "ethers";
-import { LEAN_BIN, lean, makeGen } from "./eip712-gen";
-import { createSetup } from "../../test/setup";
-import { ConditionViolationStatus, Encoding, Operator } from "../../test/utils";
+import { after, describe, it } from "node:test";
+import { network } from "hardhat";
+import {
+  decodeErrorResult,
+  encodeFunctionData,
+  encodePacked,
+  toHex,
+  type Abi,
+  type Address,
+  type Hex,
+} from "viem";
+import { LEAN_BIN, lean, makeGen } from "./eip712-gen.js";
+import { createSetup } from "../../test/setup.js";
+import {
+  ConditionViolationStatus,
+  Encoding,
+  Operator,
+  extractRevertData,
+} from "../../test/utils.js";
 import {
   accrueAllowance,
   accrueThenUpdate,
@@ -36,8 +51,9 @@ const TXS = Number(process.env.ALLOWANCE_TXS ?? 10);
 const SEED = Number(process.env.ALLOWANCE_SEED ?? 1);
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
-const { setupTwoParams } = createSetup(connection);
+const { viem, networkHelpers } = connection;
+const { setupFn } = createSetup(connection);
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
 
 const U128 = (1n << 128n) - 1n;
 const U256 = (1n << 256n) - 1n;
@@ -46,35 +62,44 @@ const E18 = 10n ** 18n;
 type Meter =
   | { kind: "pass" }
   | { kind: "raw" }
-  | { kind: "priced"; db: number; di: number; price: bigint; adapter?: string };
+  | {
+      kind: "priced";
+      db: number;
+      di: number;
+      price: bigint;
+      adapter?: Address;
+    };
 
-describe("Allowances: Roles against Lean", function () {
+describe("Allowances: Roles against Lean", () => {
   after(async () => {
     await connection.close();
   });
 
-  it(`stores what the Lean model stores (${SCENARIOS} allowances × ${TXS} transactions)`, async function () {
-    if (!existsSync(LEAN_BIN)) this.skip();
-    this.timeout(0);
+  it(`stores what the Lean model stores (${SCENARIOS} allowances × ${TXS} transactions)`, async (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     const { int, chance, pick, randHex } = makeGen(SEED);
     const randBig = (bits: number) =>
       BigInt(randHex(Math.ceil(bits / 8))) % (1n << BigInt(bits));
     const { roles, owner, member, testContractAddress, fn, allowFunction } =
       await setupTwoParams();
-    const fnIface = new Interface([fn]);
     const invoke = (a: bigint, b: bigint) =>
-      roles
-        .connect(member)
-        .execTransactionFromModule(
+      roles.write.execTransactionFromModule(
+        [
           testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi: [fn],
+            functionName: fn.name,
+            args: [a, b],
+          }),
           0,
-          fnIface.encodeFunctionData(fn, [a, b]),
-          0,
-          { gasLimit: 5_000_000 },
-        );
-    const rolesIface: Interface = roles.interface;
+        ],
+        { account: member.account, gas: 5_000_000n },
+      );
 
-    const pricing = await ethers.getContractFactory("MockPricing");
     const randPrice = () =>
       pick([
         E18,
@@ -94,7 +119,7 @@ describe("Allowances: Roles against Lean", function () {
     const counts: Record<string, number> = {};
 
     for (let sc = 0; sc < SCENARIOS; sc++) {
-      const key = hexlify(randomBytes(32));
+      const key = toHex(randomBytes(32));
 
       // ---- the allowance
       const latest = BigInt(await networkHelpers.time.latest());
@@ -106,23 +131,25 @@ describe("Allowances: Roles against Lean", function () {
           : tsChoice === 1
             ? latest - BigInt(int(5000))
             : latest + BigInt(int(500));
-      await roles
-        .connect(owner)
-        .setAllowance(
+      await roles.write.setAllowance(
+        [
           key,
           randAmount(),
           pick([0n, randAmount(), 1n]),
           randAmount(),
           period,
           timestamp,
-        );
-      const stored = await roles.allowances(key);
+        ],
+        { account: owner.account },
+      );
+      const [refill, maxRefill, storedPeriod, balance, storedTimestamp] =
+        await roles.read.allowances([key]);
       let cfg = {
-        refill: stored.refill,
-        maxRefill: stored.maxRefill,
-        period: stored.period,
+        refill,
+        maxRefill,
+        period: storedPeriod,
       };
-      let state = { balance: stored.balance, timestamp: stored.timestamp };
+      let state = { balance, timestamp: storedTimestamp };
       const head = `al ${cfg.refill} ${cfg.maxRefill} ${cfg.period} ${state.balance} ${state.timestamp}`;
 
       // ---- how each parameter is metered
@@ -133,7 +160,8 @@ describe("Allowances: Roles against Lean", function () {
         const di = int(28);
         if (k === 1) return { kind: "priced", db, di, price: E18 };
         const price = randPrice();
-        const adapter = await (await pricing.deploy(price)).getAddress();
+        const adapter = (await viem.deployContract("MockPricing", [price]))
+          .address;
         return { kind: "priced", db, di, price, adapter };
       };
       const meters: Meter[] = [
@@ -146,7 +174,7 @@ describe("Allowances: Roles against Lean", function () {
               parent: 0,
               paramType: Encoding.Static,
               operator: Operator.Pass,
-              compValue: "0x",
+              compValue: "0x" as Hex,
             }
           : {
               parent: 0,
@@ -156,11 +184,11 @@ describe("Allowances: Roles against Lean", function () {
                 m.kind === "raw"
                   ? key
                   : m.adapter
-                    ? solidityPacked(
+                    ? encodePacked(
                         ["bytes32", "uint8", "uint8", "address"],
                         [key, m.db, m.di, m.adapter],
                       )
-                    : solidityPacked(
+                    : encodePacked(
                         ["bytes32", "uint8", "uint8"],
                         [key, m.db, m.di],
                       ),
@@ -186,7 +214,7 @@ describe("Allowances: Roles against Lean", function () {
       const txs: string[] = [];
       const got: string[] = [];
       let now = BigInt(await networkHelpers.time.latest());
-      for (let t = 0; t < TXS; t++) {
+      for (let tIdx = 0; tIdx < TXS; tIdx++) {
         const gap = pick([
           1n,
           BigInt(1 + int(10)),
@@ -196,20 +224,22 @@ describe("Allowances: Roles against Lean", function () {
         ]);
         // the SDK's accrual is the contract's, at the latest block
         const latestTs = BigInt(await networkHelpers.time.latest());
-        const view = await roles.accruedAllowance(key);
+        const [viewBalance, viewTimestamp] = await roles.read.accruedAllowance([
+          key,
+        ]);
         const sdk = accrueAllowance({ ...cfg, ...state }, latestTs);
-        if (view.balance !== sdk.balance || view.timestamp !== sdk.timestamp)
+        if (viewBalance !== sdk.balance || viewTimestamp !== sdk.timestamp)
           failures.push(
-            `accruedAllowance ${view.balance}:${view.timestamp}, SDK ${sdk.balance}:${sdk.timestamp} at ${latestTs}: ${head} ${txs.join(" ")}`,
+            `accruedAllowance ${viewBalance}:${viewTimestamp}, SDK ${sdk.balance}:${sdk.timestamp} at ${latestTs}: ${head} ${txs.join(" ")}`,
           );
         counts.accrualChecks = (counts.accrualChecks ?? 0) + 1;
 
         now += gap > 0n ? gap : 1n;
 
-        if (t > 0 && chance(0.15)) {
+        if (tIdx > 0 && chance(0.15)) {
           // change the refill through the SDK
           const planned = accrueThenUpdate(
-            { key: key as `0x${string}`, ...cfg, ...state },
+            { key, ...cfg, ...state },
             {
               refill: randAmount(),
               maxRefill: pick([0n, randAmount(), 1n]),
@@ -218,21 +248,21 @@ describe("Allowances: Roles against Lean", function () {
             now,
           );
           await networkHelpers.time.setNextBlockTimestamp(now);
-          await (
-            await roles
-              .connect(owner)
-              .setAllowance(
-                key,
-                planned.balance,
-                planned.maxRefill,
-                planned.refill,
-                planned.period,
-                planned.timestamp,
-              )
-          ).wait();
-          const s = await roles.allowances(key);
-          cfg = { refill: s.refill, maxRefill: s.maxRefill, period: s.period };
-          state = { balance: s.balance, timestamp: s.timestamp };
+          await roles.write.setAllowance(
+            [
+              key,
+              planned.balance,
+              planned.maxRefill,
+              planned.refill,
+              planned.period,
+              planned.timestamp,
+            ],
+            { account: owner.account },
+          );
+          const [sRefill, sMaxRefill, sPeriod, sBalance, sTimestamp] =
+            await roles.read.allowances([key]);
+          cfg = { refill: sRefill, maxRefill: sMaxRefill, period: sPeriod };
+          state = { balance: sBalance, timestamp: sTimestamp };
           if (
             cfg.refill !== planned.refill ||
             cfg.maxRefill !== planned.maxRefill ||
@@ -242,7 +272,7 @@ describe("Allowances: Roles against Lean", function () {
           txs.push(
             `${now}/u.${planned.refill}.${planned.maxRefill}.${planned.period}`,
           );
-          got.push(`ok:${s.balance}:${s.timestamp}`);
+          got.push(`ok:${sBalance}:${sTimestamp}`);
           counts.updates = (counts.updates ?? 0) + 1;
           continue;
         }
@@ -277,23 +307,27 @@ describe("Allowances: Roles against Lean", function () {
         await networkHelpers.time.setNextBlockTimestamp(now);
         let outcome: string;
         try {
-          await (await invoke(values[0], values[1])).wait();
-          const s = await roles.allowances(key);
-          if (s.timestamp > state.timestamp)
+          await invoke(values[0], values[1]);
+          const [, , , sBalance, sTimestamp] = await roles.read.allowances([
+            key,
+          ]);
+          if (sTimestamp > state.timestamp)
             counts.refilled = (counts.refilled ?? 0) + 1;
-          if (s.balance === 0n && state.balance > 0n)
+          if (sBalance === 0n && state.balance > 0n)
             counts.drained = (counts.drained ?? 0) + 1;
-          state = { balance: s.balance, timestamp: s.timestamp };
-          outcome = `ok:${s.balance}:${s.timestamp}`;
-        } catch (e: any) {
-          outcome = classify(rolesIface, e);
+          state = { balance: sBalance, timestamp: sTimestamp };
+          outcome = `ok:${sBalance}:${sTimestamp}`;
+        } catch (e: unknown) {
+          outcome = classify(roles.abi, e);
           const blockTs = BigInt(await networkHelpers.time.latest());
           if (blockTs !== now) {
             // the failing transaction was not mined: mine the block ourselves
             await networkHelpers.mine();
           }
-          const s = await roles.allowances(key);
-          if (s.balance !== state.balance || s.timestamp !== state.timestamp)
+          const [, , , sBalance, sTimestamp] = await roles.read.allowances([
+            key,
+          ]);
+          if (sBalance !== state.balance || sTimestamp !== state.timestamp)
             failures.push(
               `failed tx changed the allowance: ${head} ${txs.join(" ")}`,
             );
@@ -303,37 +337,36 @@ describe("Allowances: Roles against Lean", function () {
           (counts[outcome.split(":")[0]] ?? 0) + 1;
       }
       const want = lean([`${head} ${txs.join(" ")}`])[0].split(" ");
-      for (let t = 0; t < TXS; t++) {
-        if (got[t] !== want[t])
+      for (let tIdx = 0; tIdx < TXS; tIdx++) {
+        if (got[tIdx] !== want[tIdx])
           failures.push(
-            `tx ${t}: Roles ${got[t]}, Lean ${want[t]}: ${head} ${txs.slice(0, t + 1).join(" ")} (meters ${JSON.stringify(meters, (_, v) => (typeof v === "bigint" ? v.toString() : v))})`,
+            `tx ${tIdx}: Roles ${got[tIdx]}, Lean ${want[tIdx]}: ${head} ${txs.slice(0, tIdx + 1).join(" ")} (meters ${JSON.stringify(meters, (_, v) => (typeof v === "bigint" ? v.toString() : v))})`,
           );
       }
     }
     console.log(`      outcomes: ${JSON.stringify(counts)}`);
-    expect(failures.slice(0, 5)).to.deep.equal([]);
+    assert.deepEqual(failures.slice(0, 5), []);
   });
 });
 
-function classify(iface: Interface, e: any): string {
-  const data: string | undefined =
-    e?.data ?? e?.error?.data ?? e?.info?.error?.data ?? e?.receipt?.revertData;
-  if (typeof data === "string" && data.startsWith("0x4e487b71")) return "panic";
-  if (typeof data === "string" && data.length > 2) {
+function classify(abi: Abi, e: unknown): string {
+  const data = extractRevertData(e);
+  if (data && data.startsWith("0x4e487b71")) return "panic";
+  if (data && data.length > 2) {
     try {
-      const err = iface.parseError(data);
-      if (err?.name === "ConditionViolation") {
-        const status = Number(err.args[0]);
+      const err = decodeErrorResult({ abi, data });
+      if (err.errorName === "ConditionViolation") {
+        const status = Number(err.args?.[0]);
         if (status === ConditionViolationStatus.AllowanceExceeded)
           return "exceeded";
         if (status === ConditionViolationStatus.PricingAdapterZeroPrice)
           return "deny";
         return `violation-${status}`;
       }
-      return `error-${err?.name}`;
+      return `error-${err.errorName}`;
     } catch {
       return `unknown-${data.slice(0, 10)}`;
     }
   }
-  return `no-data: ${String(e?.message ?? e).slice(0, 120)}`;
+  return `no-data: ${String((e as Error)?.message ?? e).slice(0, 120)}`;
 }

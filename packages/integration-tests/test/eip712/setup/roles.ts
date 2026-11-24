@@ -1,12 +1,19 @@
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types"
-import { AbiCoder, randomBytes } from "ethers"
-import type { ExecutionOptions } from "zodiac-roles-sdk"
-import type { Condition } from "zodiac-roles-sdk"
+import { randomBytes } from "node:crypto"
+import {
+  type Address,
+  type Hex,
+  type PublicClient,
+  type WalletClient,
+  encodeAbiParameters,
+  encodeFunctionData,
+  toHex,
+} from "viem"
+import type { Condition, ExecutionOptions } from "zodiac-roles-sdk"
 
 import { moduleProxyFactory } from "./deploy-mastercopies/moduleProxyFactory.js"
 import { rolesModMastercopy } from "./deploy-mastercopies/rolesMastercopy.js"
 import { enableModuleInSafe } from "./safe.js"
-import type { ConditionFlatStruct } from "../../../../evm/typechain-types/contracts/Roles.js"
+import type { ConditionFlat } from "../../../../evm/test/utils.js"
 
 export async function deployRoles(
   {
@@ -14,38 +21,35 @@ export async function deployRoles(
     target,
     owner,
   }: {
-    avatar: string
-    target: string
-    owner: string
+    avatar: Address
+    target: Address
+    owner: Address
   },
-  relayer: HardhatEthersSigner
+  relayer: WalletClient,
+  publicClient: PublicClient
 ) {
   function encodeSetUp() {
-    const initializer = AbiCoder.defaultAbiCoder().encode(
-      ["address", "address", "address"],
+    const initializer = encodeAbiParameters(
+      [{ type: "address" }, { type: "address" }, { type: "address" }],
       [owner, avatar, target]
     )
 
-    return rolesModMastercopy.iface.encodeFunctionData("setUp", [initializer])
+    return encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "setUp",
+      args: [initializer],
+    })
   }
 
-  const tx = {
-    to: moduleProxyFactory.address,
-    value: 0,
-    data: moduleProxyFactory.iface.encodeFunctionData("deployModule", [
-      rolesModMastercopy.address,
-      encodeSetUp(),
-      randomHash(),
-    ]),
-  }
+  const { result: address, request } = await publicClient.simulateContract({
+    address: moduleProxyFactory.address,
+    abi: moduleProxyFactory.abi,
+    functionName: "deployModule",
+    args: [rolesModMastercopy.address, encodeSetUp(), BigInt(randomHash())],
+    account: relayer.account!,
+  })
 
-  const result = await relayer.call(tx)
-  const [address] = moduleProxyFactory.iface.decodeFunctionResult(
-    "deployModule",
-    result
-  )
-
-  await relayer.sendTransaction(tx)
+  await relayer.writeContract(request)
 
   return address
 }
@@ -56,26 +60,34 @@ export async function connectRolesSafeAndMember({
   roles,
   member,
 }: {
-  owner: HardhatEthersSigner
-  safe: string
-  roles: string
-  member: string
+  owner: WalletClient
+  safe: Address
+  roles: Address
+  member: Address
 }) {
   const roleKey = randomHash()
   await enableModuleInSafe({ safe, module: roles }, owner)
 
   await owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: roles,
-    data: rolesModMastercopy.iface.encodeFunctionData("enableModule", [member]),
+    data: encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "enableModule",
+      args: [member],
+    }),
   })
 
   await owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: roles,
-    data: rolesModMastercopy.iface.encodeFunctionData("assignRoles", [
-      member,
-      [roleKey],
-      [true],
-    ]),
+    data: encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "assignRoles",
+      args: [member, [roleKey], [true]],
+    }),
   })
 
   return { roleKey }
@@ -87,17 +99,20 @@ export async function scopeTarget({
   roleKey,
   target,
 }: {
-  owner: HardhatEthersSigner
-  roles: string
-  roleKey: string
-  target: string
+  owner: WalletClient
+  roles: Address
+  roleKey: Hex
+  target: Address
 }) {
   await owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: roles,
-    data: rolesModMastercopy.iface.encodeFunctionData("scopeTarget", [
-      roleKey,
-      target,
-    ]),
+    data: encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "scopeTarget",
+      args: [roleKey, target],
+    }),
   })
 }
 
@@ -110,28 +125,34 @@ export async function scopeFunction({
   condition,
   executionOptions,
 }: {
-  owner: HardhatEthersSigner
-  roles: string
-  roleKey: string
-  target: string
-  selector: string
+  owner: WalletClient
+  roles: Address
+  roleKey: Hex
+  target: Address
+  selector: Hex
   condition: Condition
   executionOptions: ExecutionOptions
 }) {
   await owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: roles,
-    data: rolesModMastercopy.iface.encodeFunctionData("scopeFunction", [
-      roleKey,
-      target,
-      selector,
-      flattenCondition(condition).map((c) => [
-        c.parent,
-        c.paramType,
-        c.operator,
-        c.compValue || "0x",
-      ]),
-      executionOptions,
-    ]),
+    data: encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "scopeFunction",
+      args: [
+        roleKey,
+        target,
+        selector,
+        flattenCondition(condition).map((c) => ({
+          parent: c.parent,
+          paramType: c.paramType,
+          operator: c.operator,
+          compValue: c.compValue || "0x",
+        })),
+        executionOptions,
+      ],
+    }),
   })
 }
 
@@ -143,33 +164,31 @@ export async function execTransactionWithRole({
   data,
   operation,
 }: {
-  signer: HardhatEthersSigner
-  roles: string
-  roleKey: string
-  to: string
-  data: string
+  signer: WalletClient
+  roles: Address
+  roleKey: Hex
+  to: Address
+  data: Hex
   operation: number
 }) {
-  return await signer.sendTransaction({
+  return signer.sendTransaction({
+    account: signer.account!,
+    chain: signer.chain,
     to: roles,
-    data: rolesModMastercopy.iface.encodeFunctionData(
-      "execTransactionWithRole",
-      [to, 0, data, operation, roleKey, true]
-    ),
+    data: encodeFunctionData({
+      abi: rolesModMastercopy.abi,
+      functionName: "execTransactionWithRole",
+      args: [to, 0n, data, operation, roleKey, true],
+    }),
   })
 }
 
-function randomHash(): string {
-  return (
-    "0x" +
-    Array.from(randomBytes(32))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  )
+function randomHash(): Hex {
+  return toHex(randomBytes(32))
 }
 
-const flattenCondition = (root: any): ConditionFlatStruct[] => {
-  const result: ConditionFlatStruct[] = []
+const flattenCondition = (root: any): ConditionFlat[] => {
+  const result: ConditionFlat[] = []
   const queue = [{ condition: root, parent: 0 }]
 
   while (queue.length > 0) {

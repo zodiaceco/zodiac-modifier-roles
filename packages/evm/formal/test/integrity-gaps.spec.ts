@@ -53,23 +53,35 @@
  * Trees the SDK check accepts and Integrity rejects are listed (and the
  * other way round counted). `GAP_GAS` sets the gas limit (default 16M).
  */
-import { expect } from "chai";
-import {
-  AbiCoder,
-  ContractFactory,
-  getBytes,
-  hexlify,
-  keccak256,
-  toBeHex,
-  zeroPadValue,
-} from "ethers";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import hre, { network } from "hardhat";
+import { network } from "hardhat";
+import {
+  decodeAbiParameters,
+  decodeErrorResult,
+  decodeFunctionResult,
+  encodeAbiParameters,
+  encodeFunctionData,
+  hexToBytes,
+  keccak256,
+  pad,
+  parseAbiParameters,
+  toFunctionSelector,
+  toHex,
+  type Abi,
+  type AbiFunction,
+  type Address,
+  type ContractFunctionArgs,
+  type ContractFunctionName,
+  type ContractFunctionReturnType,
+  type Hex,
+} from "viem";
 
 import {
   checkStored,
@@ -82,7 +94,13 @@ import {
   checkAndPack,
   packConditions,
 } from "../../../sdk/src/main/condition/packConditions.js";
-import { Encoding, Operator, flattenCondition } from "../../test/utils.js";
+import { linkIntegrity } from "../../test/setup.js";
+import {
+  Encoding,
+  Operator,
+  extractRevertData,
+  flattenCondition,
+} from "../../test/utils.js";
 
 const CASES = Number(process.env.GAP_CASES ?? 0);
 const SEED = Number(process.env.GAP_SEED ?? 1);
@@ -96,7 +114,10 @@ const EVAL = Number(process.env.GAP_EVAL ?? 0);
 const PACKED = process.env.GAP_PACKED === "1";
 const GAS = BigInt(process.env.GAP_GAS ?? 16_000_000);
 /** Allowance keys used in `GAP_EVAL` mode. */
-const KEYS = ["0x" + "a1".repeat(32), "0x" + "b2".repeat(32)];
+const KEYS: Hex[] = [
+  ("0x" + "a1".repeat(32)) as Hex,
+  ("0x" + "b2".repeat(32)) as Hex,
+];
 const LEAN_BIN = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../.lake/build/bin/roles-model",
@@ -145,15 +166,15 @@ function mutate(flat: any[]): string {
       const len = [0, 1, 2, 3, 4, 5, 12, 20, 31, 32, 33, 34, 54, 63, 64, 65][
         int(16)
       ];
-      n.compValue = hexlify(bytes(len));
+      n.compValue = toHex(bytes(len));
       return `cv length ${len} on ${was}`;
     }
     case 3: {
-      const b = getBytes(n.compValue);
+      const b = hexToBytes(n.compValue);
       if (b.length === 0) return `cv byte (empty) on ${was}`;
       const k = int(Math.min(b.length, 4));
       b[k] = [0, 1, 27, 28, 32, 33, 254, 255][int(8)];
-      n.compValue = hexlify(b);
+      n.compValue = toHex(b);
       return `cv byte ${k} on ${was}`;
     }
     default: {
@@ -167,14 +188,14 @@ function mutate(flat: any[]): string {
       n.operator = op;
       if (op === Operator.WithinRatio) {
         n.paramType = Encoding.None;
-        n.compValue = hexlify(ratioCv());
+        n.compValue = toHex(ratioCv());
       } else if (op === Operator.WithinAllowance) {
-        n.compValue = hexlify(bytes([32, 34, 54, 53][int(4)]));
+        n.compValue = toHex(bytes([32, 34, 54, 53][int(4)]));
       } else if (op === Operator.CallWithinAllowance) {
         n.paramType = Encoding.None;
-        n.compValue = hexlify(bytes(32));
+        n.compValue = toHex(bytes(32));
       } else if (op === Operator.Custom) {
-        n.compValue = hexlify(bytes([19, 20, 52][int(3)]));
+        n.compValue = toHex(bytes([19, 20, 52][int(3)]));
       } else {
         n.paramType = Encoding.None;
         n.compValue = "0x";
@@ -220,22 +241,26 @@ function leanCheck(flats: any[][]): boolean[] {
   return out.map((o) => o.startsWith("ok") || o === "ns");
 }
 
-function errName(e: any, iface: any): string {
-  let parsed: string | undefined;
-  try {
-    parsed = iface.parseError(e?.data)?.name;
-  } catch {}
-  return (
-    e?.revert?.name ??
-    parsed ??
-    (/OutOfGas/.test(JSON.stringify(e?.data ?? e?.message ?? ""))
-      ? "out of gas"
-      : undefined) ??
-    String(e?.shortMessage ?? e?.message ?? e).slice(0, 60)
-  );
+function errName(e: any, abi: Abi): string {
+  const data = extractRevertData(e);
+  if (data && data !== "0x") {
+    try {
+      return decodeErrorResult({ abi, data }).errorName;
+    } catch {}
+  }
+  const msg = String(e?.details ?? e?.message ?? e);
+  if (/out of gas|OutOfGas/i.test(msg)) return "out of gas";
+  return String(e?.shortMessage ?? e?.details ?? e?.message ?? e).slice(0, 60);
 }
 
-const abi = AbiCoder.defaultAbiCoder();
+const abiEncode = (types: string[], values: readonly unknown[]): Hex =>
+  types.length === 0
+    ? "0x"
+    : encodeAbiParameters(parseAbiParameters(types.join(",")), values as any);
+const abiDecode = (types: string[], data: Hex): readonly unknown[] =>
+  types.length === 0
+    ? []
+    : decodeAbiParameters(parseAbiParameters(types.join(",")), data);
 
 // ---------------------------------------------------------------------------
 // Randomness
@@ -373,21 +398,21 @@ function abiType(t: Ty): string {
 function randVal(t: Ty): any {
   switch (t.k) {
     case "word":
-      if (t.abi === "address") return hexlify(bytes(20));
+      if (t.abi === "address") return toHex(bytes(20));
       if (t.abi === "bool") return chance(0.5);
-      if (t.abi === "bytes32") return hexlify(bytes(32));
+      if (t.abi === "bytes32") return toHex(bytes(32));
       if (t.abi === "uint8") return BigInt(int(256));
-      if (t.abi === "uint64") return BigInt(hexlify(bytes(8)));
+      if (t.abi === "uint64") return BigInt(toHex(bytes(8)));
       if (t.abi === "int8") return BigInt.asIntN(8, BigInt(int(256)));
       if (t.abi === "int64")
-        return BigInt.asIntN(64, BigInt(hexlify(bytes(8))));
-      if (t.abi === "bytes1") return hexlify(bytes(1));
-      if (t.abi === "bytes4") return hexlify(bytes(4));
+        return BigInt.asIntN(64, BigInt(toHex(bytes(8))));
+      if (t.abi === "bytes1") return toHex(bytes(1));
+      if (t.abi === "bytes4") return toHex(bytes(4));
       if (t.abi === "int256")
-        return BigInt.asIntN(256, BigInt(hexlify(bytes(32))));
-      return chance(0.3) ? BigInt(int(1000)) : BigInt(hexlify(bytes(32)));
+        return BigInt.asIntN(256, BigInt(toHex(bytes(32))));
+      return chance(0.3) ? BigInt(int(1000)) : BigInt(toHex(bytes(32)));
     case "bytes":
-      return hexlify(bytes(int(70)));
+      return toHex(bytes(int(70)));
     case "tuple":
       return t.cs.map(randVal);
     case "array":
@@ -404,7 +429,7 @@ function randVal(t: Ty): any {
   }
 }
 
-/** The value as ethers encodes it. */
+/** The value as viem ABI encoding encodes it. */
 function toEth(t: Ty, v: any): any {
   switch (t.k) {
     case "tuple":
@@ -413,7 +438,7 @@ function toEth(t: Ty, v: any): any {
       return v.map((x: any) => toEth(t.e, x));
     case "call":
     case "variant":
-      return hexlify(raw(t, v));
+      return toHex(raw(t, v));
     default:
       return v;
   }
@@ -421,13 +446,13 @@ function toEth(t: Ty, v: any): any {
 
 /** Content bytes of a bytes-like value (bytes, nested calldata). */
 function raw(t: Ty, v: any): Uint8Array {
-  if (t.k === "bytes") return getBytes(v);
+  if (t.k === "bytes") return hexToBytes(v);
   if (t.k === "call") {
     const c = v as CallVal;
     return cat(
       c.prefix,
-      getBytes(
-        abi.encode(
+      hexToBytes(
+        abiEncode(
           t.args.map(abiType),
           t.args.map((a, i) => toEth(a, c.args[i])),
         ),
@@ -447,7 +472,7 @@ const isStatic = (t: Ty): boolean =>
 /** The bytes of the value at its location: inline encoding for static
  *  types, the tail block (length/count word included) for dynamic ones. */
 function encodeAt(t: Ty, v: any): Uint8Array {
-  const enc = getBytes(abi.encode([abiType(t)], [toEth(t, v)]));
+  const enc = hexToBytes(abiEncode([abiType(t)], [toEth(t, v)]));
   return isStatic(t) ? enc : enc.slice(32);
 }
 
@@ -463,7 +488,7 @@ function content(t: Ty, v: any): Uint8Array {
 type Node = {
   paramType: Encoding;
   operator: Operator;
-  compValue?: string;
+  compValue?: Hex;
   children?: Node[];
   /** non-positional: evaluated in place, consumes no parameter */
   np?: boolean;
@@ -471,12 +496,12 @@ type Node = {
   alt?: number;
 };
 
-const word = (b: Uint8Array) => zeroPadValue(b, 32);
+const word = (b: Uint8Array): Hex => pad(toHex(b), { size: 32 });
 /** EqualTo compValue as `abi.encode(value)` gives it: dynamic values carry
  *  a leading offset word, which the packer strips again. */
-const eqCv = (t: Ty, v: any) => abi.encode([abiType(t)], [toEth(t, v)]);
+const eqCv = (t: Ty, v: any) => abiEncode([abiType(t)], [toEth(t, v)]);
 const u16 = (n: number) => Uint8Array.from([(n >> 8) & 0xff, n & 0xff]);
-const randWord = () => hexlify(bytes(32));
+const randWord = () => toHex(bytes(32));
 
 /** Pass conditions that only describe the type (all structural). */
 function passFor(t: Ty): Node {
@@ -508,10 +533,10 @@ function passFor(t: Ty): Node {
   }
 }
 
-function leadCv(l: Lead): string {
-  if (l.checked) return hexlify(cat(u16(l.n), l.prefix));
+function leadCv(l: Lead): Hex {
+  if (l.checked) return toHex(cat(u16(l.n), l.prefix));
   if (l.n === 4 && chance(0.5)) return "0x";
-  return hexlify(u16(l.n));
+  return toHex(u16(l.n));
 }
 
 function bitmaskNode(paramType: Encoding, bs: Uint8Array): Node {
@@ -525,7 +550,7 @@ function bitmaskNode(paramType: Encoding, bs: Uint8Array): Node {
   return {
     paramType,
     operator: Operator.Bitmask,
-    compValue: hexlify(cat(u16(shift), mask, expected)),
+    compValue: toHex(cat(u16(shift), mask, expected)),
   };
 }
 
@@ -537,7 +562,7 @@ function compareNode(paramType: Encoding, w: Uint8Array): Node {
       operator: Operator.EqualTo,
       compValue: chance(0.6) ? word(w) : randWord(),
     };
-  const near = BigInt(hexlify(word(w))) + BigInt(int(3)) - 1n;
+  const near = BigInt(word(w)) + BigInt(int(3)) - 1n;
   return {
     paramType,
     operator: pick([
@@ -547,7 +572,7 @@ function compareNode(paramType: Encoding, w: Uint8Array): Node {
       Operator.SignedIntLessThan,
     ]),
     compValue: chance(0.6)
-      ? toBeHex(BigInt.asUintN(256, near), 32)
+      ? toHex(BigInt.asUintN(256, near), { size: 32 })
       : randWord(),
   };
 }
@@ -569,7 +594,7 @@ function sliceNode(paramType: Encoding, bs: Uint8Array): Node {
   return {
     paramType,
     operator: Operator.Slice,
-    compValue: hexlify(cat(u16(shift), Uint8Array.from([size]))),
+    compValue: toHex(cat(u16(shift), Uint8Array.from([size]))),
     children: [child],
   };
 }
@@ -726,7 +751,7 @@ function genBase(t: Ty, v: any, depth: number): Node {
           operator: Operator.EqualTo,
           compValue: chance(0.6)
             ? eqCv(t, v)
-            : hexlify(bytes(64 + 32 * int(3))),
+            : toHex(bytes(64 + 32 * int(3))),
         };
       }
       if (r < 8) return bitmaskNode(Encoding.Dynamic, bs);
@@ -748,10 +773,10 @@ function genBase(t: Ty, v: any, depth: number): Node {
         children: kids,
       };
       if (op === Operator.EqualTo) {
-        const enc = getBytes(eqCv(t, v));
+        const enc = hexToBytes(eqCv(t, v));
         n.compValue = chance(0.6)
-          ? hexlify(enc)
-          : hexlify(bytes(Math.max(64, enc.length)));
+          ? toHex(enc)
+          : toHex(bytes(Math.max(64, enc.length)));
       }
       return n;
     }
@@ -790,7 +815,7 @@ function genBase(t: Ty, v: any, depth: number): Node {
         children: kids,
       };
       if (op === Operator.EqualTo)
-        n.compValue = chance(0.6) ? eqCv(t, v) : hexlify(bytes(64));
+        n.compValue = chance(0.6) ? eqCv(t, v) : toHex(bytes(64));
       return n;
     }
     case "call": {
@@ -892,14 +917,14 @@ function withZip(
     return {
       paramType: Encoding.Array,
       operator: Operator.Pluck,
-      compValue: hexlify(Uint8Array.from([slots[f]])),
+      compValue: toHex(Uint8Array.from([slots[f]])),
       children: [passFor(elems[f])],
     };
   });
   const zip: Node = {
     paramType: Encoding.None,
     operator: chance(0.5) ? Operator.ZipEvery : Operator.ZipSome,
-    compValue: hexlify(Uint8Array.from(slots)),
+    compValue: toHex(Uint8Array.from(slots)),
     children: [
       {
         paramType: Encoding.Tuple,
@@ -1003,19 +1028,19 @@ function or(rs: (() => R)[]): R {
   return res;
 }
 
-const cvValue = (cv: string): bigint => {
-  const b = getBytes(cv);
+const cvValue = (cv: Hex): bigint => {
+  const b = hexToBytes(cv);
   return BigInt(
     b.length > 32
       ? keccak256(b)
-      : hexlify(cat(b, new Uint8Array(32 - b.length))),
+      : toHex(cat(b, new Uint8Array(32 - b.length))),
   );
 };
 const asWord = (b: Uint8Array): bigint =>
-  b.length > 32 ? BigInt(keccak256(b)) : BigInt(hexlify(word(b)));
+  b.length > 32 ? BigInt(keccak256(b)) : BigInt(word(b));
 const signed = (x: bigint) => BigInt.asIntN(256, x);
 
-function compare(op: Operator, value: bigint, cv: string): R {
+function compare(op: Operator, value: bigint, cv: Hex): R {
   const c = cvValue(cv);
   let ok: boolean;
   if (op === Operator.EqualTo) ok = value === c;
@@ -1027,8 +1052,8 @@ function compare(op: Operator, value: bigint, cv: string): R {
   return ok ? "ok" : "fail";
 }
 
-function bitmask(bs: Uint8Array, cv: string): R {
-  const b = getBytes(cv);
+function bitmask(bs: Uint8Array, cv: Hex): R {
+  const b = hexToBytes(cv);
   const shift = (b[0] << 8) | b[1];
   const n = (b.length - 2) / 2;
   if (shift + n > bs.length) return "fail";
@@ -1053,7 +1078,7 @@ function refNP(n: Node, cx: Cx): R {
       return or(n.children!.map((c) => () => refNP(c, cx)));
     case Operator.ZipSome:
     case Operator.ZipEvery: {
-      const cv = getBytes(n.compValue!);
+      const cv = hexToBytes(n.compValue!);
       const arrays = [...cv].map((s) => cx.slots.get(s));
       if (arrays.some((a) => !a)) throw new Error("zip before pluck");
       const len = (arrays[0]!.v as any[]).length;
@@ -1102,7 +1127,7 @@ function ref(n: Node, t: Ty, v: any, cx: Cx): R {
     if (n.paramType === Encoding.AbiEncoded)
       return n.alt === x.alt ? ref(n, t.alts[x.alt], x.v, cx) : "unk";
     // a bytes-level check on the raw content
-    return ref(n, { k: "bytes" }, hexlify(raw(t, v)), cx);
+    return ref(n, { k: "bytes" }, toHex(raw(t, v)), cx);
   }
 
   switch (op) {
@@ -1157,21 +1182,22 @@ function ref(n: Node, t: Ty, v: any, cx: Cx): R {
       return bitmask(content(t, v), n.compValue!);
     case Operator.Slice: {
       const bs = content(t, v);
-      const cv = getBytes(n.compValue!);
+      const cv = hexToBytes(n.compValue!);
       const shift = (cv[0] << 8) | cv[1];
       const size = cv[2];
       if (shift + size > bs.length) return "fail";
       return refSliced(n.children![0], bs.slice(shift, shift + size));
     }
     case Operator.Pluck:
-      cx.slots.set(getBytes(n.compValue!)[0], { t, v });
+      cx.slots.set(hexToBytes(n.compValue!)[0], { t, v });
       return "ok";
     default:
       if (isCompare(op)) {
-        const cv =
+        const cv = (
           op === Operator.EqualTo && !isStatic(t)
             ? "0x" + n.compValue!.slice(2 + 64)
-            : n.compValue!;
+            : n.compValue!
+        ) as Hex;
         return compare(op, asWord(encodeAt(t, v)), cv);
       }
       throw new Error(`ref ${opName(op)}`);
@@ -1181,7 +1207,7 @@ function ref(n: Node, t: Ty, v: any, cx: Cx): R {
 function refSliced(n: Node, window: Uint8Array): R {
   if (n.operator === Operator.Pass) return "ok";
   if (n.operator === Operator.Bitmask) return bitmask(window, n.compValue!);
-  const value = BigInt(hexlify(word(window)));
+  const value = BigInt(word(window));
   // a signed comparison takes the sign of a window from its top bit
   return compare(
     n.operator,
@@ -1228,33 +1254,57 @@ function sig(t: Ty): string {
   return t.k === "word" ? t.abi : "bytes";
 }
 
-describe("Integrity gaps (fuzz)", function () {
-  this.timeout(0);
+type Connection = Awaited<ReturnType<typeof network.create>>;
+type PublicClient = Awaited<ReturnType<Connection["viem"]["getPublicClient"]>>;
 
-  it(`accepted trees evaluate as intended (${CASES} cases)`, async function () {
-    if (CASES <= 0) this.skip();
+async function deployEvaluator(connection: Connection) {
+  return connection.viem.deployContract(
+    "MockEvaluator",
+    [],
+    await linkIntegrity(connection.viem),
+  );
+}
+
+async function readWithGas<
+  const abi extends Abi,
+  functionName extends ContractFunctionName<abi, "pure" | "view">,
+>(
+  publicClient: PublicClient,
+  contract: { address: Address; abi: abi },
+  functionName: functionName,
+  args: ContractFunctionArgs<abi, "pure" | "view", functionName>,
+  gas: bigint,
+): Promise<ContractFunctionReturnType<abi, "pure" | "view", functionName>> {
+  const data = encodeFunctionData({
+    abi: contract.abi,
+    functionName,
+    args,
+  } as any);
+  const res = await publicClient.call({ to: contract.address, data, gas });
+  return decodeFunctionResult({
+    abi: contract.abi,
+    functionName,
+    args,
+    data: res.data ?? "0x",
+  } as any) as ContractFunctionReturnType<abi, "pure" | "view", functionName>;
+}
+
+describe("Integrity gaps (fuzz)", () => {
+  it(`accepted trees evaluate as intended (${CASES} cases)`, async (t) => {
+    if (CASES <= 0) {
+      t.skip();
+      return;
+    }
     rand = mulberry32(SEED);
 
-    let connection: Awaited<ReturnType<typeof network.create>> | undefined;
-    let evaluator: any;
+    let connection: Connection | undefined;
+    let publicClient!: PublicClient;
+    let evaluator!: Awaited<ReturnType<typeof deployEvaluator>>;
     const fresh = async () => {
       await connection?.close();
       connection = await network.create();
-      const { ethers } = connection;
-      const [signer] = await ethers.getSigners();
-      const lib = async (name: string) => {
-        const { bytecode } = await hre.artifacts.readArtifact(name);
-        const c = await new ContractFactory([], bytecode, signer).deploy();
-        return c.getAddress();
-      };
-      evaluator = await (
-        await ethers.getContractFactory("MockEvaluator", {
-          libraries: {
-            CustomConditionChecker: await lib("CustomConditionChecker"),
-            WithinRatioChecker: await lib("WithinRatioChecker"),
-          },
-        })
-      ).deploy();
+      publicClient = await connection.viem.getPublicClient();
+      evaluator = await deployEvaluator(connection);
     };
 
     const rejected = new Map<string, number>();
@@ -1312,183 +1362,200 @@ describe("Integrity gaps (fuzz)", function () {
         );
     };
 
-    for (let c = 0; c < CASES; c++) {
-      if (c % 200 === 0) await fresh();
-      const { t, v, root, flat } = cases[c];
-      tags = cases[c].tags;
-      // trailing bytes are valid calldata; a misplaced read may land there
-      const data = hexlify(
-        cat(
-          raw(t, v),
-          NORMALIZE && cases[c].suffix ? cases[c].suffix : new Uint8Array(),
-        ),
-      );
-      const tagKey = [...tags].sort().join(" ") || "(none)";
+    try {
+      for (let c = 0; c < CASES; c++) {
+        if (c % 200 === 0) await fresh();
+        const { t, v, root, flat } = cases[c];
+        tags = cases[c].tags;
+        // trailing bytes are valid calldata; a misplaced read may land there
+        const data = toHex(
+          cat(
+            raw(t, v),
+            NORMALIZE && cases[c].suffix ? cases[c].suffix! : new Uint8Array(),
+          ),
+        );
+        const tagKey = [...tags].sort().join(" ") || "(none)";
 
-      if (checked[c] && !cases[c].mutated) {
-        checkAccepted++;
-        let okU: boolean;
-        let statusU: string;
+        if (checked[c] && !cases[c].mutated) {
+          checkAccepted++;
+          let okU: boolean;
+          let statusU: string;
+          try {
+            const s = Number(
+              await readWithGas(
+                publicClient,
+                evaluator,
+                "evaluateUnchecked",
+                [data, flat],
+                16_000_000n,
+              ),
+            );
+            okU = s === 0;
+            statusU = okU ? "Ok" : `status ${s}`;
+          } catch (e: any) {
+            okU = false;
+            statusU = `revert ${errName(e, evaluator.abi)}`;
+          }
+          const exp = ref(root, t, v, { slots: new Map() });
+          if (exp !== "unk") {
+            checkCompared++;
+            if ((exp === "ok") !== okU)
+              checkMismatches.push({
+                kind: okU ? "bypass" : "false-reject",
+                tags: tagKey,
+                status: statusU,
+                sig: sig(t),
+                tree: show(root),
+                size: count(root),
+                data,
+                flat: flat.map((f) => ({ ...f })),
+              });
+          }
+        }
+
+        let status: string;
+        let ok: boolean;
         try {
           const s = Number(
-            await evaluator.evaluateUnchecked(data, flat, {
-              gasLimit: 16_000_000,
-            }),
+            await readWithGas(
+              publicClient,
+              evaluator,
+              "evaluate",
+              [data, flat],
+              16_000_000n,
+            ),
           );
-          okU = s === 0;
-          statusU = okU ? "Ok" : `status ${s}`;
+          status = s === 0 ? "Ok" : `status ${s}`;
+          ok = s === 0;
         } catch (e: any) {
-          okU = false;
-          statusU = `revert ${errName(e, evaluator.interface)}`;
-        }
-        const exp = ref(root, t, v, { slots: new Map() });
-        if (exp !== "unk") {
-          checkCompared++;
-          if ((exp === "ok") !== okU)
-            checkMismatches.push({
-              kind: okU ? "bypass" : "false-reject",
-              tags: tagKey,
-              status: statusU,
-              sig: sig(t),
-              tree: show(root),
-              size: count(root),
-              data,
-              flat: flat.map((f) => ({ ...f })),
-            });
-        }
-      }
-
-      let status: string;
-      let ok: boolean;
-      try {
-        const s = Number(
-          await evaluator.evaluate(data, flat, { gasLimit: 16_000_000 }),
-        );
-        status = s === 0 ? "Ok" : `status ${s}`;
-        ok = s === 0;
-      } catch (e: any) {
-        const name = errName(e, evaluator.interface);
-        if (name === "out of gas") {
-          outOfGas++;
-          if (process.env.GAP_DEBUG)
-            console.log(
-              `OOG size ${count(root)} depth ${depth(root)} sig ${sig(t)}`,
-            );
-          continue;
-        }
-        const integrity = /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic";
-        if (integrity) {
-          rejected.set(name, (rejected.get(name) ?? 0) + 1);
-          if (checked[c]) bump(onlyCheck, `${name} | ${tagKey}`, flat);
-          for (const tg of tags) {
-            const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
-            st.rejected++;
-            tagStats.set(tg, st);
-          }
-          continue;
-        }
-        status = `revert ${name}`;
-        ok = false;
-      }
-      accepted++;
-      if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey, flat);
-      if (cases[c].mutated) continue;
-      if (NORMALIZE) {
-        const expN = ref(root, t, v, { slots: new Map() });
-        let normalized: any;
-        try {
-          normalized = normalizeCondition(strip(root));
-        } catch (e: any) {
-          bump(normThrows, String(e.message ?? e).slice(0, 60));
-        }
-        // the SDK stores the normalized tree with a `...Packed` setter: it
-        // must pass the SDK check (not Integrity) whenever the tree as
-        // written does, and is evaluated without Integrity
-        const checkedAsWritten = (() => {
-          try {
-            return checkStoredConditions(flat as any) !== undefined;
-          } catch {
-            return false;
-          }
-        })();
-        if (normalized && checkedAsWritten) {
-          normCompared++;
-          const nflat = flattenCondition(normalized).map((f) => ({ ...f }));
-          let nStatus: string;
-          let nOk = false;
-          let integrityN = false;
-          let nChecked = false;
-          try {
-            nChecked = checkStoredConditions(nflat as any) !== undefined;
-          } catch {
-            nChecked = false;
-          }
-          if (!nChecked) {
-            integrityN = true;
-            nStatus = "rejected by the SDK check";
-          } else {
-            try {
-              const s = Number(
-                await evaluator.evaluateUnchecked(data, nflat, {
-                  gasLimit: 16_000_000,
-                }),
+          const name = errName(e, evaluator.abi);
+          if (name === "out of gas") {
+            outOfGas++;
+            if (process.env.GAP_DEBUG)
+              console.log(
+                `OOG size ${count(root)} depth ${depth(root)} sig ${sig(t)}`,
               );
-              nOk = s === 0;
-              nStatus = nOk ? "Ok" : `status ${s}`;
-            } catch (e: any) {
-              nStatus = `revert ${errName(e, evaluator.interface)}`;
-            }
+            continue;
           }
-          if (
-            integrityN ||
-            nOk !== ok ||
-            (expN !== "unk" && (expN === "ok") !== nOk)
-          )
-            normMismatches.push({
-              kind: integrityN
-                ? "normalized-rejected"
-                : nOk && !ok
-                  ? "normalize-widens"
-                  : nOk !== ok
-                    ? "normalize-narrows"
-                    : "normalize-vs-ref",
-              tags: tagKey,
-              status: `${status} -> ${nStatus} (ref ${expN})`,
-              sig: sig(t),
-              tree: `${show(root)}\n        normd  ${show(normalized)}`,
-              size: count(root),
-              data,
-              flat: nflat,
-            });
+          const integrity = /^[A-Z][A-Za-z]+$/.test(name) && name !== "Panic";
+          if (integrity) {
+            rejected.set(name, (rejected.get(name) ?? 0) + 1);
+            if (checked[c]) bump(onlyCheck, `${name} | ${tagKey}`, flat);
+            for (const tg of tags) {
+              const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
+              st.rejected++;
+              tagStats.set(tg, st);
+            }
+            continue;
+          }
+          status = `revert ${name}`;
+          ok = false;
         }
-      }
-      if (process.env.GAP_DEBUG)
-        console.log(`OK  size ${count(root)} depth ${depth(root)}`);
-      for (const tg of tags) {
-        const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
-        st.accepted++;
-        tagStats.set(tg, st);
-      }
+        accepted++;
+        if (CHECK && !checked[c]) bump(onlyIntegrity, tagKey, flat);
+        if (cases[c].mutated) continue;
+        if (NORMALIZE) {
+          const expN = ref(root, t, v, { slots: new Map() });
+          let normalized: any;
+          try {
+            normalized = normalizeCondition(strip(root));
+          } catch (e: any) {
+            bump(normThrows, String(e.message ?? e).slice(0, 60));
+          }
+          // the SDK stores the normalized tree with a `...Packed` setter: it
+          // must pass the SDK check (not Integrity) whenever the tree as
+          // written does, and is evaluated without Integrity
+          const checkedAsWritten = (() => {
+            try {
+              return checkStoredConditions(flat as any) !== undefined;
+            } catch {
+              return false;
+            }
+          })();
+          if (normalized && checkedAsWritten) {
+            normCompared++;
+            const nflat = flattenCondition(normalized).map((f) => ({ ...f }));
+            let nStatus: string;
+            let nOk = false;
+            let integrityN = false;
+            let nChecked = false;
+            try {
+              nChecked = checkStoredConditions(nflat as any) !== undefined;
+            } catch {
+              nChecked = false;
+            }
+            if (!nChecked) {
+              integrityN = true;
+              nStatus = "rejected by the SDK check";
+            } else {
+              try {
+                const s = Number(
+                  await readWithGas(
+                    publicClient,
+                    evaluator,
+                    "evaluateUnchecked",
+                    [data, nflat],
+                    16_000_000n,
+                  ),
+                );
+                nOk = s === 0;
+                nStatus = nOk ? "Ok" : `status ${s}`;
+              } catch (e: any) {
+                nStatus = `revert ${errName(e, evaluator.abi)}`;
+              }
+            }
+            if (
+              integrityN ||
+              nOk !== ok ||
+              (expN !== "unk" && (expN === "ok") !== nOk)
+            )
+              normMismatches.push({
+                kind: integrityN
+                  ? "normalized-rejected"
+                  : nOk && !ok
+                    ? "normalize-widens"
+                    : nOk !== ok
+                      ? "normalize-narrows"
+                      : "normalize-vs-ref",
+                tags: tagKey,
+                status: `${status} -> ${nStatus} (ref ${expN})`,
+                sig: sig(t),
+                tree: `${show(root)}\n        normd  ${show(normalized)}`,
+                size: count(root),
+                data,
+                flat: nflat,
+              });
+          }
+        }
+        if (process.env.GAP_DEBUG)
+          console.log(`OK  size ${count(root)} depth ${depth(root)}`);
+        for (const tg of tags) {
+          const st = tagStats.get(tg) ?? { accepted: 0, rejected: 0 };
+          st.accepted++;
+          tagStats.set(tg, st);
+        }
 
-      const expected = ref(root, t, v, { slots: new Map() });
-      if (expected === "unk") {
-        unknown++;
-        continue;
+        const expected = ref(root, t, v, { slots: new Map() });
+        if (expected === "unk") {
+          unknown++;
+          continue;
+        }
+        compared++;
+        if ((expected === "ok") === ok) continue;
+        mismatches.push({
+          kind: ok ? "bypass" : "false-reject",
+          tags: tagKey,
+          status,
+          sig: sig(t),
+          tree: show(root),
+          size: count(root),
+          data,
+          flat: flat.map((f) => ({ ...f })),
+        });
       }
-      compared++;
-      if ((expected === "ok") === ok) continue;
-      mismatches.push({
-        kind: ok ? "bypass" : "false-reject",
-        tags: tagKey,
-        status,
-        sig: sig(t),
-        tree: show(root),
-        size: count(root),
-        data,
-        flat: flat.map((f) => ({ ...f })),
-      });
+    } finally {
+      await connection?.close();
     }
-    await connection?.close();
 
     console.log(
       `      ${CASES} cases: ${accepted} accepted by Integrity, ${compared} compared, ${unknown} unknown (malformed calldata below a trailing Pass, which the reference does not judge), ${outOfGas} out of gas`,
@@ -1551,7 +1618,7 @@ describe("Integrity gaps (fuzz)", function () {
           ),
         );
       // normalization keeps every child, so the verdict never changes
-      expect(normMismatches.length).to.equal(0);
+      assert.equal(normMismatches.length, 0);
       return;
     }
     if (CHECK) {
@@ -1571,37 +1638,28 @@ describe("Integrity gaps (fuzz)", function () {
         console.log(`        tree   ${m.tree}`);
         console.log(`        status ${m.status}`);
       }
-      expect(checkMismatches.length).to.equal(0);
+      assert.equal(checkMismatches.length, 0);
       return;
     }
-    expect(mismatches.length).to.equal(0);
+    assert.equal(mismatches.length, 0);
   });
 
-  it(`the Lean model of evaluate agrees with the contract (${EVAL} cases)`, async function () {
-    if (EVAL <= 0) this.skip();
+  it(`the Lean model of evaluate agrees with the contract (${EVAL} cases)`, async (t) => {
+    if (EVAL <= 0) {
+      t.skip();
+      return;
+    }
     rand = mulberry32(SEED);
-    let connection: Awaited<ReturnType<typeof network.create>> | undefined;
-    let evaluator: any;
+    let connection: Connection | undefined;
+    let publicClient!: PublicClient;
+    let evaluator!: Awaited<ReturnType<typeof deployEvaluator>>;
     const fresh = async () => {
       await connection?.close();
       connection = await network.create({
         override: { blockGasLimit: GAS > 30_000_000n ? GAS : 30_000_000n },
-      } as any);
-      const { ethers } = connection;
-      const [signer] = await ethers.getSigners();
-      const lib = async (name: string) => {
-        const { bytecode } = await hre.artifacts.readArtifact(name);
-        const c = await new ContractFactory([], bytecode, signer).deploy();
-        return c.getAddress();
-      };
-      evaluator = await (
-        await ethers.getContractFactory("MockEvaluator", {
-          libraries: {
-            CustomConditionChecker: await lib("CustomConditionChecker"),
-            WithinRatioChecker: await lib("WithinRatioChecker"),
-          },
-        })
-      ).deploy();
+      });
+      publicClient = await connection.viem.getPublicClient();
+      evaluator = await deployEvaluator(connection);
     };
     /** Flips, cuts or extends the calldata. */
     const corrupt = (data: Uint8Array): Uint8Array => {
@@ -1622,7 +1680,7 @@ describe("Integrity gaps (fuzz)", function () {
 
     type Q = {
       line: string;
-      data: string;
+      data: Hex;
       flat: any[];
       value: number;
       bal: bigint[];
@@ -1647,8 +1705,8 @@ describe("Integrity gaps (fuzz)", function () {
         ",",
       );
       queries.push({
-        line: `ev ${value} ${allowances} ${hexlify(data)} ${nodes}`,
-        data: hexlify(data),
+        line: `ev ${value} ${allowances} ${toHex(data)} ${nodes}`,
+        data: toHex(data),
         flat,
         value,
         bal,
@@ -1665,81 +1723,83 @@ describe("Integrity gaps (fuzz)", function () {
     const looserLines: string[] = [];
     const stricterLines: string[] = [];
     const chain: (string | undefined)[] = [];
-    for (let c = 0; c < queries.length; c++) {
-      if (c % 200 === 0) await fresh();
-      const q = queries[c];
-      let packed: string | undefined;
-      if (PACKED) {
-        let intErr: string | undefined;
-        try {
-          await evaluator.enforceIntegrity.staticCall(q.flat, {
-            gasLimit: GAS,
-          });
-        } catch (e: any) {
-          intErr = errName(e, evaluator.interface);
-        }
-        let verdict;
-        try {
-          verdict = checkStoredConditions(q.flat);
-        } catch {
-          verdict = undefined;
-        }
-        if (verdict === undefined) {
-          rejected++;
-          if (intErr === undefined) {
-            sdkStricter++;
-            stricterLines.push(q.line.split(" ").pop()!);
-          }
-          chain.push(undefined);
-          continue;
-        }
-        if (intErr !== undefined) {
-          looserLines.push(`${intErr} ${q.line.split(" ").pop()}`);
-          const e = sdkLooser.get(intErr) ?? {
-            n: 0,
-            example: q.line.split(" ").pop()!,
-          };
-          e.n++;
-          sdkLooser.set(intErr, e);
-        }
-        packed = hexlify(packConditions(toFlatNodes(q.flat)));
-      }
-      try {
-        const [status, cons] = PACKED
-          ? await evaluator.evaluatePackedWith.staticCall(
-              q.data,
-              packed,
-              q.value,
-              KEYS,
-              q.bal,
-              { gasLimit: GAS },
-            )
-          : await evaluator.evaluateWith.staticCall(
-              q.data,
-              q.flat,
-              q.value,
-              KEYS,
-              q.bal,
-              { gasLimit: GAS },
+    try {
+      for (let c = 0; c < queries.length; c++) {
+        if (c % 200 === 0) await fresh();
+        const q = queries[c];
+        let packed: Hex | undefined;
+        if (PACKED) {
+          let intErr: string | undefined;
+          try {
+            await readWithGas(
+              publicClient,
+              evaluator,
+              "enforceIntegrity",
+              [q.flat],
+              GAS,
             );
-        const cs = (cons as any[]).map(
-          (x) => `${hexNo0x(x.allowanceKey)}:${x.balance}:${x.consumed}`,
-        );
-        chain.push(`${Number(status)} ${cs.length ? cs.join(",") : "-"}`);
-      } catch (e: any) {
-        const name = errName(e, evaluator.interface);
-        if (name === "out of gas") {
-          oog++;
-          chain.push(undefined);
-        } else if (
-          !PACKED &&
-          /^[A-Z][A-Za-z]+$/.test(name) &&
-          name !== "Panic"
-        ) {
-          rejected++;
-          chain.push(undefined);
-        } else chain.push("255 -");
+          } catch (e: any) {
+            intErr = errName(e, evaluator.abi);
+          }
+          let verdict;
+          try {
+            verdict = checkStoredConditions(q.flat);
+          } catch {
+            verdict = undefined;
+          }
+          if (verdict === undefined) {
+            rejected++;
+            if (intErr === undefined) {
+              sdkStricter++;
+              stricterLines.push(q.line.split(" ").pop()!);
+            }
+            chain.push(undefined);
+            continue;
+          }
+          if (intErr !== undefined) {
+            looserLines.push(`${intErr} ${q.line.split(" ").pop()}`);
+            const e = sdkLooser.get(intErr) ?? {
+              n: 0,
+              example: q.line.split(" ").pop()!,
+            };
+            e.n++;
+            sdkLooser.set(intErr, e);
+          }
+          packed = toHex(packConditions(toFlatNodes(q.flat)));
+        }
+        try {
+          const {
+            result: [status, cons],
+          } = PACKED
+            ? await evaluator.simulate.evaluatePackedWith(
+                [q.data, packed!, BigInt(q.value), KEYS, q.bal],
+                { gas: GAS },
+              )
+            : await evaluator.simulate.evaluateWith(
+                [q.data, q.flat, BigInt(q.value), KEYS, q.bal],
+                { gas: GAS },
+              );
+          const cs = cons.map(
+            (x) => `${hexNo0x(x.allowanceKey)}:${x.balance}:${x.consumed}`,
+          );
+          chain.push(`${Number(status)} ${cs.length ? cs.join(",") : "-"}`);
+        } catch (e: any) {
+          const name = errName(e, evaluator.abi);
+          if (name === "out of gas") {
+            oog++;
+            chain.push(undefined);
+          } else if (
+            !PACKED &&
+            /^[A-Z][A-Za-z]+$/.test(name) &&
+            name !== "Panic"
+          ) {
+            rejected++;
+            chain.push(undefined);
+          } else chain.push("255 -");
+        }
       }
+    } finally {
+      await connection?.close();
     }
     const asked = queries.filter((_, c) => chain[c] !== undefined);
     if (REPORT && PACKED) {
@@ -1757,9 +1817,9 @@ describe("Integrity gaps (fuzz)", function () {
       input: asked.map((q) => q.line).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const lean = String(res.stdout).trim().split("\n");
-    expect(lean.length).to.equal(asked.length);
+    assert.equal(lean.length, asked.length);
 
     const statuses = new Map<string, number>();
     const diffs: string[] = [];
@@ -1773,7 +1833,6 @@ describe("Integrity gaps (fuzz)", function () {
           `chain ${ch}\n        lean  ${lean[k]}\n        ${asked[k].line.slice(0, 600)}`,
         );
     });
-    await connection?.close();
     const aliasCompared = asked.filter((q) => q.alias).length;
     const aliasOk = asked.filter(
       (q, k) => q.alias && answers[k].startsWith("0 "),
@@ -1799,7 +1858,7 @@ describe("Integrity gaps (fuzz)", function () {
         .join(" ")}`,
     );
     for (const d of diffs.slice(0, 8)) console.log(`      ${d}`);
-    expect(diffs.length).to.equal(0);
+    assert.equal(diffs.length, 0);
   });
   /* -------------------------------------------------------------------------
    * GAP_TARGET: does the target decode what Roles checked?
@@ -1820,15 +1879,21 @@ describe("Integrity gaps (fuzz)", function () {
    * rejects when they are encoded plainly. Trees take the SDK path (gated
    * by `checkAndPack`, evaluated packed), not Integrity.
    * ---------------------------------------------------------------------- */
-  it(`the target decodes what Roles checked (${TARGET} cases)`, async function () {
-    if (TARGET <= 0) this.skip();
+  it(`the target decodes what Roles checked (${TARGET} cases)`, async (t) => {
+    if (TARGET <= 0) {
+      t.skip();
+      return;
+    }
     const SOLC =
       process.env.GAP_SOLC ??
       path.join(
         os.homedir(),
         "Library/Caches/hardhat-nodejs/compilers-v3/macosx-amd64/solc-macosx-amd64-v0.8.38+commit.1835d247",
       );
-    if (!existsSync(SOLC)) this.skip();
+    if (!existsSync(SOLC)) {
+      t.skip();
+      return;
+    }
     rand = mulberry32(SEED);
 
     // types: words, bytes, tuples, arrays, nested calldata (a `bytes`
@@ -1869,7 +1934,8 @@ describe("Integrity gaps (fuzz)", function () {
 
     // ---------------------------------------------------- loose encoder
     const DIRTY = 0.03;
-    const w32 = (n: bigint) => getBytes(toBeHex(BigInt.asUintN(256, n), 32));
+    const w32 = (n: bigint) =>
+      hexToBytes(toHex(BigInt.asUintN(256, n), { size: 32 }));
     const junk = (words: number) => bytes(32 * words);
     const wordEnc = (t: Extract<Ty, { k: "word" }>, v: any): Uint8Array => {
       switch (t.abi) {
@@ -1896,14 +1962,14 @@ describe("Integrity gaps (fuzz)", function () {
         case "bytes4": {
           const n = t.abi === "bytes1" ? 1 : 4;
           const b = new Uint8Array(32);
-          b.set(getBytes(v), 0);
+          b.set(hexToBytes(v), 0);
           if (chance(DIRTY)) b[n + int(32 - n)] = 1 + int(255);
           return b;
         }
         case "bytes32":
-          return getBytes(v);
+          return hexToBytes(v);
         case "address": {
-          const b = getBytes(zeroPadValue(v, 32));
+          const b = hexToBytes(pad(v as Hex, { size: 32 }));
           if (chance(DIRTY)) b[int(12)] = 1 + int(255);
           return b;
         }
@@ -1920,7 +1986,7 @@ describe("Integrity gaps (fuzz)", function () {
         // nested calldata: its own arguments laid out loosely too
         const c =
           t.k === "bytes"
-            ? getBytes(v)
+            ? hexToBytes(v)
             : chance(0.15)
               ? raw(t, v)
               : cat(v.prefix, block(t.args, v.args));
@@ -1965,7 +2031,7 @@ describe("Integrity gaps (fuzz)", function () {
       const placed: { enc: string; at: number }[] = [];
       for (const i of dyn) {
         const enc = tailEnc(ts[i], vs[i]);
-        const same = placed.find((p) => p.enc === hexlify(enc));
+        const same = placed.find((p) => p.enc === toHex(enc));
         if (same && chance(0.5)) {
           offsets.set(i, same.at);
           continue;
@@ -1975,7 +2041,7 @@ describe("Integrity gaps (fuzz)", function () {
           continue;
         }
         offsets.set(i, cursor);
-        placed.push({ enc: hexlify(enc), at: cursor });
+        placed.push({ enc: toHex(enc), at: cursor });
         tails.push(enc);
         cursor += enc.length;
         if (chance(0.2)) {
@@ -2025,11 +2091,11 @@ describe("Integrity gaps (fuzz)", function () {
       /** what the tree exercises beyond per-node checks */
       feats: string[];
       /** packed by the SDK, undefined if its check rejects the tree */
-      packed?: string;
+      packed?: Hex;
     };
     // The SDK path (what zodiac-os stores through the `...Packed` setters):
     // the SDK check gates the tree, Roles evaluates the packed buffer.
-    const pack = (flat: any[]): string | undefined => {
+    const pack = (flat: any[]): Hex | undefined => {
       try {
         return checkAndPack(flat).packed;
       } catch {
@@ -2093,7 +2159,7 @@ describe("Integrity gaps (fuzz)", function () {
         const pluck: Node = {
           paramType: Encoding.Static,
           operator: Operator.Pluck,
-          compValue: hexlify(Uint8Array.from([slots[j]])),
+          compValue: toHex(Uint8Array.from([slots[j]])),
         };
         return chance(0.5)
           ? pluck
@@ -2126,7 +2192,7 @@ describe("Integrity gaps (fuzz)", function () {
       const ratio: Node = {
         paramType: Encoding.None,
         operator: Operator.WithinRatio,
-        compValue: hexlify(
+        compValue: toHex(
           cat(
             Uint8Array.from([slots[ref], decs[ref], slots[rel], decs[rel]]),
             u32(lo),
@@ -2146,7 +2212,7 @@ describe("Integrity gaps (fuzz)", function () {
             {
               paramType: Encoding.EtherValue,
               operator: Operator.Pluck,
-              compValue: hexlify(Uint8Array.from([slots[1]])),
+              compValue: toHex(Uint8Array.from([slots[1]])),
               np: true,
             },
           ]
@@ -2197,8 +2263,8 @@ describe("Integrity gaps (fuzz)", function () {
         };
       const flat = flattenCondition(strip(root)).map((f) => ({ ...f }));
       const encoded = chance(0.15)
-        ? getBytes(
-            abi.encode(
+        ? hexToBytes(
+            abiEncode(
               args.map(abiType),
               args.map((a, i) => toEth(a, v.args[i])),
             ),
@@ -2244,7 +2310,7 @@ describe("Integrity gaps (fuzz)", function () {
       };
     }
     /** Per case, the nested call types (each decoded by its own echo
-     *  function `c<i>_<id>` / `m<i>_<id>`, the call's receiver). */
+     *  function `c<i>_<id>` / `m<i>_<id>`). */
     const callIds: Map<Ty, number>[] = cases.map((k) => {
       const ids = new Map<Ty, number>();
       const walk = (t: Ty) => {
@@ -2322,278 +2388,286 @@ describe("Integrity gaps (fuzz)", function () {
       }
       codegens.push({ name: viaIR ? "via-IR" : "legacy", art });
     }
-    expect(codegens.length, "the echo target compiles").to.be.greaterThan(0);
+    assert.ok(codegens.length > 0, "the echo target compiles");
 
     const connection = await network.create({
       override: { blockGasLimit: GAS > 30_000_000n ? GAS : 30_000_000n },
-    } as any);
-    const { ethers } = connection;
-    const [signer] = await ethers.getSigners();
-    const lib = async (name: string) => {
-      const { bytecode } = await hre.artifacts.readArtifact(name);
-      const c = await new ContractFactory([], bytecode, signer).deploy();
-      return c.getAddress();
-    };
-    const evaluator: any = await (
-      await ethers.getContractFactory("MockEvaluator", {
-        libraries: {
-          CustomConditionChecker: await lib("CustomConditionChecker"),
-          WithinRatioChecker: await lib("WithinRatioChecker"),
-        },
-      })
-    ).deploy();
-    /** Per codegen, the contract holding case i's functions. */
-    const echos: {
-      name: string;
-      at: (i: number) => { address: string; iface: any };
-    }[] = [];
-    for (const g of codegens) {
-      const parts: { address: string; iface: any }[] = [];
-      for (let b = 0; b * CHUNK < cases.length; b++) {
-        const a = g.art[`Echo${b}`];
-        const c = await new ContractFactory(
-          a.abi,
-          "0x" + a.evm.bytecode.object,
-          signer,
-        ).deploy();
-        parts.push({ address: await c.getAddress(), iface: c.interface });
-      }
-      echos.push({ name: g.name, at: (i) => parts[Math.floor(i / CHUNK)] });
-    }
-
-    /** Every tree with some branch moved to the front of each `Or` (up to
-     *  64): the runs Roles could take if any passing branch may apply. */
-    const branchChoices = (n: Node): Node[] => {
-      const kidSets = (n.children ?? []).map(branchChoices);
-      const combos: Node[][] = [[]];
-      for (const ks of kidSets) {
-        const next: Node[][] = [];
-        for (const c of combos)
-          for (const k of ks) if (next.length < 64) next.push([...c, k]);
-        combos.splice(0, combos.length, ...next);
-      }
-      const rebuilt = combos.map((children) =>
-        n.children ? { ...n, children } : n,
-      );
-      if (n.operator !== Operator.Or || n.paramType !== Encoding.None)
-        return rebuilt;
-      // an Or may take any passing branch: try each one first (keeps the
-      // tree well-typed, which the SDK check requires)
-      return rebuilt
-        .flatMap((r) =>
-          r.children!.map((first, c) => ({
-            ...r,
-            children: [first, ...r.children!.filter((_, j) => j !== c)],
-          })),
-        )
-        .slice(0, 64);
-    };
-    const roles = async (data: Uint8Array, k: TCase, flat = k.flat) => {
-      const packed = flat === k.flat ? k.packed : pack(flat);
-      if (packed === undefined) return { error: "SDK check rejects" as string };
-      try {
-        const [st, cons] = await evaluator.evaluatePackedWith.staticCall(
-          data,
-          packed,
-          k.value,
-          KEYS,
-          k.bal,
-          { gasLimit: GAS },
-        );
-        return {
-          status: Number(st),
-          cons: cons.map((x: any) => `${x[0]}:${x[1]}:${x[2]}`).join(","),
-        };
-      } catch (e: any) {
-        return { error: errName(e, evaluator.interface) };
-      }
-    };
-
+    });
     const tally: Record<string, number> = {};
     const bump = (key: string) => (tally[key] = (tally[key] ?? 0) + 1);
     const findings: string[] = [];
     const branchCases: string[] = [];
-
-    // What each target build decodes (canonical re-encoding, or undefined
-    // for a revert), and what the Lean model of solc's decoder says.
-    const decodedBy: Record<string, string | undefined>[] = [];
-    // The same, with nested calldata replaced by what its receiver decodes,
-    // re-encoded (undefined if a receiver reverts): the plain call.
-    const canonBy: Record<string, Uint8Array | undefined>[] = [];
-    const REJECT = new Error("receiver rejects");
-    const canonArgs = async (
-      i: number,
-      part: { address: string; iface: any },
-      fn: string,
-      types: Ty[],
-      data: Uint8Array,
-    ): Promise<Uint8Array> => {
-      if (!types.some(hasCall)) return data;
-      const vals = abi.decode(types.map(abiType), data);
-      const fix = async (t: Ty, x: any): Promise<any> => {
-        if (t.k === "call") {
-          const inner = getBytes(x);
-          if (inner.length < 4) throw REJECT;
-          const sel = part.iface.getFunction(
-            `${fn}${i}_${callIds[i].get(t)}`,
-          )!.selector;
-          let ret: string;
-          try {
-            ret = await ethers.provider.call({
-              to: part.address,
-              data: hexlify(cat(getBytes(sel), inner.slice(4))),
-            });
-          } catch {
-            throw REJECT;
-          }
-          const echoed = getBytes(abi.decode(["bytes"], ret)[0]);
-          return hexlify(
-            cat(
-              inner.slice(0, 4),
-              await canonArgs(i, part, fn, t.args, echoed),
-            ),
-          );
+    try {
+      const [walletClient] = await connection.viem.getWalletClients();
+      const publicClient = await connection.viem.getPublicClient();
+      const evaluator = await deployEvaluator(connection);
+      /** Per codegen, the contract holding case i's functions. */
+      const echos: {
+        name: string;
+        at: (i: number) => { address: Address; abi: Abi };
+      }[] = [];
+      for (const g of codegens) {
+        const parts: { address: Address; abi: Abi }[] = [];
+        for (let b = 0; b * CHUNK < cases.length; b++) {
+          const a = g.art[`Echo${b}`];
+          const hash = await walletClient.deployContract({
+            abi: a.abi,
+            bytecode: ("0x" + a.evm.bytecode.object) as Hex,
+          });
+          const receipt = await publicClient.waitForTransactionReceipt({ hash });
+          parts.push({ address: receipt.contractAddress!, abi: a.abi as Abi });
         }
-        if (t.k === "tuple")
-          return Promise.all(t.cs.map((c, j) => fix(c, x[j])));
-        if (t.k === "array") return Promise.all([...x].map((y) => fix(t.e, y)));
-        return x;
+        echos.push({ name: g.name, at: (i) => parts[Math.floor(i / CHUNK)] });
+      }
+      const selectorOf = (abi: Abi, name: string): Hex => {
+        const fn = abi.find(
+          (x): x is AbiFunction => x.type === "function" && x.name === name,
+        );
+        if (!fn) throw new Error(`missing function ${name}`);
+        return toFunctionSelector(fn);
       };
-      const out = await Promise.all(types.map((t, j) => fix(t, vals[j])));
-      return getBytes(abi.encode(types.map(abiType), out));
-    };
-    for (const [i, k] of cases.entries()) {
-      const r: Record<string, string | undefined> = {};
-      const rc: Record<string, Uint8Array | undefined> = {};
-      for (const echo of echos)
-        for (const fn of ["c", "m"]) {
-          const part = echo.at(i);
-          const sel = part.iface.getFunction(`${fn}${i}`)!.selector;
-          let ret: string | undefined;
-          try {
-            ret = await ethers.provider.call({
-              to: part.address,
-              data: hexlify(cat(getBytes(sel), k.args)),
-            });
-          } catch {
-            ret = undefined;
-          }
-          const where = `${echo.name} ${fn === "c" ? "calldata" : "memory"}`;
-          r[where] =
-            ret === undefined
-              ? undefined
-              : hexlify(abi.decode(["bytes"], ret)[0]);
-          try {
-            rc[where] =
-              r[where] === undefined
-                ? undefined
-                : await canonArgs(i, part, fn, k.t.args, getBytes(r[where]!));
-          } catch (e) {
-            if (e !== REJECT) throw e;
-            rc[where] = undefined;
-          }
+
+      /** Every tree with some branch moved to the front of each `Or` (up to
+       *  64): the runs Roles could take if any passing branch may apply. */
+      const branchChoices = (n: Node): Node[] => {
+        const kidSets = (n.children ?? []).map(branchChoices);
+        const combos: Node[][] = [[]];
+        for (const ks of kidSets) {
+          const next: Node[][] = [];
+          for (const c of combos)
+            for (const k of ks) if (next.length < 64) next.push([...c, k]);
+          combos.splice(0, combos.length, ...next);
         }
-      decodedBy.push(r);
-      canonBy.push(rc);
-    }
-    if (existsSync(LEAN_BIN)) {
-      const res = spawnSync(LEAN_BIN, {
-        input:
-          cases
-            .map(
-              (k) =>
-                `sd ${hexlify(cat(bytes(4), k.args))} ${k.t.args.map(abiType).join(" ")}`,
-            )
-            .join("\n") + "\n",
-        maxBuffer: 1 << 28,
-      });
-      expect(res.status, String(res.stderr)).to.equal(0);
-      const lean = String(res.stdout).trim().split("\n");
-      expect(lean.length).to.equal(cases.length);
-      const modelDiffs: string[] = [];
-      cases.forEach((k, i) => {
-        const m = lean[i] === "none" ? undefined : "0x" + lean[i];
-        for (const [where, got] of Object.entries(decodedBy[i])) {
-          if (got === m) bump(`Lean decoder agrees with ${where}`);
-          else if (where.endsWith("calldata") && m === undefined) {
-            // calldata parameters: offsets are compared signed and added
-            // with wraparound, so solc also accepts backward offsets
-            bump(`${where} accepts more (backward offsets)`);
-          } else {
-            bump(`Lean decoder DIFFERS from ${where}`);
-            modelDiffs.push(
-              `${where}: solc ${got ?? "reverts"} | Lean ${m ?? "none"}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}`,
+        const rebuilt = combos.map((children) =>
+          n.children ? { ...n, children } : n,
+        );
+        if (n.operator !== Operator.Or || n.paramType !== Encoding.None)
+          return rebuilt;
+        // an Or may take any passing branch: try each one first (keeps the
+        // tree well-typed, which the SDK check requires)
+        return rebuilt
+          .flatMap((r) =>
+            r.children!.map((first, c) => ({
+              ...r,
+              children: [first, ...r.children!.filter((_, j) => j !== c)],
+            })),
+          )
+          .slice(0, 64);
+      };
+      const roles = async (data: Uint8Array, k: TCase, flat = k.flat) => {
+        const packed = flat === k.flat ? k.packed : pack(flat);
+        if (packed === undefined)
+          return { error: "SDK check rejects" as string };
+        try {
+          const {
+            result: [st, cons],
+          } = await evaluator.simulate.evaluatePackedWith(
+            [toHex(data), packed, BigInt(k.value), KEYS, k.bal],
+            { gas: GAS },
+          );
+          return {
+            status: Number(st),
+            cons: cons
+              .map((x) => `${x.allowanceKey}:${x.balance}:${x.consumed}`)
+              .join(","),
+          };
+        } catch (e: any) {
+          return { error: errName(e, evaluator.abi) };
+        }
+      };
+
+      // What each target build decodes (canonical re-encoding, or undefined
+      // for a revert), and what the Lean model of solc's decoder says.
+      const decodedBy: Record<string, string | undefined>[] = [];
+      // The same, with nested calldata replaced by what its receiver decodes,
+      // re-encoded (undefined if a receiver reverts): the plain call.
+      const canonBy: Record<string, Uint8Array | undefined>[] = [];
+      const REJECT = new Error("receiver rejects");
+      const canonArgs = async (
+        i: number,
+        part: { address: Address; abi: Abi },
+        fn: string,
+        types: Ty[],
+        data: Uint8Array,
+      ): Promise<Uint8Array> => {
+        if (!types.some(hasCall)) return data;
+        const vals = abiDecode(types.map(abiType), toHex(data));
+        const fix = async (t: Ty, x: any): Promise<any> => {
+          if (t.k === "call") {
+            const inner = hexToBytes(x);
+            if (inner.length < 4) throw REJECT;
+            const sel = selectorOf(part.abi, `${fn}${i}_${callIds[i].get(t)}`);
+            let ret: Hex;
+            try {
+              ret =
+                (
+                  await publicClient.call({
+                    to: part.address,
+                    data: toHex(cat(hexToBytes(sel), inner.slice(4))),
+                  })
+                ).data ?? "0x";
+            } catch {
+              throw REJECT;
+            }
+            const echoed = hexToBytes(abiDecode(["bytes"], ret)[0] as Hex);
+            return toHex(
+              cat(
+                inner.slice(0, 4),
+                await canonArgs(i, part, fn, t.args, echoed),
+              ),
             );
           }
-        }
-      });
-      for (const d of modelDiffs.slice(0, 4)) console.log(`      ${d}`);
-      expect(modelDiffs, "the Lean decoder is solc's").to.deep.equal([]);
-    }
-
-    for (const [i, k] of cases.entries()) {
-      const r0 = await roles(cat(bytes(4), k.args), k);
-      for (const f of k.feats)
-        bump(
-          `with ${f}: Roles ${"error" in r0 ? String(r0.error).slice(0, 30) : r0.status === 0 ? "passes" : "fails " + r0.status}`,
-        );
-      if ("error" in r0) {
-        bump(
-          r0.error === "SDK check rejects"
-            ? "SDK check rejects the tree"
-            : `roles reverts: ${String(r0.error).slice(0, 40)}`,
-        );
-        continue;
+          if (t.k === "tuple")
+            return Promise.all(t.cs.map((c, j) => fix(c, x[j])));
+          if (t.k === "array") return Promise.all([...x].map((y) => fix(t.e, y)));
+          return x;
+        };
+        const out = await Promise.all(types.map((t, j) => fix(t, vals[j])));
+        return hexToBytes(abiEncode(types.map(abiType), out));
+      };
+      for (const [i, k] of cases.entries()) {
+        const r: Record<string, string | undefined> = {};
+        const rc: Record<string, Uint8Array | undefined> = {};
+        for (const echo of echos)
+          for (const fn of ["c", "m"]) {
+            const part = echo.at(i);
+            const sel = selectorOf(part.abi, `${fn}${i}`);
+            let ret: Hex | undefined;
+            try {
+              ret =
+                (
+                  await publicClient.call({
+                    to: part.address,
+                    data: toHex(cat(hexToBytes(sel), k.args)),
+                  })
+                ).data ?? "0x";
+            } catch {
+              ret = undefined;
+            }
+            const where = `${echo.name} ${fn === "c" ? "calldata" : "memory"}`;
+            r[where] =
+              ret === undefined
+                ? undefined
+                : (abiDecode(["bytes"], ret)[0] as Hex);
+            try {
+              rc[where] =
+                r[where] === undefined
+                  ? undefined
+                  : await canonArgs(
+                      i,
+                      part,
+                      fn,
+                      k.t.args,
+                      hexToBytes(r[where]! as Hex),
+                    );
+            } catch (e) {
+              if (e !== REJECT) throw e;
+              rc[where] = undefined;
+            }
+          }
+        decodedBy.push(r);
+        canonBy.push(rc);
       }
-      bump(`roles ${r0.status === 0 ? "passes" : "fails"}`);
-      let accepted = false;
-      for (const [where, decoded] of Object.entries(canonBy[i])) {
-        if (decoded === undefined) {
+      if (existsSync(LEAN_BIN)) {
+        const res = spawnSync(LEAN_BIN, {
+          input:
+            cases
+              .map(
+                (k) =>
+                  `sd ${toHex(cat(bytes(4), k.args))} ${k.t.args.map(abiType).join(" ")}`,
+              )
+              .join("\n") + "\n",
+          maxBuffer: 1 << 28,
+        });
+        assert.equal(res.status, 0, String(res.stderr));
+        const lean = String(res.stdout).trim().split("\n");
+        assert.equal(lean.length, cases.length);
+        const modelDiffs: string[] = [];
+        cases.forEach((k, i) => {
+          const m = lean[i] === "none" ? undefined : "0x" + lean[i];
+          for (const [where, got] of Object.entries(decodedBy[i])) {
+            if (got === m) bump(`Lean decoder agrees with ${where}`);
+            else if (where.endsWith("calldata") && m === undefined) {
+              // calldata parameters: offsets are compared signed and added
+              // with wraparound, so solc also accepts backward offsets
+              bump(`${where} accepts more (backward offsets)`);
+            } else {
+              bump(`Lean decoder DIFFERS from ${where}`);
+              modelDiffs.push(
+                `${where}: solc ${got ?? "reverts"} | Lean ${m ?? "none"}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${toHex(k.args)}`,
+              );
+            }
+          }
+        });
+        for (const d of modelDiffs.slice(0, 4)) console.log(`      ${d}`);
+        assert.deepEqual(modelDiffs, [], "the Lean decoder is solc's");
+      }
+
+      for (const [i, k] of cases.entries()) {
+        const r0 = await roles(cat(bytes(4), k.args), k);
+        for (const f of k.feats)
           bump(
-            `${where}: target rejects${decodedBy[i][where] === undefined ? "" : " (nested call)"}`,
+            `with ${f}: Roles ${"error" in r0 ? String(r0.error).slice(0, 30) : r0.status === 0 ? "passes" : "fails " + r0.status}`,
+          );
+        if ("error" in r0) {
+          bump(
+            r0.error === "SDK check rejects"
+              ? "SDK check rejects the tree"
+              : `roles reverts: ${String(r0.error).slice(0, 40)}`,
           );
           continue;
         }
-        accepted = true;
-        const r1 = await roles(cat(bytes(4), decoded), k);
-        const canon =
-          "error" in r1 ? `error ${r1.error}` : `${r1.status} ${r1.cons}`;
-        if (r0.status === 0) {
-          let chosen = false;
-          if (canon !== `0 ${r0.cons}`)
-            for (const alt of branchChoices(k.root)) {
-              const r2 = await roles(
-                cat(bytes(4), decoded),
-                k,
-                flattenCondition(strip(alt)).map((f) => ({ ...f })),
-              );
-              if (
-                !("error" in r2) &&
-                `${r2.status} ${r2.cons}` === `0 ${r0.cons}`
-              ) {
-                chosen = true;
-                break;
+        bump(`roles ${r0.status === 0 ? "passes" : "fails"}`);
+        let accepted = false;
+        for (const [where, decoded] of Object.entries(canonBy[i])) {
+          if (decoded === undefined) {
+            bump(
+              `${where}: target rejects${decodedBy[i][where] === undefined ? "" : " (nested call)"}`,
+            );
+            continue;
+          }
+          accepted = true;
+          const r1 = await roles(cat(bytes(4), decoded), k);
+          const canon =
+            "error" in r1 ? `error ${r1.error}` : `${r1.status} ${r1.cons}`;
+          if (r0.status === 0) {
+            let chosen = false;
+            if (canon !== `0 ${r0.cons}`)
+              for (const alt of branchChoices(k.root)) {
+                const r2 = await roles(
+                  cat(bytes(4), decoded),
+                  k,
+                  flattenCondition(strip(alt)).map((f) => ({ ...f })),
+                );
+                if (
+                  !("error" in r2) &&
+                  `${r2.status} ${r2.cons}` === `0 ${r0.cons}`
+                ) {
+                  chosen = true;
+                  break;
+                }
               }
-            }
-          if (chosen) {
-            bump(`${where}: another Or branch`);
-            branchCases.push(
-              `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}`,
-            );
-          } else if (canon !== `0 ${r0.cons}`) {
-            bump(`${where}: BYPASS`);
-            findings.push(
-              `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${hexlify(k.args)}\n        tree ${show(k.root)}\n        nodes ${JSON.stringify(k.flat).slice(0, 1500)}`,
-            );
-          } else bump(`${where}: agrees (passes)`);
-        } else if (canon.startsWith("0 ")) bump(`${where}: Roles stricter`);
-        else bump(`${where}: agrees (fails)`);
+            if (chosen) {
+              bump(`${where}: another Or branch`);
+              branchCases.push(
+                `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${toHex(k.args)}`,
+              );
+            } else if (canon !== `0 ${r0.cons}`) {
+              bump(`${where}: BYPASS`);
+              findings.push(
+                `${where}: crafted 0 ${r0.cons} | canonical ${canon}\n        types ${k.t.args.map(abiType).join(",")}\n        args ${toHex(k.args)}\n        tree ${show(k.root)}\n        nodes ${JSON.stringify(k.flat).slice(0, 1500)}`,
+              );
+            } else bump(`${where}: agrees (passes)`);
+          } else if (canon.startsWith("0 ")) bump(`${where}: Roles stricter`);
+          else bump(`${where}: agrees (fails)`);
+        }
+        if (r0.status === 0 && accepted)
+          for (const f of k.feats)
+            bump(`with ${f}: Roles passes, target accepts`);
       }
-      if (r0.status === 0 && accepted)
-        for (const f of k.feats)
-          bump(`with ${f}: Roles passes, target accepts`);
+    } finally {
+      await connection.close();
     }
-    await connection.close();
     for (const [key, n] of Object.entries(tally).sort())
       console.log(`      ${key}: ${n}`);
     for (const f of findings.slice(0, 6)) console.log(`      ${f}`);
@@ -2607,6 +2681,6 @@ describe("Integrity gaps (fuzz)", function () {
         branchCases.join("\n\n") + "\n",
       );
     }
-    expect(findings, findings.slice(0, 2).join("\n")).to.deep.equal([]);
+    assert.deepEqual(findings, [], findings.slice(0, 2).join("\n"));
   });
 });

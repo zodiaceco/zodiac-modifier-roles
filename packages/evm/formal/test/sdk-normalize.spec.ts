@@ -26,10 +26,11 @@
  * `SDK_NORMALIZE_SEED` the seed, `SDK_NORMALIZE_SHOW_THROWS=1` prints why the
  * TypeScript threw.
  */
-import { expect } from "chai";
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js";
@@ -332,13 +333,12 @@ const flat = (c: C) =>
     .map((n) => `${n.parent}:${n.paramType}:${n.operator}:${hex(n.compValue)}`)
     .join("|");
 
-describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
-  before(function () {
-    if (!existsSync(LEAN_BIN)) this.skip();
-  });
-
-  it(`agrees on ${CASES} random condition trees`, function () {
-    this.timeout(600_000);
+describe("SDK normalizeCondition vs Lean Normalize.normalize", () => {
+  it(`agrees on ${CASES} random condition trees`, (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     const cases: { input: string; ts: string; inT: string; tsT: string }[] = [];
     let threw = 0;
     let changed = 0;
@@ -379,9 +379,9 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       input: cases.map((c) => `nzt ${c.inT}`).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const out = String(res.stdout).trim().split("\n");
-    expect(out.length).to.equal(cases.length);
+    assert.equal(out.length, cases.length);
     const diffs = cases
       .map((c, i) => ({ ...c, lean: out[i] }))
       .filter((c) => c.lean !== c.tsT);
@@ -394,14 +394,17 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
         `      input ${d.inT}\n      ts    ${d.tsT}\n      lean  ${d.lean}`,
       );
     }
-    expect(diffs.length).to.equal(0);
+    assert.equal(diffs.length, 0);
     // normalizeCondition does not throw on these trees; a change that makes
     // it throw would otherwise go unnoticed (those trees are skipped)
-    expect(threw, "normalizeCondition threw").to.equal(0);
+    assert.equal(threw, 0, "normalizeCondition threw");
   });
 
-  it(`trees whose normalized form the SDK check accepts are well-typed`, function () {
-    this.timeout(600_000);
+  it(`trees whose normalized form the SDK check accepts are well-typed`, (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     const qs: { input: string; norm: string }[] = [];
     // nested, so the trees reach Lean without flattenCondition
     let total = 0;
@@ -430,9 +433,9 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
         "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const out = String(res.stdout).trim().split("\n");
-    expect(out.length).to.equal(2 * qs.length);
+    assert.equal(out.length, 2 * qs.length);
     const badIn = qs
       .map((q, i) => ({ ...q, r: out[2 * i] }))
       .filter((q) => q.r !== "ok");
@@ -451,12 +454,15 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       console.log(`      ${b.r} on ${b.input}`);
     for (const b of badNorm.slice(0, 2))
       console.log(`      normalized ${b.r} on ${b.norm}`);
-    expect(badNorm.length).to.equal(0);
-    expect(badIn.length).to.equal(0);
+    assert.equal(badNorm.length, 0);
+    assert.equal(badIn.length, 0);
   });
 
-  it(`flattenCondition reads back as its input (${CASES} random trees and their normal forms)`, function () {
-    this.timeout(600_000);
+  it(`flattenCondition reads back as its input (${CASES} random trees and their normal forms)`, (t) => {
+    if (!existsSync(LEAN_BIN)) {
+      t.skip();
+      return;
+    }
     const trees: C[] = [];
     for (let i = 0; i < CASES; i++) {
       const tree = genRoot();
@@ -466,19 +472,23 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       input: trees.map((t) => `fl ${ser(t)} ${flat(t)}`).join("\n") + "\n",
       maxBuffer: 1 << 28,
     });
-    expect(res.status, String(res.stderr)).to.equal(0);
+    assert.equal(res.status, 0, String(res.stderr));
     const out = String(res.stdout).trim().split("\n");
-    expect(out.length).to.equal(trees.length);
+    assert.equal(out.length, trees.length);
     const bad = trees.filter((_, i) => out[i] !== "eq");
     console.log(
       `      ${trees.length} trees, ${bad.length} that do not read back`,
     );
     for (const t of bad.slice(0, 3))
       console.log(`      ${ser(t)}\n      ${flat(t)}`);
-    expect(bad.length).to.equal(0);
+    assert.equal(bad.length, 0);
   });
 
-  it("a reordered Or decides alike on an array count the calldata cannot hold", function () {
+  it("a reordered Or decides alike on an array count the calldata cannot hold", (ctx) => {
+    if (!existsSync(LEAN_BIN)) {
+      ctx.skip();
+      return;
+    }
     // Or[call(ArrayEvery[EqualTo(1)]), call(Pass)] on f(uint256[]): sorting
     // puts the Pass branch first. On calldata claiming 2^64 elements the
     // ArrayEvery branch fails (AbiLocation bounds the count by the calldata
@@ -495,7 +505,7 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
       ]),
     ]);
     const normalized = normalizeCondition(structuredClone(tree) as any) as any;
-    expect(normalized.children[0].operator).to.equal(O.Pass);
+    assert.equal(normalized.children[0].operator, O.Pass);
     const cd =
       "aabbccdd" +
       (32).toString(16).padStart(64, "0") +
@@ -505,6 +515,6 @@ describe("SDK normalizeCondition vs Lean Normalize.normalize", function () {
         [tree, normalized].map((t) => `ev 0 - ${cd} ${flat(t)}`).join("\n") +
         "\n",
     });
-    expect(String(res.stdout).trim().split("\n")).to.deep.equal(["0 -", "0 -"]);
+    assert.deepEqual(String(res.stdout).trim().split("\n"), ["0 -", "0 -"]);
   });
 });

@@ -113,16 +113,16 @@ const limit = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1
 const reportFile = args.includes("--report") ? args[args.indexOf("--report") + 1] : undefined;
 
 function run() {
-  const r = spawnSync("npx", ["hardhat", "test", ...target.test], {
+  const r = spawnSync("npx", ["hardhat", "test", "nodejs", ...target.test], {
     cwd: evm,
-    env: { ...process.env, ...target.env },
+    env: { ...process.env, HARDHAT_DISABLE_TELEMETRY: "true", ...target.env },
     encoding: "utf8",
     timeout: 600_000,
   });
   const out = (r.stdout ?? "") + (r.stderr ?? "");
   if (/SyntaxError|TransformError|is not defined|Cannot find/.test(out) && r.status !== 0)
     return "invalid";
-  if (r.status === 0 && /\b[1-9]\d* passing/.test(out) && !/\d+ pending/.test(out))
+  if (r.status === 0 && /\b[1-9]\d* passing/.test(out) && !/\d+ (pending|skipped)/.test(out))
     return "survived";
   return r.status === 0 ? "skipped" : "killed";
 }

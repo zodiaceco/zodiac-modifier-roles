@@ -1,8 +1,9 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, hexlify, randomBytes } from "ethers";
-
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import { encodeAbiParameters, parseAbiParameters, toHex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -13,10 +14,8 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupArrayParam = setupFn("function fn(uint256[])");
@@ -43,7 +42,10 @@ describe("Operator - ArrayEvery", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.LessThan,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
               ],
             },
@@ -53,7 +55,7 @@ describe("Operator - ArrayEvery", () => {
       );
 
       // All elements < 100 passes
-      await expect(invoke([10, 20, 30, 40])).to.not.be.revert(ethers);
+      await invoke([10, 20, 30, 40]);
     });
 
     it("fails when at least one element does not match", async () => {
@@ -73,7 +75,10 @@ describe("Operator - ArrayEvery", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.LessThan,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
               ],
             },
@@ -83,23 +88,26 @@ describe("Operator - ArrayEvery", () => {
       );
 
       // One element >= 100 fails
-      await expect(invoke([10, 20, 150, 40]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 20, 150, 40]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryArrayElementPasses,
-          2, // LessThan node (failing element's child)
+          2n, // LessThan node (failing element's child)
           anyValue,
-        );
+        ],
+      );
     });
 
     it("fails immediately on first mismatch (short-circuit)", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupArrayParam);
 
-      const allowanceKey = hexlify(randomBytes(32));
+      const allowanceKey = toHex(randomBytes(32));
 
       // Set up allowance of 100
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       // ArrayEvery with And(LessThan(50), WithinAllowance)
       // Elements >= 50 fail before consuming allowance
@@ -119,7 +127,10 @@ describe("Operator - ArrayEvery", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.LessThan,
-                      compValue: abiCoder.encode(["uint256"], [50]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [50n],
+                      ),
                     },
                     {
                       paramType: Encoding.Static,
@@ -138,17 +149,20 @@ describe("Operator - ArrayEvery", () => {
       // Array [10, 60, 20] - first element (10) passes and consumes
       // Second element (60) fails LessThan check before WithinAllowance
       // Transaction reverts, but consumptions from element 0 are NOT persisted
-      await expect(invoke([10, 60, 20]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 60, 20]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryArrayElementPasses,
-          3, // LessThan node (failing element's child)
+          3n, // LessThan node (failing element's child)
           anyValue,
-        );
+        ],
+      );
 
       // Allowance unchanged - transaction reverted so no consumption persisted
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(100);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 100n);
     });
 
     it("passes when array is empty (vacuous truth)", async () => {
@@ -167,7 +181,10 @@ describe("Operator - ArrayEvery", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -177,7 +194,7 @@ describe("Operator - ArrayEvery", () => {
       );
 
       // Empty array passes - no element violates the condition (vacuous truth)
-      await expect(invoke([])).to.not.be.revert(ethers);
+      await invoke([]);
     });
   });
 
@@ -187,10 +204,10 @@ describe("Operator - ArrayEvery", () => {
         await loadFixture(setupArrayParam);
 
       const allowanceKey =
-        "0x000000000000000000000000000000000000000000000000000000000000abcd";
+        "0x000000000000000000000000000000000000000000000000000000000000abcd" as const;
 
       // Set up allowance of 100
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       // ArrayEvery with WithinAllowance - each element consumes its value
       await allowFunction(
@@ -215,11 +232,11 @@ describe("Operator - ArrayEvery", () => {
       );
 
       // Array [10, 20, 30] - all elements pass, all consumed (60 total)
-      await expect(invoke([10, 20, 30])).to.not.be.revert(ethers);
+      await invoke([10, 20, 30]);
 
       // All elements consumed - remaining is 40
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(40);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 40n);
     });
   });
 
@@ -240,7 +257,10 @@ describe("Operator - ArrayEvery", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -248,13 +268,16 @@ describe("Operator - ArrayEvery", () => {
         }),
       );
 
-      await expect(invoke([42, 99, 42]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([42, 99, 42]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryArrayElementPasses,
-          2, // EqualTo node at BFS index 2
+          2n, // EqualTo node at BFS index 2
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -273,7 +296,10 @@ describe("Operator - ArrayEvery", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -281,13 +307,16 @@ describe("Operator - ArrayEvery", () => {
         }),
       );
 
-      await expect(invoke([1, 2, 3]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1, 2, 3]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryArrayElementPasses,
           anyValue,
-          68, // calldataOffset: first element at byte 68 (4 + 32 + 32)
-        );
+          68n, // calldataOffset: first element at byte 68 (4 + 32 + 32)
+        ],
+      );
     });
   });
 
@@ -304,7 +333,7 @@ describe("Operator - ArrayEvery", () => {
           Encoding.Static,
           Encoding.Tuple,
         ]) {
-          await expect(
+          await viem.assertions.revertWithCustomError(
             allowTarget([
               {
                 parent: 0,
@@ -313,7 +342,9 @@ describe("Operator - ArrayEvery", () => {
                 compValue: "0x",
               },
             ]),
-          ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
+            evaluator,
+            "UnsuitableParameterType",
+          );
         }
       });
     });
@@ -321,7 +352,7 @@ describe("Operator - ArrayEvery", () => {
     it("reverts UnsuitableCompValue when compValue is not empty", async () => {
       const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         allowTarget([
           {
             parent: 0,
@@ -336,14 +367,16 @@ describe("Operator - ArrayEvery", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+        evaluator,
+        "UnsuitableCompValue",
+      );
     });
 
     describe("children", () => {
       it("reverts UnsuitableChildCount when ArrayEvery has zero children", async () => {
         const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -352,14 +385,16 @@ describe("Operator - ArrayEvery", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
+          evaluator,
+          "UnsuitableChildCount",
+        );
       });
 
       it("reverts UnsuitableChildCount when ArrayEvery has more than one child", async () => {
         const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
         // ArrayEvery requires exactly 1 structural child
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -380,10 +415,12 @@ describe("Operator - ArrayEvery", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
+          evaluator,
+          "UnsuitableChildCount",
+        );
 
         // ArrayEvery requires exactly 1 structural child
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -404,13 +441,15 @@ describe("Operator - ArrayEvery", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
+          evaluator,
+          "UnsuitableChildCount",
+        );
       });
 
       it("reverts UnsuitableChildCount when ArrayEvery has non-structural child", async () => {
         const { evaluator, allowTarget } = await loadFixture(setupTestContract);
 
-        const allowanceKey = hexlify(randomBytes(32));
+        const allowanceKey = toHex(randomBytes(32));
 
         // Valid: ArrayEvery with one structural child - should succeed
         await allowTarget([
@@ -435,7 +474,7 @@ describe("Operator - ArrayEvery", () => {
         ]);
 
         // Invalid: Adding a non-structural child should fail
-        await expect(
+        await viem.assertions.revertWithCustomError(
           allowTarget([
             {
               parent: 0,
@@ -462,7 +501,9 @@ describe("Operator - ArrayEvery", () => {
               compValue: allowanceKey,
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
+          evaluator,
+          "UnsuitableChildCount",
+        );
       });
     });
   });

@@ -1,34 +1,47 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, hexlify, Interface, randomBytes, ZeroAddress } from "ethers";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  keccak256,
+  parseAbi,
+  parseAbiParameters,
+  parseEther,
+  toBytes,
+  toFunctionSelector,
+  toHex,
+  zeroAddress,
+} from "viem";
+import type { Address, Hex } from "viem";
 
-import type { Roles } from "../typechain-types/contracts/Roles.js";
 import {
   ConditionViolationStatus,
   encodeMultisendPayload,
   Encoding,
   ExecutionOptions,
+  type MetaTransaction,
   Operator,
   packConditions,
+  type RolesContract,
 } from "./utils.js";
 import { createSetup } from "./setup.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { deployRolesMod, deployMultiSend } = createSetup(connection);
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
-const iface = new Interface([
+const abi = parseAbi([
   "function doNothing()",
   "function oneParamStatic(uint256)",
   "function twoParamsStatic(uint256, uint256)",
 ]);
 
-const DO_NOTHING = iface.getFunction("doNothing")!.selector;
-const ONE_PARAM = iface.getFunction("oneParamStatic")!.selector;
+const DO_NOTHING = toFunctionSelector("doNothing()");
+const ONE_PARAM = toFunctionSelector("oneParamStatic(uint256)");
 
 /**
  * Authorization tests
@@ -51,7 +64,7 @@ describe("Authorization", () => {
     await connection.close();
   });
 
-  async function eqFirstParam(roles: Roles, expected: bigint | number) {
+  async function eqFirstParam(roles: RolesContract, expected: bigint | number) {
     return packConditions(roles, [
       {
         parent: 0,
@@ -63,12 +76,17 @@ describe("Authorization", () => {
         parent: 0,
         paramType: Encoding.Static,
         operator: Operator.EqualTo,
-        compValue: abiCoder.encode(["uint256"], [expected]),
+        compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+          BigInt(expected),
+        ]),
       },
     ]);
   }
 
-  async function withinAllowanceFirstParam(roles: Roles, allowanceKey: string) {
+  async function withinAllowanceFirstParam(
+    roles: RolesContract,
+    allowanceKey: Hex,
+  ) {
     return packConditions(roles, [
       {
         parent: 0,
@@ -86,41 +104,39 @@ describe("Authorization", () => {
   }
 
   async function setup() {
-    const [owner, member] = await ethers.getSigners();
+    const [owner, member] = await viem.getWalletClients();
 
-    const Avatar = await ethers.getContractFactory("TestAvatar");
-    const avatar = await Avatar.deploy();
-    const avatarAddress = await avatar.getAddress();
+    const avatar = await viem.deployContract("TestAvatar");
+    const avatarAddress = avatar.address;
 
     const roles = await deployRolesMod(
-      owner.address,
+      owner.account.address,
       avatarAddress,
       avatarAddress,
     );
 
-    const TestContract = await ethers.getContractFactory("TestContract");
-    const targetA = await TestContract.deploy();
-    const targetB = await TestContract.deploy();
-    const targetAddressA = await targetA.getAddress();
-    const targetAddressB = await targetB.getAddress();
+    const targetA = await viem.deployContract("TestContract");
+    const targetB = await viem.deployContract("TestContract");
+    const targetAddressA = targetA.address;
+    const targetAddressB = targetB.address;
 
-    const roleKey = hexlify(randomBytes(32));
-    await roles.grantRole(member.address, roleKey, 0, 0, 0);
-    await roles.setDefaultRole(member.address, roleKey);
+    const roleKey = toHex(randomBytes(32));
+    await roles.write.grantRole([member.account.address, roleKey, 0n, 0n, 0n]);
+    await roles.write.setDefaultRole([member.account.address, roleKey]);
 
     const exec = (
-      to: string,
-      data = "0x",
+      to: Address,
+      data: Hex = "0x",
       {
         value = 0n,
         operation = 0,
       }: { value?: bigint; operation?: number } = {},
     ) =>
-      roles
-        .connect(member)
-        .execTransactionFromModule(to, value, data, operation);
+      roles.write.execTransactionFromModule([to, value, data, operation], {
+        account: member.account,
+      });
 
-    const fundAvatar = async (amount = ethers.parseEther("1")) => {
+    const fundAvatar = async (amount = parseEther("1")) => {
       await owner.sendTransaction({ to: avatarAddress, value: amount });
     };
 
@@ -144,15 +160,16 @@ describe("Authorization", () => {
     const base = await setup();
 
     const { multisend, unwrapper } = await deployMultiSend(base.roles);
-    const multisendAddress = await multisend.getAddress();
-    const unwrapperAddress = await unwrapper.getAddress();
-    const multiSendSelector =
-      multisend.interface.getFunction("multiSend").selector;
+    const multisendAddress = multisend.address;
+    const unwrapperAddress = unwrapper.address;
+    const multiSendSelector = toFunctionSelector("multiSend(bytes)");
 
-    const encodeBatch = (txs: Parameters<typeof encodeMultisendPayload>[0]) =>
-      multisend.interface.encodeFunctionData("multiSend", [
-        encodeMultisendPayload(txs),
-      ]);
+    const encodeBatch = (txs: MetaTransaction[]) =>
+      encodeFunctionData({
+        abi: multisend.abi,
+        functionName: "multiSend",
+        args: [encodeMultisendPayload(txs)],
+      });
 
     return {
       ...base,
@@ -174,50 +191,60 @@ describe("Authorization", () => {
       const { roles, targetA, targetAddressA, roleKey, exec } =
         await loadFixture(setup);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
-      await expect(exec(targetAddressA, "0x"))
-        .to.emit(targetA, "Invoked")
-        .withArgs("0x00000000");
+      await viem.assertions.emitWithArgs(
+        exec(targetAddressA, "0x"),
+        targetA,
+        "Invoked",
+        ["0x00000000"],
+      );
     });
 
     it("reverts with FunctionSignatureTooShort for 1-3 bytes across clearance modes", async () => {
       const { roles, targetAddressA, roleKey, exec } = await loadFixture(setup);
 
-      const shortPayloads = ["0x12", "0x1234", "0x123456"];
+      const shortPayloads = ["0x12", "0x1234", "0x123456"] as const;
 
       // Clearance.None (even with a global rule present)
-      await roles.allowFunctionGloballyPacked(roleKey, DO_NOTHING, "0x");
+      await roles.write.allowFunctionGloballyPacked([
+        roleKey,
+        DO_NOTHING,
+        "0x",
+      ]);
       for (const data of shortPayloads) {
-        await expect(exec(targetAddressA, data)).to.be.revertedWithCustomError(
+        await viem.assertions.revertWithCustomError(
+          exec(targetAddressA, data),
           roles,
           "FunctionSignatureTooShort",
         );
       }
 
       // Clearance.Function
-      await roles.scopeTarget(roleKey, targetAddressA);
+      await roles.write.scopeTarget([roleKey, targetAddressA]);
       for (const data of shortPayloads) {
-        await expect(exec(targetAddressA, data)).to.be.revertedWithCustomError(
+        await viem.assertions.revertWithCustomError(
+          exec(targetAddressA, data),
           roles,
           "FunctionSignatureTooShort",
         );
       }
 
       // Clearance.Target
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
       for (const data of shortPayloads) {
-        await expect(exec(targetAddressA, data)).to.be.revertedWithCustomError(
+        await viem.assertions.revertWithCustomError(
+          exec(targetAddressA, data),
           roles,
           "FunctionSignatureTooShort",
         );
@@ -228,49 +255,66 @@ describe("Authorization", () => {
       const { roles, targetA, targetAddressA, roleKey, exec, fundAvatar } =
         await loadFixture(setup);
 
-      await roles.scopeTarget(roleKey, targetAddressA);
-      await roles.allowFunctionPacked(
+      await roles.write.scopeTarget([roleKey, targetAddressA]);
+      await roles.write.allowFunctionPacked([
         roleKey,
         targetAddressA,
         "0x00000000",
         "0x",
         ExecutionOptions.Send,
-      );
+      ]);
       await fundAvatar();
 
       // Explicit 4-byte 0x00000000 selector is allowed
-      await expect(exec(targetAddressA, "0x00000000"))
-        .to.emit(targetA, "Invoked")
-        .withArgs("0x00000000");
+      await viem.assertions.emitWithArgs(
+        exec(targetAddressA, "0x00000000"),
+        targetA,
+        "Invoked",
+        ["0x00000000"],
+      );
 
       // Empty calldata must not match selector 0x00000000
-      await expect(exec(targetAddressA, "0x"))
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(targetAddressA, "0x00000000");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(targetAddressA, "0x"),
+        roles,
+        "TransactionNotAllowed",
+        [targetAddressA, "0x00000000"],
+      );
 
       // Empty calldata ETH transfer must also be rejected
-      await expect(
-        exec(targetAddressA, "0x", { value: ethers.parseEther("0.5") }),
-      )
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(targetAddressA, "0x00000000");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(targetAddressA, "0x", { value: parseEther("0.5") }),
+        roles,
+        "TransactionNotAllowed",
+        [targetAddressA, "0x00000000"],
+      );
     });
 
     it("does not match empty calldata to global selector 0x00000000", async () => {
       const { roles, targetA, targetAddressA, roleKey, exec } =
         await loadFixture(setup);
 
-      await roles.allowFunctionGloballyPacked(roleKey, "0x00000000", "0x");
+      await roles.write.allowFunctionGloballyPacked([
+        roleKey,
+        "0x00000000",
+        "0x",
+      ]);
 
       // Explicit 4-byte 0x00000000 selector resolves via global rule
-      await expect(exec(targetAddressA, "0x00000000"))
-        .to.emit(targetA, "Invoked")
-        .withArgs("0x00000000");
+      await viem.assertions.emitWithArgs(
+        exec(targetAddressA, "0x00000000"),
+        targetA,
+        "Invoked",
+        ["0x00000000"],
+      );
 
       // Empty calldata must skip global lookup
-      await expect(exec(targetAddressA, "0x"))
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(targetAddressA, "0x00000000");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(targetAddressA, "0x"),
+        roles,
+        "TransactionNotAllowed",
+        [targetAddressA, "0x00000000"],
+      );
     });
   });
 
@@ -283,15 +327,22 @@ describe("Authorization", () => {
       it("reverts with TransactionNotAllowed when no global rule exists", async () => {
         const { roles, targetAddressA, exec } = await loadFixture(setup);
 
-        await expect(exec(targetAddressA, "0x"))
-          .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-          .withArgs(targetAddressA, "0x00000000");
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(targetAddressA, "0x"),
+          roles,
+          "TransactionNotAllowed",
+          [targetAddressA, "0x00000000"],
+        );
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-          .withArgs(targetAddressA, DO_NOTHING);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+          [targetAddressA, DO_NOTHING],
+        );
       });
 
       it("resolves to global function entry on any target", async () => {
@@ -305,19 +356,31 @@ describe("Authorization", () => {
           exec,
         } = await loadFixture(setup);
 
-        await roles.allowFunctionGloballyPacked(roleKey, DO_NOTHING, "0x");
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          DO_NOTHING,
+          "0x",
+        ]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
 
-        await expect(
-          exec(targetAddressB, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetB, "Invoked")
-          .withArgs(DO_NOTHING);
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressB,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          targetB,
+          "Invoked",
+          [DO_NOTHING],
+        );
       });
     });
 
@@ -326,27 +389,36 @@ describe("Authorization", () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
-
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
+
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("takes precedence over a looser global function entry", async () => {
@@ -354,34 +426,48 @@ describe("Authorization", () => {
           await loadFixture(setup);
 
         // Target-specific: first param must equal 42
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           await eqFirstParam(roles, 42),
           ExecutionOptions.None,
-        );
+        ]);
         // Global: unconstrained
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
         // 42 passes via target entry
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
 
         // 99 fails — target rule governs, does not fall through to global
-        await expect(
+        await viem.assertions.revertWithCustomErrorWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [99]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [99n],
+            }),
           ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
@@ -390,29 +476,38 @@ describe("Authorization", () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
-
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        )
-          .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-          .withArgs(targetAddressA, ONE_PARAM);
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
+
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+          [targetAddressA, ONE_PARAM],
+        );
       });
 
       it("takes precedence over a global function entry for the same selector", async () => {
@@ -420,102 +515,138 @@ describe("Authorization", () => {
           await loadFixture(setup);
 
         // Target-specific: param must equal 42
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           ONE_PARAM,
           await eqFirstParam(roles, 42),
           ExecutionOptions.None,
-        );
+        ]);
         // Global: unconstrained
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
         // 42 passes via function rule
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
 
         // 99 fails — target-specific function rule governs, not global
-        await expect(
+        await viem.assertions.revertWithCustomErrorWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [99]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [99n],
+            }),
           ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
 
       it("falls back to global function entry when selector is not configured on target", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        ]);
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("does not collide selector 0xffffffff with Target scope entry", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        const maxSelector = "0xffffffff";
+        const maxSelector = "0xffffffff" as const;
         const payload = (n: number) =>
-          maxSelector + abiCoder.encode(["uint256"], [n]).slice(2);
+          (maxSelector +
+            encodeAbiParameters(parseAbiParameters("uint256"), [
+              BigInt(n),
+            ]).slice(2)) as Hex;
 
         // Target entry requires param == 100
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           await eqFirstParam(roles, 100),
           ExecutionOptions.None,
-        );
+        ]);
         // Function entry for 0xffffffff requires param == 42 (must not clobber target entry)
-        await roles.allowFunctionPacked(
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           maxSelector,
           await eqFirstParam(roles, 42),
           ExecutionOptions.None,
-        );
+        ]);
 
         // While Clearance.Target: target entry (100) governs
-        await expect(exec(targetAddressA, payload(100)))
-          .to.emit(targetA, "Invoked")
-          .withArgs(maxSelector);
-        await expect(
+        await viem.assertions.emitWithArgs(
+          exec(targetAddressA, payload(100)),
+          targetA,
+          "Invoked",
+          [maxSelector],
+        );
+        await viem.assertions.revertWithCustomError(
           exec(targetAddressA, payload(42)),
-        ).to.be.revertedWithCustomError(roles, "ConditionViolation");
+          roles,
+          "ConditionViolation",
+        );
 
         // Switch to Clearance.Function: function entry (42) governs
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await expect(exec(targetAddressA, payload(42)))
-          .to.emit(targetA, "Invoked")
-          .withArgs(maxSelector);
-        await expect(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await viem.assertions.emitWithArgs(
+          exec(targetAddressA, payload(42)),
+          targetA,
+          "Invoked",
+          [maxSelector],
+        );
+        await viem.assertions.revertWithCustomError(
           exec(targetAddressA, payload(100)),
-        ).to.be.revertedWithCustomError(roles, "ConditionViolation");
+          roles,
+          "ConditionViolation",
+        );
       });
     });
 
@@ -524,179 +655,242 @@ describe("Authorization", () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
-        await expect(
+        ]);
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
-
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        )
-          .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-          .withArgs(targetAddressA, ONE_PARAM);
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
+
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+          [targetAddressA, ONE_PARAM],
+        );
       });
 
       it("Function -> Target: allowTarget loosens previously scoped target", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+          roles,
+          "TransactionNotAllowed",
+        );
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("Function -> Target -> Function: prior function entries reactivate when re-scoped", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
         // Loosen to Target, then tighten back to Function without re-calling allowFunction
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
-        await roles.scopeTarget(roleKey, targetAddressA);
+        ]);
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
-
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
+
+        await viem.assertions.revertWithCustomError(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+        );
       });
 
       it("Function -> None: revokeTarget disables function entries while leaving global fallback active", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        ]);
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
-        await roles.revokeTarget(roleKey, targetAddressA);
+        await roles.write.revokeTarget([roleKey, targetAddressA]);
 
         // Target-scoped doNothing is now disabled
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
-
-        // Global oneParamStatic still authorizes under Clearance.None
-        await expect(
+        await viem.assertions.revertWithCustomError(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          roles,
+          "TransactionNotAllowed",
+        );
+
+        // Global oneParamStatic still authorizes under Clearance.None
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("Target -> None: revokeTarget disables target entry while leaving global fallback active", async () => {
         const { roles, targetA, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        ]);
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
-        await roles.revokeTarget(roleKey, targetAddressA);
+        await roles.write.revokeTarget([roleKey, targetAddressA]);
 
         // Target-level doNothing is disabled
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
-
-        // Global oneParamStatic still authorizes
-        await expect(
+        await viem.assertions.revertWithCustomError(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [42]),
+            encodeFunctionData({ abi, functionName: "doNothing" }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          roles,
+          "TransactionNotAllowed",
+        );
+
+        // Global oneParamStatic still authorizes
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [42n],
+            }),
+          ),
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("allowFunction written while Clearance.None stays dormant until scopeTarget", async () => {
@@ -704,26 +898,35 @@ describe("Authorization", () => {
           await loadFixture(setup);
 
         // Write function entry before scoping target
-        await roles.allowFunctionPacked(
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
         // Dormant under Clearance.None
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+        await viem.assertions.revertWithCustomError(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+        );
 
         // Activates once scoped
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
       });
 
       it("revokeFunction clears only target-specific entry, exposing global fallback", async () => {
@@ -738,37 +941,51 @@ describe("Authorization", () => {
         } = await loadFixture(setup);
 
         // Target-specific requires param == 42; global is unconstrained
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           ONE_PARAM,
           await eqFirstParam(roles, 42),
           ExecutionOptions.None,
-        );
-        await roles.allowFunctionGloballyPacked(roleKey, ONE_PARAM, "0x");
+        ]);
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          ONE_PARAM,
+          "0x",
+        ]);
 
-        await roles.revokeFunction(roleKey, targetAddressA, ONE_PARAM);
+        await roles.write.revokeFunction([roleKey, targetAddressA, ONE_PARAM]);
 
         // Target-specific constraint is gone — global fallback allows param == 99
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressA,
-            iface.encodeFunctionData("oneParamStatic", [99]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [99n],
+            }),
           ),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetA,
+          "Invoked",
+          [ONE_PARAM],
+        );
 
         // Global still works on other targets
-        await expect(
+        await viem.assertions.emitWithArgs(
           exec(
             targetAddressB,
-            iface.encodeFunctionData("oneParamStatic", [99]),
+            encodeFunctionData({
+              abi,
+              functionName: "oneParamStatic",
+              args: [99n],
+            }),
           ),
-        )
-          .to.emit(targetB, "Invoked")
-          .withArgs(ONE_PARAM);
+          targetB,
+          "Invoked",
+          [ONE_PARAM],
+        );
       });
 
       it("revokeFunctionGlobally clears only global entry, preserving target-specific entry", async () => {
@@ -781,29 +998,42 @@ describe("Authorization", () => {
           exec,
         } = await loadFixture(setup);
 
-        await roles.scopeTarget(roleKey, targetAddressA);
-        await roles.allowFunctionPacked(
+        await roles.write.scopeTarget([roleKey, targetAddressA]);
+        await roles.write.allowFunctionPacked([
           roleKey,
           targetAddressA,
           DO_NOTHING,
           "0x",
           ExecutionOptions.None,
-        );
-        await roles.allowFunctionGloballyPacked(roleKey, DO_NOTHING, "0x");
+        ]);
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          DO_NOTHING,
+          "0x",
+        ]);
 
-        await roles.revokeFunctionGlobally(roleKey, DO_NOTHING);
+        await roles.write.revokeFunctionGlobally([roleKey, DO_NOTHING]);
 
         // Target-specific still works
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing")),
-        )
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
+        await viem.assertions.emitWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
 
         // Global no longer works on other targets
-        await expect(
-          exec(targetAddressB, iface.encodeFunctionData("doNothing")),
-        ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
+        await viem.assertions.revertWithCustomError(
+          exec(
+            targetAddressB,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+          ),
+          roles,
+          "TransactionNotAllowed",
+        );
       });
     });
   });
@@ -816,35 +1046,35 @@ describe("Authorization", () => {
     const scopes = [
       {
         label: "Clearance.Target",
-        data: "0x",
-        expectedSelector: "0x00000000",
+        data: "0x" as Hex,
+        expectedSelector: "0x00000000" as Hex,
         configure: async (
-          roles: Roles,
-          roleKey: string,
-          target: string,
+          roles: RolesContract,
+          roleKey: Hex,
+          target: Address,
           options: ExecutionOptions,
         ) => {
-          await roles.allowTargetPacked(roleKey, target, "0x", options);
+          await roles.write.allowTargetPacked([roleKey, target, "0x", options]);
         },
       },
       {
         label: "Clearance.Function",
-        data: iface.encodeFunctionData("doNothing"),
+        data: encodeFunctionData({ abi, functionName: "doNothing" }),
         expectedSelector: DO_NOTHING,
         configure: async (
-          roles: Roles,
-          roleKey: string,
-          target: string,
+          roles: RolesContract,
+          roleKey: Hex,
+          target: Address,
           options: ExecutionOptions,
         ) => {
-          await roles.scopeTarget(roleKey, target);
-          await roles.allowFunctionPacked(
+          await roles.write.scopeTarget([roleKey, target]);
+          await roles.write.allowFunctionPacked([
             roleKey,
             target,
             DO_NOTHING,
             "0x",
             options,
-          );
+          ]);
         },
       },
     ];
@@ -863,21 +1093,28 @@ describe("Authorization", () => {
           );
           await fundAvatar();
 
-          await expect(exec(targetAddressA, scope.data))
-            .to.emit(targetA, "Invoked")
-            .withArgs(scope.expectedSelector);
+          await viem.assertions.emitWithArgs(
+            exec(targetAddressA, scope.data),
+            targetA,
+            "Invoked",
+            [scope.expectedSelector],
+          );
 
-          await expect(
+          await viem.assertions.revertWithCustomErrorWithArgs(
             exec(targetAddressA, scope.data, {
-              value: ethers.parseEther("0.1"),
+              value: parseEther("0.1"),
             }),
-          )
-            .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-            .withArgs(targetAddressA);
+            roles,
+            "SendNotAllowed",
+            [targetAddressA],
+          );
 
-          await expect(exec(targetAddressA, scope.data, { operation: 1 }))
-            .to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed")
-            .withArgs(targetAddressA);
+          await viem.assertions.revertWithCustomErrorWithArgs(
+            exec(targetAddressA, scope.data, { operation: 1 }),
+            roles,
+            "DelegateCallNotAllowed",
+            [targetAddressA],
+          );
         });
 
         it("Send: allows value transfer, still blocks DelegateCall", async () => {
@@ -899,23 +1136,29 @@ describe("Authorization", () => {
           );
           await fundAvatar();
 
-          const amount = ethers.parseEther("0.1");
-          await expect(
+          const amount = parseEther("0.1");
+          await viem.assertions.balancesHaveChanged(
             exec(targetAddressA, scope.data, { value: amount }),
-          ).to.changeEtherBalances(
-            ethers,
-            [avatarAddress, targetAddressA],
-            [-amount, amount],
+            [
+              { address: avatarAddress, amount: -amount },
+              { address: targetAddressA, amount },
+            ],
           );
 
-          await expect(exec(targetAddressA, scope.data, { operation: 1 }))
-            .to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed")
-            .withArgs(targetAddressA);
+          await viem.assertions.revertWithCustomErrorWithArgs(
+            exec(targetAddressA, scope.data, { operation: 1 }),
+            roles,
+            "DelegateCallNotAllowed",
+            [targetAddressA],
+          );
 
           // Verify zero-value Call also still works
-          await expect(exec(targetAddressA, scope.data))
-            .to.emit(targetA, "Invoked")
-            .withArgs(scope.expectedSelector);
+          await viem.assertions.emitWithArgs(
+            exec(targetAddressA, scope.data),
+            targetA,
+            "Invoked",
+            [scope.expectedSelector],
+          );
         });
 
         it("DelegateCall: allows DelegateCall and Call(0), still blocks Send", async () => {
@@ -938,30 +1181,40 @@ describe("Authorization", () => {
           await fundAvatar();
 
           // DelegateCall executes in avatar's context
-          await expect(exec(targetAddressA, scope.data, { operation: 1 }))
-            .to.emit(targetA.attach(avatarAddress), "Invoked")
-            .withArgs(scope.expectedSelector);
+          const avatarTarget = await viem.getContractAt(
+            "TestContract",
+            avatarAddress,
+          );
+          await viem.assertions.emitWithArgs(
+            exec(targetAddressA, scope.data, { operation: 1 }),
+            avatarTarget,
+            "Invoked",
+            [scope.expectedSelector],
+          );
 
           // Regular Call with 0 value still works
-          await expect(exec(targetAddressA, scope.data))
-            .to.emit(targetA, "Invoked")
-            .withArgs(scope.expectedSelector);
+          await viem.assertions.emitWithArgs(
+            exec(targetAddressA, scope.data),
+            targetA,
+            "Invoked",
+            [scope.expectedSelector],
+          );
 
           // Sending ETH value is still blocked
-          await expect(
+          await viem.assertions.revertWithCustomErrorWithArgs(
             exec(targetAddressA, scope.data, {
-              value: ethers.parseEther("0.1"),
+              value: parseEther("0.1"),
             }),
-          )
-            .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-            .withArgs(targetAddressA);
+            roles,
+            "SendNotAllowed",
+            [targetAddressA],
+          );
         });
 
         it("Both: allows Send, DelegateCall, and both together", async () => {
           const {
             roles,
             avatarAddress,
-            targetA,
             targetAddressA,
             roleKey,
             exec,
@@ -976,25 +1229,33 @@ describe("Authorization", () => {
           );
           await fundAvatar();
 
-          const amount = ethers.parseEther("0.1");
-          await expect(
+          const amount = parseEther("0.1");
+          await viem.assertions.balancesHaveChanged(
             exec(targetAddressA, scope.data, { value: amount }),
-          ).to.changeEtherBalances(
-            ethers,
-            [avatarAddress, targetAddressA],
-            [-amount, amount],
+            [
+              { address: avatarAddress, amount: -amount },
+              { address: targetAddressA, amount },
+            ],
           );
 
-          await expect(exec(targetAddressA, scope.data, { operation: 1 }))
-            .to.emit(targetA.attach(avatarAddress), "Invoked")
-            .withArgs(scope.expectedSelector);
+          const avatarTarget = await viem.getContractAt(
+            "TestContract",
+            avatarAddress,
+          );
+          await viem.assertions.emitWithArgs(
+            exec(targetAddressA, scope.data, { operation: 1 }),
+            avatarTarget,
+            "Invoked",
+            [scope.expectedSelector],
+          );
 
           // Combined value > 0 and DelegateCall passes both option checks
-          await expect(
+          await viem.assertions.emitWithArgs(
             exec(targetAddressA, scope.data, { value: amount, operation: 1 }),
-          )
-            .to.emit(targetA.attach(avatarAddress), "Invoked")
-            .withArgs(scope.expectedSelector);
+            avatarTarget,
+            "Invoked",
+            [scope.expectedSelector],
+          );
         });
       });
     }
@@ -1004,22 +1265,35 @@ describe("Authorization", () => {
         const { roles, targetA, targetAddressA, roleKey, exec, fundAvatar } =
           await loadFixture(setup);
 
-        await roles.allowFunctionGloballyPacked(roleKey, DO_NOTHING, "0x");
+        await roles.write.allowFunctionGloballyPacked([
+          roleKey,
+          DO_NOTHING,
+          "0x",
+        ]);
         await fundAvatar();
 
-        const data = iface.encodeFunctionData("doNothing");
+        const data = encodeFunctionData({ abi, functionName: "doNothing" });
 
-        await expect(exec(targetAddressA, data, { value: 1n }))
-          .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-          .withArgs(targetAddressA);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(targetAddressA, data, { value: 1n }),
+          roles,
+          "SendNotAllowed",
+          [targetAddressA],
+        );
 
-        await expect(exec(targetAddressA, data, { operation: 1 }))
-          .to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed")
-          .withArgs(targetAddressA);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(targetAddressA, data, { operation: 1 }),
+          roles,
+          "DelegateCallNotAllowed",
+          [targetAddressA],
+        );
 
-        await expect(exec(targetAddressA, data))
-          .to.emit(targetA, "Invoked")
-          .withArgs(DO_NOTHING);
+        await viem.assertions.emitWithArgs(
+          exec(targetAddressA, data),
+          targetA,
+          "Invoked",
+          [DO_NOTHING],
+        );
       });
     });
   });
@@ -1033,89 +1307,144 @@ describe("Authorization", () => {
       const { roles, targetA, targetAddressA, roleKey, exec } =
         await loadFixture(setup);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         await eqFirstParam(roles, 100),
         ExecutionOptions.None,
+      ]);
+
+      await viem.assertions.emitWithArgs(
+        exec(
+          targetAddressA,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [100n],
+          }),
+        ),
+        targetA,
+        "Invoked",
+        [ONE_PARAM],
       );
 
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [100])),
-      )
-        .to.emit(targetA, "Invoked")
-        .withArgs(ONE_PARAM);
-
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [50])),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
-
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           targetAddressA,
-          iface.encodeFunctionData("twoParamsStatic", [100, 999]),
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [50n],
+          }),
         ),
-      ).to.not.be.revert(ethers);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
 
-      await expect(
+      await exec(
+        targetAddressA,
+        encodeFunctionData({
+          abi,
+          functionName: "twoParamsStatic",
+          args: [100n, 999n],
+        }),
+      );
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           targetAddressA,
-          iface.encodeFunctionData("twoParamsStatic", [200, 999]),
+          encodeFunctionData({
+            abi,
+            functionName: "twoParamsStatic",
+            args: [200n, 999n],
+          }),
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("evaluates function-specific conditions", async () => {
       const { roles, targetA, targetAddressA, roleKey, exec } =
         await loadFixture(setup);
 
-      await roles.scopeTarget(roleKey, targetAddressA);
-      await roles.allowFunctionPacked(
+      await roles.write.scopeTarget([roleKey, targetAddressA]);
+      await roles.write.allowFunctionPacked([
         roleKey,
         targetAddressA,
         ONE_PARAM,
         await eqFirstParam(roles, 42),
         ExecutionOptions.None,
+      ]);
+
+      await viem.assertions.emitWithArgs(
+        exec(
+          targetAddressA,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [42n],
+          }),
+        ),
+        targetA,
+        "Invoked",
+        [ONE_PARAM],
       );
 
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [42])),
-      )
-        .to.emit(targetA, "Invoked")
-        .withArgs(ONE_PARAM);
-
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [99])),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(
+          targetAddressA,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [99n],
+          }),
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("evaluates global function conditions", async () => {
       const { roles, targetA, targetAddressA, roleKey, exec } =
         await loadFixture(setup);
 
-      await roles.allowFunctionGloballyPacked(
+      await roles.write.allowFunctionGloballyPacked([
         roleKey,
         ONE_PARAM,
         await eqFirstParam(roles, 100),
+      ]);
+
+      await viem.assertions.emitWithArgs(
+        exec(
+          targetAddressA,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [100n],
+          }),
+        ),
+        targetA,
+        "Invoked",
+        [ONE_PARAM],
       );
 
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [100])),
-      )
-        .to.emit(targetA, "Invoked")
-        .withArgs(ONE_PARAM);
-
-      await expect(
-        exec(targetAddressA, iface.encodeFunctionData("oneParamStatic", [50])),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(
+          targetAddressA,
+          encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [50n],
+          }),
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     describe("check ordering", () => {
@@ -1123,43 +1452,58 @@ describe("Authorization", () => {
         const { roles, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
-          exec(targetAddressA, iface.encodeFunctionData("doNothing"), {
-            value: 1n,
-            operation: 1,
-          }),
-        )
-          .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-          .withArgs(targetAddressA);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(
+            targetAddressA,
+            encodeFunctionData({ abi, functionName: "doNothing" }),
+            {
+              value: 1n,
+              operation: 1,
+            },
+          ),
+          roles,
+          "SendNotAllowed",
+          [targetAddressA],
+        );
       });
 
       it("enforces ExecutionOptions before evaluating conditions", async () => {
         const { roles, targetAddressA, roleKey, exec } =
           await loadFixture(setup);
 
-        await roles.allowTargetPacked(
+        await roles.write.allowTargetPacked([
           roleKey,
           targetAddressA,
           await eqFirstParam(roles, 42),
           ExecutionOptions.None,
+        ]);
+
+        const violatingData = encodeFunctionData({
+          abi,
+          functionName: "oneParamStatic",
+          args: [99n],
+        });
+
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(targetAddressA, violatingData, { value: 1n }),
+          roles,
+          "SendNotAllowed",
+          [targetAddressA],
         );
 
-        const violatingData = iface.encodeFunctionData("oneParamStatic", [99]);
-
-        await expect(exec(targetAddressA, violatingData, { value: 1n }))
-          .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-          .withArgs(targetAddressA);
-
-        await expect(exec(targetAddressA, violatingData, { operation: 1 }))
-          .to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed")
-          .withArgs(targetAddressA);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          exec(targetAddressA, violatingData, { operation: 1 }),
+          roles,
+          "DelegateCallNotAllowed",
+          [targetAddressA],
+        );
       });
     });
   });
@@ -1180,33 +1524,37 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
       const batchData = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("doNothing"),
+          data: encodeFunctionData({ abi, functionName: "doNothing" }),
         },
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("oneParamStatic", [42]),
+          data: encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [42n],
+          }),
         },
       ]);
 
-      await expect(exec(multisendAddress, batchData, { operation: 1 }))
-        .to.emit(targetA, "Invoked")
-        .withArgs(DO_NOTHING)
-        .and.to.emit(targetA, "Invoked")
-        .withArgs(ONE_PARAM);
+      const hash = await exec(multisendAddress, batchData, { operation: 1 });
+      await viem.assertions.emitWithArgs(hash, targetA, "Invoked", [
+        DO_NOTHING,
+      ]);
+      await viem.assertions.emitWithArgs(hash, targetA, "Invoked", [ONE_PARAM]);
     });
 
     it("does not match short calldata (< 4 bytes) to an unwrapper", async () => {
@@ -1219,12 +1567,12 @@ describe("Authorization", () => {
         unwrapperAddress,
       } = await loadFixture(setupMultiSend);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
       // Register unwrappers for selectors with trailing zero bytes
       for (const selector of [
@@ -1232,24 +1580,29 @@ describe("Authorization", () => {
         "0x12000000",
         "0x12340000",
         "0x12345600",
-      ]) {
-        await roles.setTransactionUnwrapper(
+      ] as const) {
+        await roles.write.setTransactionUnwrapper([
           targetAddressA,
           selector,
           unwrapperAddress,
-        );
+        ]);
       }
 
       // 0 bytes bypasses unwrapper lookup and succeeds under Clearance.Target
-      await expect(exec(targetAddressA, "0x"))
-        .to.emit(targetA, "Invoked")
-        .withArgs("0x00000000");
+      await viem.assertions.emitWithArgs(
+        exec(targetAddressA, "0x"),
+        targetA,
+        "Invoked",
+        ["0x00000000"],
+      );
 
       // 1-3 bytes bypass unwrapper lookup and revert FunctionSignatureTooShort
-      for (const shortData of ["0x12", "0x1234", "0x123456"]) {
-        await expect(
+      for (const shortData of ["0x12", "0x1234", "0x123456"] as const) {
+        await viem.assertions.revertWithCustomError(
           exec(targetAddressA, shortData),
-        ).to.be.revertedWithCustomError(roles, "FunctionSignatureTooShort");
+          roles,
+          "FunctionSignatureTooShort",
+        );
       }
     });
 
@@ -1265,40 +1618,48 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
       await fundAvatar();
 
       // Empty multisend payload
-      const emptyPayload = multisend.interface.encodeFunctionData("multiSend", [
-        "0x",
-      ]);
-      await expect(
+      const emptyPayload = encodeFunctionData({
+        abi: multisend.abi,
+        functionName: "multiSend",
+        args: ["0x"],
+      });
+      await viem.assertions.revertWithCustomError(
         exec(multisendAddress, emptyPayload, { operation: 1 }),
-      ).to.be.revertedWithCustomError(roles, "MalformedMultiEntrypoint");
+        roles,
+        "MalformedMultiEntrypoint",
+      );
 
       const validBatch = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("doNothing"),
+          data: encodeFunctionData({ abi, functionName: "doNothing" }),
         },
       ]);
 
       // Outer Call instead of DelegateCall
-      await expect(
+      await viem.assertions.revertWithCustomError(
         exec(multisendAddress, validBatch, { operation: 0 }),
-      ).to.be.revertedWithCustomError(roles, "MalformedMultiEntrypoint");
+        roles,
+        "MalformedMultiEntrypoint",
+      );
 
       // Non-zero outer ETH value
-      await expect(
+      await viem.assertions.revertWithCustomError(
         exec(multisendAddress, validBatch, { value: 1n, operation: 1 }),
-      ).to.be.revertedWithCustomError(roles, "MalformedMultiEntrypoint");
+        roles,
+        "MalformedMultiEntrypoint",
+      );
     });
 
     it("enforces clearance, execution options, conditions, and calldata length on each unwrapped entry", async () => {
@@ -1313,94 +1674,108 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      await roles.scopeTarget(roleKey, targetAddressA);
-      await roles.allowFunctionPacked(
+      await roles.write.scopeTarget([roleKey, targetAddressA]);
+      await roles.write.allowFunctionPacked([
         roleKey,
         targetAddressA,
         ONE_PARAM,
         await eqFirstParam(roles, 42),
         ExecutionOptions.None,
-      );
+      ]);
       await fundAvatar();
 
-      const validEntry = {
+      const validEntry: MetaTransaction = {
         to: targetAddressA,
-        value: 0,
+        value: 0n,
         operation: 0,
-        data: iface.encodeFunctionData("oneParamStatic", [42]),
+        data: encodeFunctionData({
+          abi,
+          functionName: "oneParamStatic",
+          args: [42n],
+        }),
       };
 
       // Unauthorized inner target
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           multisendAddress,
           encodeBatch([
             validEntry,
             {
               to: targetAddressB,
-              value: 0,
+              value: 0n,
               operation: 0,
-              data: iface.encodeFunctionData("doNothing"),
+              data: encodeFunctionData({ abi, functionName: "doNothing" }),
             },
           ]),
           { operation: 1 },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(targetAddressB, DO_NOTHING);
+        roles,
+        "TransactionNotAllowed",
+        [targetAddressB, DO_NOTHING],
+      );
 
       // Disallowed inner value transfer
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           multisendAddress,
-          encodeBatch([validEntry, { ...validEntry, value: 1 }]),
+          encodeBatch([validEntry, { ...validEntry, value: 1n }]),
           { operation: 1 },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "SendNotAllowed")
-        .withArgs(targetAddressA);
+        roles,
+        "SendNotAllowed",
+        [targetAddressA],
+      );
 
       // Disallowed inner DelegateCall
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           multisendAddress,
           encodeBatch([validEntry, { ...validEntry, operation: 1 }]),
           { operation: 1 },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "DelegateCallNotAllowed")
-        .withArgs(targetAddressA);
+        roles,
+        "DelegateCallNotAllowed",
+        [targetAddressA],
+      );
 
       // Inner condition violation
-      await expect(
+      await viem.assertions.revertWithCustomErrorWithArgs(
         exec(
           multisendAddress,
           encodeBatch([
             validEntry,
             {
               to: targetAddressA,
-              value: 0,
+              value: 0n,
               operation: 0,
-              data: iface.encodeFunctionData("oneParamStatic", [99]),
+              data: encodeFunctionData({
+                abi,
+                functionName: "oneParamStatic",
+                args: [99n],
+              }),
             },
           ]),
           { operation: 1 },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
 
       // Inner short calldata (1-3 bytes)
-      await expect(
+      await viem.assertions.revertWithCustomError(
         exec(
           multisendAddress,
           encodeBatch([
             validEntry,
-            { to: targetAddressA, value: 0, operation: 0, data: "0x1234" },
+            { to: targetAddressA, value: 0n, operation: 0, data: "0x1234" },
           ]),
           { operation: 1 },
         ),
-      ).to.be.revertedWithCustomError(roles, "FunctionSignatureTooShort");
+        roles,
+        "FunctionSignatureTooShort",
+      );
     });
 
     it("threads allowance consumption across unwrapped entries and rejects when cumulative spend exceeds balance", async () => {
@@ -1413,58 +1788,81 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      const ALLOWANCE_KEY = ethers.id("BATCH_ALLOWANCE");
-      await roles.setAllowance(ALLOWANCE_KEY, 1000, 0, 0, 0, 0);
+      const ALLOWANCE_KEY = keccak256(toBytes("BATCH_ALLOWANCE"));
+      await roles.write.setAllowance([ALLOWANCE_KEY, 1000n, 0n, 0n, 0n, 0n]);
 
-      await roles.scopeTarget(roleKey, targetAddressA);
-      await roles.allowFunctionPacked(
+      await roles.write.scopeTarget([roleKey, targetAddressA]);
+      await roles.write.allowFunctionPacked([
         roleKey,
         targetAddressA,
         ONE_PARAM,
         await withinAllowanceFirstParam(roles, ALLOWANCE_KEY),
         ExecutionOptions.None,
-      );
+      ]);
 
       // 100 + 200 = 300 <= 1000 succeeds and settles to 700
       const okBatch = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("oneParamStatic", [100]),
+          data: encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [100n],
+          }),
         },
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("oneParamStatic", [200]),
+          data: encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [200n],
+          }),
         },
       ]);
-      await expect(exec(multisendAddress, okBatch, { operation: 1 }))
-        .to.emit(roles, "ConsumeAllowance")
-        .withArgs(ALLOWANCE_KEY, 300, 700);
+      await viem.assertions.emitWithArgs(
+        exec(multisendAddress, okBatch, { operation: 1 }),
+        roles,
+        "ConsumeAllowance",
+        [ALLOWANCE_KEY, 300n, 700n],
+      );
 
       // 400 + 400 = 800 > 700 rejects on the second entry before execution
       const overflowBatch = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("oneParamStatic", [400]),
+          data: encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [400n],
+          }),
         },
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("oneParamStatic", [400]),
+          data: encodeFunctionData({
+            abi,
+            functionName: "oneParamStatic",
+            args: [400n],
+          }),
         },
       ]);
-      await expect(exec(multisendAddress, overflowBatch, { operation: 1 }))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.AllowanceExceeded, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(multisendAddress, overflowBatch, { operation: 1 }),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 1n, anyValue],
+      );
 
-      expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-        700,
+      assert.equal(
+        (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+        700n,
       );
     });
 
@@ -1479,34 +1877,37 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
       const innerBatch = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("doNothing"),
+          data: encodeFunctionData({ abi, functionName: "doNothing" }),
         },
       ]);
       const outerBatch = encodeBatch([
         {
           to: multisendAddress,
-          value: 0,
+          value: 0n,
           operation: 1,
           data: innerBatch,
         },
       ]);
 
       // Inner call to MultiSend is checked via _transaction, not unwrapped again
-      await expect(exec(multisendAddress, outerBatch, { operation: 1 }))
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(multisendAddress, multiSendSelector);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(multisendAddress, outerBatch, { operation: 1 }),
+        roles,
+        "TransactionNotAllowed",
+        [multisendAddress, multiSendSelector],
+      );
     });
 
     it("restores normal transaction authorization when unwrapper is removed", async () => {
@@ -1520,33 +1921,36 @@ describe("Authorization", () => {
         encodeBatch,
       } = await loadFixture(setupMultiSend);
 
-      await roles.allowTargetPacked(
+      await roles.write.allowTargetPacked([
         roleKey,
         targetAddressA,
         "0x",
         ExecutionOptions.None,
-      );
+      ]);
 
       // Remove unwrapper
-      await roles.setTransactionUnwrapper(
+      await roles.write.setTransactionUnwrapper([
         multisendAddress,
         multiSendSelector,
-        ZeroAddress,
-      );
+        zeroAddress,
+      ]);
 
       const batchData = encodeBatch([
         {
           to: targetAddressA,
-          value: 0,
+          value: 0n,
           operation: 0,
-          data: iface.encodeFunctionData("doNothing"),
+          data: encodeFunctionData({ abi, functionName: "doNothing" }),
         },
       ]);
 
       // Now goes directly through _transaction, where MultiSend has Clearance.None
-      await expect(exec(multisendAddress, batchData, { operation: 1 }))
-        .to.be.revertedWithCustomError(roles, "TransactionNotAllowed")
-        .withArgs(multisendAddress, multiSendSelector);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(multisendAddress, batchData, { operation: 1 }),
+        roles,
+        "TransactionNotAllowed",
+        [multisendAddress, multiSendSelector],
+      );
     });
   });
 });

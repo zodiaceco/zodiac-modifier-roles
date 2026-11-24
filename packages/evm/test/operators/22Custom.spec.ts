@@ -1,6 +1,8 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { hexlify, Interface, MaxUint256, randomBytes } from "ethers";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import { encodeFunctionData, maxUint256, toHex, type Hex } from "viem";
 
 import { network } from "hardhat";
 
@@ -15,7 +17,7 @@ import {
 } from "../utils.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
@@ -27,12 +29,11 @@ describe("Operator - Custom", () => {
 
   async function setupWithChecker() {
     const base = await setupOneParam();
-    const CustomChecker = await ethers.getContractFactory("TestCustomChecker");
-    const customChecker = await CustomChecker.deploy();
+    const customChecker = await viem.deployContract("TestCustomChecker");
     return {
       ...base,
       customChecker,
-      customCheckerAddress: await customChecker.getAddress(),
+      customCheckerAddress: customChecker.address,
     };
   }
 
@@ -58,7 +59,7 @@ describe("Operator - Custom", () => {
       );
 
       // 101 > 100 passes
-      await expect(invoke(101)).to.not.be.revert(ethers);
+      await invoke(101n);
     });
 
     it("passes correct context (operation type) to adapter", async () => {
@@ -70,7 +71,6 @@ describe("Operator - Custom", () => {
         allowFunction,
         customCheckerAddress,
       } = await loadFixture(setupWithChecker);
-      const iface = new Interface(["function fn(uint256)"]);
 
       // Adapter fails if operation != Call (0)
       await allowFunction(
@@ -89,30 +89,43 @@ describe("Operator - Custom", () => {
       );
 
       // Call operation (0) passes
-      await expect(
-        roles.connect(member).execTransactionFromModule(
+      await roles.write.execTransactionFromModule(
+        [
           testContractAddress,
-          0,
-          iface.encodeFunctionData(fn, [101]),
+          0n,
+          encodeFunctionData({
+            abi: [fn],
+            functionName: fn.name,
+            args: [101n],
+          }),
           0, // Operation.Call
-        ),
-      ).to.not.be.revert(ethers);
+        ],
+        { account: member.account },
+      );
 
       // DelegateCall operation (1) fails (adapter returns false)
-      await expect(
-        roles.connect(member).execTransactionFromModule(
-          testContractAddress,
-          0,
-          iface.encodeFunctionData(fn, [101]),
-          1, // Operation.DelegateCall
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi: [fn],
+              functionName: fn.name,
+              args: [101n],
+            }),
+            1, // Operation.DelegateCall
+          ],
+          { account: member.account },
         ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionViolation,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("extracts and passes extra data (from compValue) to adapter", async () => {
@@ -142,13 +155,16 @@ describe("Operator - Custom", () => {
       // Note: returned info is bytes32, so extraData is padded/truncated to 32 bytes
       const expectedInfo = "0x" + extraData.padEnd(64, "0");
 
-      await expect(invoke(99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionViolation,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -173,7 +189,7 @@ describe("Operator - Custom", () => {
       );
 
       // Adapter returns true for > 100
-      await expect(invoke(101)).to.not.be.revert(ethers);
+      await invoke(101n);
     });
 
     it("fails when adapter returns false (propagates error info)", async () => {
@@ -201,13 +217,16 @@ describe("Operator - Custom", () => {
       // Adapter returns false for <= 100, info = extraData
       const expectedInfo = "0x" + extraData.padEnd(64, "0");
 
-      await expect(invoke(99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionViolation,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -216,7 +235,7 @@ describe("Operator - Custom", () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupWithChecker);
 
-      const randomAddress = hexlify(randomBytes(20));
+      const randomAddress = toHex(randomBytes(20));
       await allowFunction(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
@@ -232,13 +251,16 @@ describe("Operator - Custom", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(101))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionNotAContract,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("wrong interface: reverts", async () => {
@@ -246,11 +268,10 @@ describe("Operator - Custom", () => {
         await loadFixture(setupWithChecker);
 
       // Deploy contract with code but no check() function and no fallback
-      const NoInterfaceChecker = await ethers.getContractFactory(
+      const noInterfaceChecker = await viem.deployContract(
         "TestCustomCheckerNoInterface",
       );
-      const noInterfaceChecker = await NoInterfaceChecker.deploy();
-      const noInterfaceCheckerAddress = await noInterfaceChecker.getAddress();
+      const noInterfaceCheckerAddress = noInterfaceChecker.address;
 
       await allowFunction(
         flattenCondition({
@@ -268,24 +289,26 @@ describe("Operator - Custom", () => {
       );
 
       // Function selector not found, no fallback -> staticcall fails
-      await expect(invoke(101))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionReverted,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("function reverts: reverts", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupWithChecker);
 
-      const RevertingChecker = await ethers.getContractFactory(
+      const revertingChecker = await viem.deployContract(
         "TestCustomCheckerReverting",
       );
-      const revertingChecker = await RevertingChecker.deploy();
-      const revertingCheckerAddress = await revertingChecker.getAddress();
+      const revertingCheckerAddress = revertingChecker.address;
 
       await allowFunction(
         flattenCondition({
@@ -303,13 +326,16 @@ describe("Operator - Custom", () => {
       );
 
       // Adapter reverts -> staticcall fails
-      await expect(invoke(101))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionReverted,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("returns wrong type: reverts", async () => {
@@ -317,11 +343,10 @@ describe("Operator - Custom", () => {
         await loadFixture(setupWithChecker);
 
       // Deploy contract that returns (uint256, uint256) instead of bool
-      const WrongReturnChecker = await ethers.getContractFactory(
+      const wrongReturnChecker = await viem.deployContract(
         "TestCustomCheckerWrongReturn",
       );
-      const wrongReturnChecker = await WrongReturnChecker.deploy();
-      const wrongReturnCheckerAddress = await wrongReturnChecker.getAddress();
+      const wrongReturnCheckerAddress = wrongReturnChecker.address;
 
       await allowFunction(
         flattenCondition({
@@ -339,13 +364,16 @@ describe("Operator - Custom", () => {
       );
 
       // Return data does not decode as (bool, AllowanceConsumption[])
-      await expect(invoke(101))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionInvalidResult,
-          1, // Custom node
+          1n, // Custom node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("returns expected: succeeds", async () => {
@@ -368,7 +396,7 @@ describe("Operator - Custom", () => {
       );
 
       // Valid adapter returns true -> passes
-      await expect(invoke(101)).to.not.be.revert(ethers);
+      await invoke(101n);
     });
   });
 
@@ -392,13 +420,16 @@ describe("Operator - Custom", () => {
       );
 
       // Value <= 100 triggers custom checker failure
-      await expect(invoke(50))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(50n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionViolation,
-          1, // Custom node at BFS index 1
+          1n, // Custom node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -419,13 +450,16 @@ describe("Operator - Custom", () => {
         }),
       );
 
-      await expect(invoke(50))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(50n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CustomConditionViolation,
           anyValue,
-          4, // calldataOffset: parameter starts at byte 4
-        );
+          4n, // calldataOffset: parameter starts at byte 4
+        ],
+      );
     });
   });
 
@@ -434,50 +468,50 @@ describe("Operator - Custom", () => {
       const { roles, evaluator } = await loadFixture(setupTestContract);
 
       for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
-        await expect(
+        await viem.assertions.revertWithCustomErrorWithArgs(
           packConditions(roles, [
             {
               parent: 0,
               paramType: encoding,
               operator: Operator.Custom,
-              compValue: "0x" + "00".repeat(20),
+              compValue: `0x${"00".repeat(20)}` as Hex,
             },
           ]),
-        )
-          .to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType")
-          .withArgs(0);
+          evaluator,
+          "UnsuitableParameterType",
+          [0n],
+        );
       }
     });
 
     it("reverts UnsuitableCompValue when compValue is less than 20 bytes", async () => {
       const { roles, evaluator } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         packConditions(roles, [
           {
             parent: 0,
             paramType: Encoding.Static,
             operator: Operator.Custom,
-            compValue: "0x" + "ab".repeat(19), // 19 bytes, less than address
+            compValue: `0x${"ab".repeat(19)}` as Hex, // 19 bytes, less than address
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+        evaluator,
+        "UnsuitableCompValue",
+      );
     });
   });
 
   describe("allowance consumption", () => {
-    const allowanceKeyA = "0x" + "11".repeat(32);
-    const allowanceKeyB = "0x" + "22".repeat(32);
+    const allowanceKeyA = `0x${"11".repeat(32)}` as const;
+    const allowanceKeyB = `0x${"22".repeat(32)}` as const;
 
     async function setupConsuming() {
       const base = await setupOneParam();
-      const Consuming = await ethers.getContractFactory(
-        "TestCustomCheckerConsuming",
-      );
-      const consuming = await Consuming.deploy();
+      const consuming = await viem.deployContract("TestCustomCheckerConsuming");
       return {
         ...base,
-        consumingAddress: await consuming.getAddress(),
+        consumingAddress: consuming.address,
       };
     }
 
@@ -502,22 +536,28 @@ describe("Operator - Custom", () => {
         await loadFixture(setupConsuming);
       const compValue = customCompValue(consumingAddress, allowanceKeyA);
 
-      await roles.connect(owner).setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
       await allowFunction(customCondition(compValue), ExecutionOptions.Both);
 
-      await expect(invoke(40)).to.not.be.revert(ethers);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        60,
+      await invoke(40n);
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        60n,
       );
 
       // Exact remaining balance is allowed.
-      await expect(invoke(60)).to.not.be.revert(ethers);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(0);
+      await invoke(60n);
+      assert.equal((await roles.read.accruedAllowance([allowanceKeyA]))[0], 0n);
 
-      await expect(invoke(1))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.AllowanceExceeded, 1, anyValue);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(0);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 1n, anyValue],
+      );
+      assert.equal((await roles.read.accruedAllowance([allowanceKeyA]))[0], 0n);
     });
 
     it("checks pending consumption before loading from storage", async () => {
@@ -525,7 +565,9 @@ describe("Operator - Custom", () => {
         await loadFixture(setupConsuming);
       const compValue = customCompValue(consumingAddress, allowanceKeyA);
 
-      await roles.connect(owner).setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
       await allowFunction(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
@@ -553,18 +595,23 @@ describe("Operator - Custom", () => {
       );
 
       // Both checks charge 40 from the same running list.
-      await expect(invoke(40)).to.not.be.revert(ethers);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        20,
+      await invoke(40n);
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        20n,
       );
 
       // 11 + 11 exceeds the 20 remaining. Loading storage independently in
       // each checker would incorrectly allow this call.
-      await expect(invoke(11))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.AllowanceExceeded, 3, anyValue);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        20,
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(11n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 3n, anyValue],
+      );
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        20n,
       );
     });
 
@@ -572,8 +619,12 @@ describe("Operator - Custom", () => {
       const { owner, roles, allowFunction, invoke, consumingAddress } =
         await loadFixture(setupConsuming);
 
-      await roles.connect(owner).setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
-      await roles.connect(owner).setAllowance(allowanceKeyB, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
+      await roles.write.setAllowance([allowanceKeyB, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
       await allowFunction(
         customCondition(
           customCompValue(consumingAddress, allowanceKeyA, allowanceKeyB),
@@ -581,12 +632,14 @@ describe("Operator - Custom", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(30)).to.not.be.revert(ethers);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        70,
+      await invoke(30n);
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        70n,
       );
-      expect((await roles.accruedAllowance(allowanceKeyB)).balance).to.equal(
-        70,
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyB]))[0],
+        70n,
       );
 
       // The same key twice must aggregate to 120 and fail atomically.
@@ -596,11 +649,15 @@ describe("Operator - Custom", () => {
         ),
         ExecutionOptions.Both,
       );
-      await expect(invoke(60))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.AllowanceExceeded, 1, anyValue);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        70,
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(60n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 1n, anyValue],
+      );
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        70n,
       );
     });
 
@@ -613,7 +670,9 @@ describe("Operator - Custom", () => {
         allowanceKeyA,
       );
 
-      await roles.connect(owner).setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
       await allowFunction(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
@@ -641,9 +700,10 @@ describe("Operator - Custom", () => {
 
       // The first branch consumes 60 then fails on its second consumption. The
       // Pass branch succeeds, but no partial consumption may be settled.
-      await expect(invoke(60)).to.not.be.revert(ethers);
-      expect((await roles.accruedAllowance(allowanceKeyA)).balance).to.equal(
-        100,
+      await invoke(60n);
+      assert.equal(
+        (await roles.read.accruedAllowance([allowanceKeyA]))[0],
+        100n,
       );
     });
 
@@ -652,23 +712,25 @@ describe("Operator - Custom", () => {
         await loadFixture(setupConsuming);
       const compValue = customCompValue(consumingAddress, allowanceKeyA);
 
-      await roles.connect(owner).setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n], {
+        account: owner.account,
+      });
       await allowFunction(customCondition(compValue), ExecutionOptions.Both);
 
-      await expect(invoke(MaxUint256))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.AllowanceExceeded, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(maxUint256),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 1n, anyValue],
+      );
     });
   });
 
   describe("rich result validation", () => {
     it("rejects malformed results with a structured status", async () => {
       const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
-      const Malformed = await ethers.getContractFactory(
-        "TestCustomCheckerMalformed",
-      );
-      const malformed = await Malformed.deploy();
-      const adapter = await malformed.getAddress();
+      const malformed = await viem.deployContract("TestCustomCheckerMalformed");
+      const adapter = malformed.address;
 
       for (const mode of ["00", "01", "02"]) {
         await allowFunction(
@@ -676,13 +738,12 @@ describe("Operator - Custom", () => {
           ExecutionOptions.Both,
         );
 
-        await expect(invoke(101))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
-            ConditionViolationStatus.CustomConditionInvalidResult,
-            1,
-            anyValue,
-          );
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(101n),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.CustomConditionInvalidResult, 1n, anyValue],
+        );
       }
     });
   });

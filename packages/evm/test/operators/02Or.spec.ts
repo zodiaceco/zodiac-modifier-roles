@@ -1,8 +1,8 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder } from "ethers";
-
+import assert from "node:assert/strict";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import { encodeAbiParameters, parseAbiParameters, type Hex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -14,10 +14,8 @@ import {
   packConditions,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
@@ -45,12 +43,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [20]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [20n],
+                  ),
                 },
               ],
             },
@@ -60,7 +64,7 @@ describe("Operator - Or", () => {
       );
 
       // 10 matches first child - passes immediately
-      await expect(invoke(10)).to.not.be.revert(ethers);
+      await invoke(10);
     });
 
     it("passes when second child passes after first fails", async () => {
@@ -79,12 +83,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [20]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [20n],
+                  ),
                 },
               ],
             },
@@ -94,7 +104,7 @@ describe("Operator - Or", () => {
       );
 
       // 20 fails first child, passes second child
-      await expect(invoke(20)).to.not.be.revert(ethers);
+      await invoke(20);
     });
 
     it("fails with OrViolation when all children fail", async () => {
@@ -113,12 +123,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [20]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [20n],
+                  ),
                 },
               ],
             },
@@ -128,13 +144,16 @@ describe("Operator - Or", () => {
       );
 
       // 99 fails all children
-      await expect(invoke(99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
-          1, // Or node
+          1n, // Or node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -156,12 +175,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.LessThan,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.GreaterThan,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
               ],
             },
@@ -171,19 +196,22 @@ describe("Operator - Or", () => {
       );
 
       // 5 passes first child (<10)
-      await expect(invoke(5)).to.not.be.revert(ethers);
+      await invoke(5);
 
       // 150 passes second child (>100)
-      await expect(invoke(150)).to.not.be.revert(ethers);
+      await invoke(150);
 
       // 50 fails both (not <10 and not >100)
-      await expect(invoke(50))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(50),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
-          1, // Or node
+          1n, // Or node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("passes individual child payloads when variant", async () => {
@@ -211,7 +239,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Dynamic,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["bytes"], ["0xaabbccdd"]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("bytes"),
+                        ["0xaabbccdd"],
+                      ),
                     },
                   ],
                 },
@@ -224,7 +255,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Dynamic,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["bytes"], ["0x11111111"]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("bytes"),
+                        ["0x11111111"],
+                      ),
                     },
                     {
                       paramType: Encoding.Dynamic,
@@ -240,25 +274,32 @@ describe("Operator - Or", () => {
       );
 
       // Matches child 1: single bytes = 0xaabbccdd
-      const matchChild1 = abiCoder.encode(["bytes"], ["0xaabbccdd"]);
-      await expect(invoke(matchChild1)).to.not.be.revert(ethers);
+      const matchChild1 = encodeAbiParameters(parseAbiParameters("bytes"), [
+        "0xaabbccdd",
+      ]);
+      await invoke(matchChild1);
 
       // Matches child 2: two bytes where first = 0x11111111
-      const matchChild2 = abiCoder.encode(
-        ["bytes", "bytes"],
+      const matchChild2 = encodeAbiParameters(
+        parseAbiParameters("bytes, bytes"),
         ["0x11111111", "0xffffffff"],
       );
-      await expect(invoke(matchChild2)).to.not.be.revert(ethers);
+      await invoke(matchChild2);
 
       // Matches neither
-      const matchNeither = abiCoder.encode(["bytes"], ["0xdeadbeef"]);
-      await expect(invoke(matchNeither))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const matchNeither = encodeAbiParameters(parseAbiParameters("bytes"), [
+        "0xdeadbeef",
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(matchNeither),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
-          1, // Or node
+          1n, // Or node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("passes empty payload to non-structural children", async () => {
@@ -278,13 +319,19 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
                 // Non-structural: ether value must equal 123
                 {
                   paramType: Encoding.EtherValue,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [123]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [123n],
+                  ),
                 },
               ],
             },
@@ -294,19 +341,22 @@ describe("Operator - Or", () => {
       );
 
       // Correct param, any ether - passes via first child
-      await expect(invoke(42)).to.not.be.revert(ethers);
+      await invoke(42);
 
       // Wrong param, correct ether - passes via second child
-      await expect(invoke(99, { value: 123 })).to.not.be.revert(ethers);
+      await invoke(99, { value: 123 });
 
       // Wrong param, wrong ether - fails both
-      await expect(invoke(99, { value: 999 }))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99, { value: 999 }),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
-          1, // Or node
+          1n, // Or node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -315,13 +365,13 @@ describe("Operator - Or", () => {
       const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
 
       const allowanceKeyA =
-        "0x000000000000000000000000000000000000000000000000000000000000000a";
+        "0x000000000000000000000000000000000000000000000000000000000000000a" as const;
       const allowanceKeyB =
-        "0x000000000000000000000000000000000000000000000000000000000000000b";
+        "0x000000000000000000000000000000000000000000000000000000000000000b" as const;
 
       // Set up two allowances of 100 each
-      await roles.setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
-      await roles.setAllowance(allowanceKeyB, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n]);
+      await roles.write.setAllowance([allowanceKeyB, 100n, 0n, 0n, 0n, 0n]);
 
       // Or with two branches, each consuming from different allowance
       // Child 1: value < 50 AND consume from allowanceA
@@ -342,7 +392,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.LessThan,
-                      compValue: abiCoder.encode(["uint256"], [50]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [50n],
+                      ),
                     },
                     {
                       paramType: Encoding.Static,
@@ -358,7 +411,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.GreaterThan,
-                      compValue: abiCoder.encode(["uint256"], [49]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [49n],
+                      ),
                     },
                     {
                       paramType: Encoding.Static,
@@ -375,36 +431,34 @@ describe("Operator - Or", () => {
       );
 
       // Call with value 30 - takes first branch, consumes from allowanceA
-      await expect(invoke(30)).to.not.be.revert(ethers);
+      await invoke(30);
 
       // Verify only allowanceA was consumed
-      const { balance: balanceA } = await roles.accruedAllowance(allowanceKeyA);
-      const { balance: balanceB } = await roles.accruedAllowance(allowanceKeyB);
-      expect(balanceA).to.equal(70); // 100 - 30
-      expect(balanceB).to.equal(100); // unchanged
+      const [balanceA] = await roles.read.accruedAllowance([allowanceKeyA]);
+      const [balanceB] = await roles.read.accruedAllowance([allowanceKeyB]);
+      assert.equal(balanceA, 70n); // 100 - 30
+      assert.equal(balanceB, 100n); // unchanged
 
       // Call with value 60 - takes second branch, consumes from allowanceB
-      await expect(invoke(60)).to.not.be.revert(ethers);
+      await invoke(60);
 
       // Verify only allowanceB was consumed this time
-      const { balance: balanceA2 } =
-        await roles.accruedAllowance(allowanceKeyA);
-      const { balance: balanceB2 } =
-        await roles.accruedAllowance(allowanceKeyB);
-      expect(balanceA2).to.equal(70); // unchanged
-      expect(balanceB2).to.equal(40); // 100 - 60
+      const [balanceA2] = await roles.read.accruedAllowance([allowanceKeyA]);
+      const [balanceB2] = await roles.read.accruedAllowance([allowanceKeyB]);
+      assert.equal(balanceA2, 70n); // unchanged
+      assert.equal(balanceB2, 40n); // 100 - 60
     });
 
     it("rolls back consumptions if a branch fails after consumption", async () => {
       const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
 
       const allowanceKeyA =
-        "0x000000000000000000000000000000000000000000000000000000000000000a";
+        "0x000000000000000000000000000000000000000000000000000000000000000a" as const;
       const allowanceKeyB =
-        "0x000000000000000000000000000000000000000000000000000000000000000b";
+        "0x000000000000000000000000000000000000000000000000000000000000000b" as const;
 
-      await roles.setAllowance(allowanceKeyA, 100, 0, 0, 0, 0);
-      await roles.setAllowance(allowanceKeyB, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKeyA, 100n, 0n, 0n, 0n, 0n]);
+      await roles.write.setAllowance([allowanceKeyB, 100n, 0n, 0n, 0n, 0n]);
 
       // OR structure:
       // Branch 1: Consume 10 from A AND Fail (value > 999) -> Should rollback A
@@ -430,7 +484,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.GreaterThan,
-                      compValue: abiCoder.encode(["uint256"], [999]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [999n],
+                      ),
                     },
                   ],
                 },
@@ -446,7 +503,10 @@ describe("Operator - Or", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.GreaterThan,
-                      compValue: abiCoder.encode(["uint256"], [0]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [0n],
+                      ),
                     },
                   ],
                 },
@@ -458,15 +518,15 @@ describe("Operator - Or", () => {
       );
 
       // Call with value 10
-      await expect(invoke(10)).to.not.be.revert(ethers);
+      await invoke(10);
 
       // Allowance A should be untouched (rolled back)
-      const { balance: balanceA } = await roles.accruedAllowance(allowanceKeyA);
-      expect(balanceA).to.equal(100);
+      const [balanceA] = await roles.read.accruedAllowance([allowanceKeyA]);
+      assert.equal(balanceA, 100n);
 
       // Allowance B should be consumed
-      const { balance: balanceB } = await roles.accruedAllowance(allowanceKeyB);
-      expect(balanceB).to.equal(90);
+      const [balanceB] = await roles.read.accruedAllowance([allowanceKeyB]);
+      assert.equal(balanceB, 90n);
     });
 
     it("rolls back a failed branch's charge to an allowance charged before the Or", async () => {
@@ -475,8 +535,8 @@ describe("Operator - Or", () => {
       const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
 
       const allowanceKey =
-        "0x000000000000000000000000000000000000000000000000000000000000000a";
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+        "0x000000000000000000000000000000000000000000000000000000000000000a" as const;
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       const withinAllowance = {
         paramType: Encoding.Static,
@@ -506,7 +566,10 @@ describe("Operator - Or", () => {
                         {
                           paramType: Encoding.Static,
                           operator: Operator.GreaterThan,
-                          compValue: abiCoder.encode(["uint256"], [999]),
+                          compValue: encodeAbiParameters(
+                            parseAbiParameters("uint256"),
+                            [999n],
+                          ),
                         },
                       ],
                     },
@@ -520,11 +583,11 @@ describe("Operator - Or", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(10)).to.not.be.revert(ethers);
+      await invoke(10);
 
       // charged once
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(90);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 90n);
     });
   });
 
@@ -544,12 +607,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [20]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [20n],
+                  ),
                 },
               ],
             },
@@ -557,13 +626,16 @@ describe("Operator - Or", () => {
         }),
       );
 
-      await expect(invoke(99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
-          1, // Or node at BFS index 1
+          1n, // Or node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -581,12 +653,18 @@ describe("Operator - Or", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [10]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [10n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [20]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [20n],
+                  ),
                 },
               ],
             },
@@ -594,13 +672,16 @@ describe("Operator - Or", () => {
         }),
       );
 
-      await expect(invoke(99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.OrViolation,
           anyValue,
-          4, // calldataOffset: parameter starts at byte 4
-        );
+          4n, // calldataOffset: parameter starts at byte 4
+        ],
+      );
     });
   });
 
@@ -617,7 +698,7 @@ describe("Operator - Or", () => {
           Encoding.AbiEncoded,
           Encoding.EtherValue,
         ]) {
-          await expect(
+          await viem.assertions.revertWithCustomError(
             packConditions(roles, [
               {
                 parent: 0,
@@ -632,7 +713,9 @@ describe("Operator - Or", () => {
                 compValue: "0x",
               },
             ]),
-          ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
+            evaluator,
+            "UnsuitableParameterType",
+          );
         }
       });
     });
@@ -641,13 +724,13 @@ describe("Operator - Or", () => {
       it("reverts UnsuitableCompValue when compValue is not empty", async () => {
         const { roles, evaluator } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           packConditions(roles, [
             {
               parent: 0,
               paramType: Encoding.None,
               operator: Operator.Or,
-              compValue: "0x".padEnd(66, "0"),
+              compValue: "0x".padEnd(66, "0") as Hex,
             },
             {
               parent: 0,
@@ -656,7 +739,9 @@ describe("Operator - Or", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+          evaluator,
+          "UnsuitableCompValue",
+        );
       });
     });
 
@@ -664,7 +749,7 @@ describe("Operator - Or", () => {
       it("reverts UnsuitableChildCount when Or has zero children", async () => {
         const { roles, evaluator } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           packConditions(roles, [
             {
               parent: 0,
@@ -673,7 +758,9 @@ describe("Operator - Or", () => {
               compValue: "0x",
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableChildCount");
+          evaluator,
+          "UnsuitableChildCount",
+        );
       });
     });
   });

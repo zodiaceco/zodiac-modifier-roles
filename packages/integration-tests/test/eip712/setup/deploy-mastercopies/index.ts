@@ -1,4 +1,5 @@
-import type { HardhatEthers } from "@nomicfoundation/hardhat-ethers/types"
+import type { NetworkConnection } from "hardhat/types/network"
+import "@nomicfoundation/hardhat-viem"
 
 import { deployFactory as deploy2470Factory } from "./eip2470.js"
 import { deployFallbackHandler } from "./fallbackHandler.js"
@@ -11,18 +12,22 @@ import {
 } from "./safeProxyFactory.js"
 import { deployFactory } from "./singletonFactory.js"
 
-export default async function deployMastercopies(ethers: HardhatEthers) {
-  const [, , , , , , deployer] = await ethers.getSigners()
+export default async function deployMastercopies(
+  viem: NetworkConnection["viem"]
+) {
+  const publicClient = await viem.getPublicClient()
+  const walletClients = await viem.getWalletClients()
+  const deployer = walletClients[6]
 
-  if ((await deployer.provider!.getCode(safeProxyFactory)) != "0x") {
+  if (await publicClient.getCode({ address: safeProxyFactory })) {
     return
   }
 
-  await deployFactory(deployer)
-  await deploy2470Factory(deployer)
-  await deployModuleProxyFactory(deployer)
-  await deployFallbackHandler(deployer)
-  await deploySafeMastercopy(deployer)
-  await deploySafeProxyFactory(deployer)
-  await deployRolesMastercopy(deployer)
+  await deployFactory(deployer, publicClient)
+  await deploy2470Factory(deployer, publicClient)
+  await deployModuleProxyFactory(deployer, publicClient)
+  await deployFallbackHandler(deployer, publicClient)
+  await deploySafeMastercopy(deployer, publicClient)
+  await deploySafeProxyFactory(deployer, publicClient)
+  await deployRolesMastercopy(deployer, publicClient)
 }

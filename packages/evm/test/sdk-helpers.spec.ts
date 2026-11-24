@@ -3,12 +3,13 @@
  * `c.bitmask` and `c.gte` build is accepted by `allowFunction` (Integrity)
  * and evaluates as the helper describes.
  */
-import { expect } from "chai";
-import { Interface, ParamType } from "ethers";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import { encodeFunctionData, parseAbi } from "viem";
+import type { Hex } from "viem";
 
 import { createSetup } from "./setup.js";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
 import { ConditionViolationStatus, flattenCondition } from "./utils.js";
 
 import { calldataMatches } from "../../sdk/src/main/target/authoring/c/matches.js";
@@ -19,12 +20,12 @@ import {
 import { encodeKey } from "../../sdk/src/main/keys.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupFn } = createSetup(connection);
 const setupDynamicParam = setupFn("function fn(bytes)");
 
-const bytes = ParamType.from("bytes");
+const bytes = "bytes" as any;
 
 describe("SDK helpers on Roles", () => {
   after(async () => {
@@ -32,7 +33,8 @@ describe("SDK helpers on Roles", () => {
   });
 
   it("checks the selector of a nested call without parameters (4 bytes)", async () => {
-    const { allowFunction, invoke } = await loadFixture(setupDynamicParam);
+    const { roles, allowFunction, invoke } =
+      await loadFixture(setupDynamicParam);
     const condition = calldataMatches(
       [
         calldataMatches({
@@ -44,8 +46,12 @@ describe("SDK helpers on Roles", () => {
     )();
     await allowFunction(flattenCondition(condition as any));
 
-    await expect(invoke("0x12345678")).to.not.be.revert(ethers);
-    await expect(invoke("0x12345679")).to.be.revert(ethers);
+    await invoke("0x12345678");
+    await viem.assertions.revertWithCustomError(
+      invoke("0x12345679"),
+      roles,
+      "ConditionViolation",
+    );
   });
 
   it("a mask padded to 15 bytes (v2 format) rejects the same 4 bytes", async () => {
@@ -65,16 +71,19 @@ describe("SDK helpers on Roles", () => {
         ],
       } as any),
     );
-    await expect(invoke("0x12345678"))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(ConditionViolationStatus.BitmaskOverflow, 1, anyValue);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke("0x12345678"),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.BitmaskOverflow, 1n, anyValue],
+    );
   });
 
   it("selector and call allowance on a call without parameters", async () => {
     const { roles, allowFunction, invoke } =
       await loadFixture(setupDynamicParam);
-    const key = encodeKey("calls");
-    await roles.setAllowance(key, 1, 0, 0, 0, 0);
+    const key = encodeKey("calls") as Hex;
+    await roles.write.setAllowance([key, 1n, 0n, 0n, 0n, 0n]);
     const condition = calldataMatches(
       [
         calldataMatches([], [], {
@@ -86,40 +95,51 @@ describe("SDK helpers on Roles", () => {
     )();
     await allowFunction(flattenCondition(condition as any));
 
-    await expect(invoke("0x12345679")).to.be.revert(ethers);
-    await expect(invoke("0x12345678")).to.not.be.revert(ethers);
+    await viem.assertions.revertWithCustomError(
+      invoke("0x12345679"),
+      roles,
+      "ConditionViolation",
+    );
+    await invoke("0x12345678");
     // the one call the allowance permits is used up
-    await expect(invoke("0x12345678")).to.be.revert(ethers);
+    await viem.assertions.revertWithCustomError(
+      invoke("0x12345678"),
+      roles,
+      "ConditionViolation",
+    );
   });
 
   it("a bitmask longer than 15 bytes", async () => {
-    const { allowFunction, invoke } = await loadFixture(setupDynamicParam);
+    const { roles, allowFunction, invoke } =
+      await loadFixture(setupDynamicParam);
     const prefix = "0x" + "ab".repeat(20);
     await allowFunction(
       flattenCondition({
         paramType: 5,
         operator: 5,
         children: [
-          bitmask({ mask: "0x" + "ff".repeat(20), value: prefix })(
-            bytes as any,
-          ),
+          bitmask({ mask: "0x" + "ff".repeat(20), value: prefix })(bytes),
         ],
       } as any),
     );
-    await expect(invoke(prefix + "cdcd")).to.not.be.revert(ethers);
-    await expect(invoke("0x" + "ab".repeat(19) + "ac")).to.be.revert(ethers);
+    await invoke((prefix + "cdcd") as Hex);
+    await viem.assertions.revertWithCustomError(
+      invoke(("0x" + "ab".repeat(19) + "ac") as Hex),
+      roles,
+      "ConditionViolation",
+    );
   });
 
   it("gte at the minimum is a Pass the contract accepts", async () => {
     const { allowFunction, invoke } = await loadFixture(setupDynamicParam);
-    const inner = new Interface(["function g(uint256)"]);
+    const innerAbi = parseAbi(["function g(uint256)"]);
     const condition = calldataMatches(
       [calldataMatches([gte(0)], ["uint256"])],
       ["bytes"],
     )();
     await allowFunction(flattenCondition(condition as any));
-    await expect(invoke(inner.encodeFunctionData("g", [0]))).to.not.be.revert(
-      ethers,
+    await invoke(
+      encodeFunctionData({ abi: innerAbi, functionName: "g", args: [0n] }),
     );
   });
 });

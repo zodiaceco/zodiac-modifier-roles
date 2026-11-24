@@ -1,6 +1,20 @@
-import { expect } from "chai";
-import { Interface, TypedDataEncoder, hexlify, randomBytes } from "ethers";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  decodeFunctionResult,
+  encodeErrorResult,
+  encodeFunctionData,
+  hashTypedData,
+  keccak256,
+  parseAbi,
+  toBytes,
+  toFunctionSelector,
+  toHex,
+  zeroHash,
+} from "viem";
+import type { Hex } from "viem";
 
 import {
   Encoding,
@@ -8,6 +22,7 @@ import {
   Operator,
   packConditions,
   maxUint64,
+  assertNotEmitted,
 } from "./utils.js";
 import { createSetup } from "./setup.js";
 import {
@@ -16,14 +31,14 @@ import {
   ROLE_TX_TYPES,
   encodeEntrypoint,
 } from "./roleTx.js";
-import type { Entrypoint } from "./roleTx.js";
+import type { Entrypoint, RoleTx } from "./roleTx.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
 const { deployRolesMod } = createSetup(connection);
 
-const iface = new Interface([
+const abi = parseAbi([
   "function fnThatMaybeReverts(uint256, bool) returns (uint256)",
   "function revertWith(bytes)",
   "function anything()",
@@ -51,36 +66,40 @@ describe("Execution Mechanics", () => {
   });
 
   async function setup() {
-    const [owner, invoker] = await ethers.getSigners();
+    const [owner, invoker] = await viem.getWalletClients();
 
-    const Avatar = await ethers.getContractFactory("TestAvatar");
-    const avatar = await Avatar.deploy();
-    const avatarAddress = await avatar.getAddress();
+    const avatar = await viem.deployContract("TestAvatar");
+    const avatarAddress = avatar.address;
 
     const roles = await deployRolesMod(
-      owner.address,
+      owner.account.address,
       avatarAddress,
       avatarAddress,
     );
 
-    const TestContract = await ethers.getContractFactory("TestContract");
-    const testContract = await TestContract.deploy();
-    const testContractAddress = await testContract.getAddress();
+    const testContract = await viem.deployContract("TestContract");
+    const testContractAddress = testContract.address;
 
-    const ROLE_KEY = ethers.id("TEST_ROLE");
-    const ALLOWANCE_KEY = ethers.id("TEST_ALLOWANCE");
+    const ROLE_KEY = keccak256(toBytes("TEST_ROLE"));
+    const ALLOWANCE_KEY = keccak256(toBytes("TEST_ALLOWANCE"));
 
     // Grant role (which enables the invoker as a module)
-    await roles.grantRole(invoker.address, ROLE_KEY, 0, 0, 0);
+    await roles.write.grantRole([
+      invoker.account.address,
+      ROLE_KEY,
+      0n,
+      0n,
+      0n,
+    ]);
 
     // Set as default role (for FromModule calls)
-    await roles.setDefaultRole(invoker.address, ROLE_KEY);
+    await roles.write.setDefaultRole([invoker.account.address, ROLE_KEY]);
 
     // Set initial allowance: 1000
-    await roles.setAllowance(ALLOWANCE_KEY, 1000, 0, 0, 0, 0);
+    await roles.write.setAllowance([ALLOWANCE_KEY, 1000n, 0n, 0n, 0n, 0n]);
 
     // Scope target
-    await roles.scopeTarget(ROLE_KEY, testContractAddress);
+    await roles.write.scopeTarget([ROLE_KEY, testContractAddress]);
 
     // Allow the test function: fnThatMaybeReverts(uint256, bool)
     // We attach a WithinAllowance condition to track consumption.
@@ -104,28 +123,28 @@ describe("Execution Mechanics", () => {
         compValue: "0x",
       },
     ]);
-    await roles.allowFunctionPacked(
+    await roles.write.allowFunctionPacked([
       ROLE_KEY,
       testContractAddress,
-      iface.getFunction("fnThatMaybeReverts")!.selector,
+      toFunctionSelector("fnThatMaybeReverts(uint256, bool)"),
       packed,
       ExecutionOptions.None,
-    );
-    await roles.allowFunctionPacked(
+    ]);
+    await roles.write.allowFunctionPacked([
       ROLE_KEY,
       testContractAddress,
-      iface.getFunction("revertWith")!.selector,
+      toFunctionSelector("revertWith(bytes)"),
       "0x",
       ExecutionOptions.None,
-    );
+    ]);
     // a function that may send value and be delegatecalled
-    await roles.allowFunctionPacked(
+    await roles.write.allowFunctionPacked([
       ROLE_KEY,
       testContractAddress,
-      iface.getFunction("anything")!.selector,
+      toFunctionSelector("anything()"),
       "0x",
       ExecutionOptions.Both,
-    );
+    ]);
     await owner.sendTransaction({ to: avatarAddress, value: 1000n });
 
     return {
@@ -146,29 +165,28 @@ describe("Execution Mechanics", () => {
         await loadFixture(setup);
 
       // Consumes 100
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      });
 
-      const success = await roles
-        .connect(invoker)
-        .execTransactionFromModule.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
+      const { result: success } =
+        await roles.simulate.execTransactionFromModule(
+          [testContractAddress, 0n, calldata, 0],
+          { account: invoker.account.address },
         );
 
-      expect(success).to.be.true;
+      assert.equal(success, true);
 
-      await roles
-        .connect(invoker)
-        .execTransactionFromModule(testContractAddress, 0, calldata, 0);
+      await roles.write.execTransactionFromModule(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account },
+      );
 
       // Verify persistence: 1000 - 100 = 900
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(900);
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 900n);
     });
 
     it("returns success=false and does not persist consumption on failed inner execution", async () => {
@@ -176,29 +194,28 @@ describe("Execution Mechanics", () => {
         await loadFixture(setup);
 
       // Consumes 100 but reverts
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        true,
-      ]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, true],
+      });
 
-      const success = await roles
-        .connect(invoker)
-        .execTransactionFromModule.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
+      const { result: success } =
+        await roles.simulate.execTransactionFromModule(
+          [testContractAddress, 0n, calldata, 0],
+          { account: invoker.account.address },
         );
 
-      expect(success).to.be.false;
+      assert.equal(success, false);
 
-      await roles
-        .connect(invoker)
-        .execTransactionFromModule(testContractAddress, 0, calldata, 0);
+      await roles.write.execTransactionFromModule(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account },
+      );
 
       // Verify rollback: 1000 (unchanged)
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(1000);
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 1000n);
     });
   });
 
@@ -207,77 +224,65 @@ describe("Execution Mechanics", () => {
       const { roles, invoker, testContractAddress, ALLOWANCE_KEY } =
         await loadFixture(setup);
 
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      });
 
-      const [success, returnData] = await roles
-        .connect(invoker)
-        .execTransactionFromModuleReturnData.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-        );
+      const {
+        result: [success, returnData],
+      } = await roles.simulate.execTransactionFromModuleReturnData(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account.address },
+      );
 
-      expect(success).to.be.true;
-      expect(
-        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
-      ).to.equal(100n);
+      assert.equal(success, true);
+      assert.equal(
+        decodeFunctionResult({
+          abi,
+          functionName: "fnThatMaybeReverts",
+          data: returnData,
+        }),
+        100n,
+      );
 
-      await roles
-        .connect(invoker)
-        .execTransactionFromModuleReturnData(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-        );
+      await roles.write.execTransactionFromModuleReturnData(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account },
+      );
 
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(900);
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 900n);
     });
 
     it("returns success=false, revert data, and does not persist consumption on failed inner execution", async () => {
+      const { roles, invoker, testContractAddress, ALLOWANCE_KEY } =
+        await loadFixture(setup);
+
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, true],
+      });
+
       const {
-        roles,
-        invoker,
-        testContract,
-        testContractAddress,
-        ALLOWANCE_KEY,
-      } = await loadFixture(setup);
-
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        true,
-      ]);
-
-      const [success, returnData] = await roles
-        .connect(invoker)
-        .execTransactionFromModuleReturnData.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-        );
-
-      expect(success).to.be.false;
-      expect(returnData).to.equal(
-        testContract.interface.getError("AnError")!.selector,
+        result: [success, returnData],
+      } = await roles.simulate.execTransactionFromModuleReturnData(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account.address },
       );
 
-      await roles
-        .connect(invoker)
-        .execTransactionFromModuleReturnData(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-        );
+      assert.equal(success, false);
+      assert.equal(returnData, toFunctionSelector("AnError()"));
 
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(1000);
+      await roles.write.execTransactionFromModuleReturnData(
+        [testContractAddress, 0n, calldata, 0],
+        { account: invoker.account },
+      );
+
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 1000n);
     });
   });
 
@@ -285,52 +290,53 @@ describe("Execution Mechanics", () => {
     it("succeeds, returns returnData, and persists consumption when using correct role", async () => {
       const { roles, invoker, testContractAddress, ROLE_KEY, ALLOWANCE_KEY } =
         await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      });
 
-      const returnData = await roles
-        .connect(invoker)
-        .execTransactionWithRole.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
+      const { result: returnData } =
+        await roles.simulate.execTransactionWithRole(
+          [testContractAddress, 0n, calldata, 0, ROLE_KEY],
+          { account: invoker.account.address },
         );
 
-      expect(
-        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
-      ).to.equal(100n);
+      assert.equal(
+        decodeFunctionResult({
+          abi,
+          functionName: "fnThatMaybeReverts",
+          data: returnData,
+        }),
+        100n,
+      );
 
-      await roles
-        .connect(invoker)
-        .execTransactionWithRole(testContractAddress, 0, calldata, 0, ROLE_KEY);
+      await roles.write.execTransactionWithRole(
+        [testContractAddress, 0n, calldata, 0, ROLE_KEY],
+        { account: invoker.account },
+      );
 
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(900);
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 900n);
     });
 
     it("reverts when using unassigned role", async () => {
       const { roles, invoker, testContractAddress } = await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
-      const BAD_ROLE = ethers.id("BAD_ROLE");
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      });
+      const BAD_ROLE = keccak256(toBytes("BAD_ROLE"));
 
-      await expect(
-        roles
-          .connect(invoker)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            BAD_ROLE,
-          ),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionWithRole(
+          [testContractAddress, 0n, calldata, 0, BAD_ROLE],
+          { account: invoker.account },
+        ),
+        roles,
+        "NoMembership",
+      );
     });
 
     it("reverts with ModuleTransactionFailed carrying the inner error and does not persist consumption on failed inner execution", async () => {
@@ -342,84 +348,82 @@ describe("Execution Mechanics", () => {
         ROLE_KEY,
         ALLOWANCE_KEY,
       } = await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        true,
-      ]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, true],
+      });
 
-      await expect(
-        roles
-          .connect(invoker)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
-        .withArgs(testContract.interface.encodeErrorResult("AnError"));
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionWithRole(
+          [testContractAddress, 0n, calldata, 0, ROLE_KEY],
+          { account: invoker.account },
+        ),
+        roles,
+        "ModuleTransactionFailed",
+        [encodeErrorResult({ abi: testContract.abi, errorName: "AnError" })],
+      );
 
-      const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
-      expect(balance).to.equal(1000);
+      const [balance] = await roles.read.accruedAllowance([ALLOWANCE_KEY]);
+      assert.equal(balance, 1000n);
     });
 
     it("reverts with empty ModuleTransactionFailed when inner execution reverts without data", async () => {
       const { roles, invoker, testContractAddress, ROLE_KEY } =
         await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("revertWith", ["0x"]);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "revertWith",
+        args: ["0x"],
+      });
 
-      await expect(
-        roles
-          .connect(invoker)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
-        .withArgs("0x");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionWithRole(
+          [testContractAddress, 0n, calldata, 0, ROLE_KEY],
+          { account: invoker.account },
+        ),
+        roles,
+        "ModuleTransactionFailed",
+        ["0x"],
+      );
     });
 
     for (const [what, revertData] of [
       [
         "a custom error with arguments",
-        new Interface([
-          "error AnErrorWithArgs(uint256, string)",
-        ]).encodeErrorResult("AnErrorWithArgs", [
-          42,
-          "a reason longer than one word, to span two",
-        ]),
+        encodeErrorResult({
+          abi: parseAbi(["error AnErrorWithArgs(uint256, string)"]),
+          errorName: "AnErrorWithArgs",
+          args: [42n, "a reason longer than one word, to span two"],
+        }),
       ],
       [
         "a revert string",
-        new Interface(["error Error(string)"]).encodeErrorResult("Error", [
-          "a revert string longer than one 32-byte word",
-        ]),
+        encodeErrorResult({
+          abi: parseAbi(["error Error(string)"]),
+          errorName: "Error",
+          args: ["a revert string longer than one 32-byte word"],
+        }),
       ],
-    ])
+    ] as const)
       it(`carries ${what} in ModuleTransactionFailed verbatim`, async () => {
         const { roles, invoker, testContractAddress, ROLE_KEY } =
           await loadFixture(setup);
-        const calldata = iface.encodeFunctionData("revertWith", [revertData]);
+        const calldata = encodeFunctionData({
+          abi,
+          functionName: "revertWith",
+          args: [revertData],
+        });
 
-        await expect(
-          roles
-            .connect(invoker)
-            .execTransactionWithRole(
-              testContractAddress,
-              0,
-              calldata,
-              0,
-              ROLE_KEY,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
-          .withArgs(revertData);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionWithRole(
+            [testContractAddress, 0n, calldata, 0, ROLE_KEY],
+            { account: invoker.account },
+          ),
+          roles,
+          "ModuleTransactionFailed",
+          [revertData],
+        );
       });
   });
 
@@ -427,16 +431,22 @@ describe("Execution Mechanics", () => {
   // share: a relayer sends what the invoker signs.
   async function signedSetup() {
     const fixture = await setup();
-    const [, , relayer, stranger] = await ethers.getSigners();
+    const [, , relayer, stranger] = await viem.getWalletClients();
     // another role of the invoker that would authorize the same call
-    const OTHER_ROLE = ethers.id("OTHER_ROLE");
-    await fixture.roles.grantRole(fixture.invoker.address, OTHER_ROLE, 0, 0, 0);
-    await fixture.roles.allowTargetPacked(
+    const OTHER_ROLE = keccak256(toBytes("OTHER_ROLE"));
+    await fixture.roles.write.grantRole([
+      fixture.invoker.account.address,
+      OTHER_ROLE,
+      0n,
+      0n,
+      0n,
+    ]);
+    await fixture.roles.write.allowTargetPacked([
       OTHER_ROLE,
       fixture.testContractAddress,
       "0x",
       ExecutionOptions.None,
-    );
+    ]);
     return { ...fixture, relayer, stranger, OTHER_ROLE };
   }
   type Fixture = Awaited<ReturnType<typeof signedSetup>>;
@@ -445,28 +455,43 @@ describe("Execution Mechanics", () => {
    *  signed by `signer`. */
   async function signedTx(
     fixture: Fixture,
-    overrides: Record<string, unknown> = {},
+    overrides: Partial<RoleTx> = {},
     signer: Fixture["invoker"] = fixture.invoker,
   ) {
     const { roles, testContractAddress, ROLE_KEY } = fixture;
     const domain = {
-      chainId: (await ethers.provider.getNetwork()).chainId,
-      verifyingContract: await roles.getAddress(),
+      chainId: await signer.getChainId(),
+      verifyingContract: roles.address,
     };
-    const roleTx = {
+    const roleTx: RoleTx = {
       to: testContractAddress,
-      value: 0,
-      data: iface.encodeFunctionData("fnThatMaybeReverts", [100, false]),
+      value: 0n,
+      data: encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      }),
       operation: 0,
       roleKey: ROLE_KEY,
-      salt: hexlify(randomBytes(32)),
+      salt: toHex(randomBytes(32)),
       deadline: NO_DEADLINE,
       ...overrides,
     };
     return {
       roleTx,
-      hash: TypedDataEncoder.hash(domain, ROLE_TX_TYPES, roleTx),
-      signature: await signer.signTypedData(domain, ROLE_TX_TYPES, roleTx),
+      hash: hashTypedData({
+        domain,
+        types: ROLE_TX_TYPES,
+        primaryType: "RoleTx",
+        message: roleTx,
+      }),
+      signature: await signer.signTypedData({
+        account: signer.account,
+        domain,
+        types: ROLE_TX_TYPES,
+        primaryType: "RoleTx",
+        message: roleTx,
+      }),
     };
   }
 
@@ -476,20 +501,31 @@ describe("Execution Mechanics", () => {
       const { roles, relayer, ALLOWANCE_KEY } = fixture;
       const { roleTx, hash, signature } = await signedTx(fixture);
 
-      const returnData = await roles
-        .connect(relayer)
-        .execTransactionWithRoleSigned.staticCall(roleTx, signature);
-      expect(
-        iface.decodeFunctionResult("fnThatMaybeReverts", returnData)[0],
-      ).to.equal(100n);
+      const { result: returnData } =
+        await roles.simulate.execTransactionWithRoleSigned(
+          [roleTx, signature],
+          { account: relayer.account.address },
+        );
+      assert.equal(
+        decodeFunctionResult({
+          abi,
+          functionName: "fnThatMaybeReverts",
+          data: returnData,
+        }),
+        100n,
+      );
 
-      await expect(
-        roles.connect(relayer).execTransactionWithRoleSigned(roleTx, signature),
-      )
-        .to.emit(roles, "HashExecuted")
-        .withArgs(hash);
-      expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-        900,
+      await viem.assertions.emitWithArgs(
+        roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+          account: relayer.account,
+        }),
+        roles,
+        "HashExecuted",
+        [hash],
+      );
+      assert.equal(
+        (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+        900n,
       );
     });
 
@@ -498,9 +534,13 @@ describe("Execution Mechanics", () => {
       const { roles, relayer } = fixture;
       const { roleTx, signature } = await signedTx(fixture, {}, relayer);
 
-      await expect(
-        roles.connect(relayer).execTransactionWithRoleSigned(roleTx, signature),
-      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+          account: relayer.account,
+        }),
+        roles,
+        "NotAuthorized",
+      );
     });
 
     it("reverts HashAlreadyConsumed when the same signature is replayed", async () => {
@@ -508,31 +548,37 @@ describe("Execution Mechanics", () => {
       const { roles, relayer } = fixture;
       const { roleTx, hash, signature } = await signedTx(fixture);
 
-      await roles
-        .connect(relayer)
-        .execTransactionWithRoleSigned(roleTx, signature);
-      await expect(
-        roles.connect(relayer).execTransactionWithRoleSigned(roleTx, signature),
-      )
-        .to.be.revertedWithCustomError(roles, "HashAlreadyConsumed")
-        .withArgs(hash);
+      await roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+        account: relayer.account,
+      });
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+          account: relayer.account,
+        }),
+        roles,
+        "HashAlreadyConsumed",
+        [hash],
+      );
     });
 
     describe("binds the signature to every field and the instance", () => {
       // the signature no longer recovers to the invoker: NotAuthorized,
       // before any membership or permission is looked at
-      const TAMPERED: Record<string, (f: Fixture) => Record<string, unknown>> =
-        {
-          to: (f) => ({ to: f.avatarAddress }),
-          value: () => ({ value: 1 }),
-          data: () => ({
-            data: iface.encodeFunctionData("fnThatMaybeReverts", [1, false]),
+      const TAMPERED: Record<string, (f: Fixture) => Partial<RoleTx>> = {
+        to: (f) => ({ to: f.avatarAddress }),
+        value: () => ({ value: 1n }),
+        data: () => ({
+          data: encodeFunctionData({
+            abi,
+            functionName: "fnThatMaybeReverts",
+            args: [1n, false],
           }),
-          operation: () => ({ operation: 1 }),
-          roleKey: (f) => ({ roleKey: f.OTHER_ROLE }),
-          salt: () => ({ salt: hexlify(randomBytes(32)) }),
-          deadline: () => ({ deadline: NO_DEADLINE - 1n }),
-        };
+        }),
+        operation: () => ({ operation: 1 }),
+        roleKey: (f) => ({ roleKey: f.OTHER_ROLE }),
+        salt: () => ({ salt: toHex(randomBytes(32)) }),
+        deadline: () => ({ deadline: NO_DEADLINE - 1n }),
+      };
 
       for (const [field, tamper] of Object.entries(TAMPERED))
         it(`rejects a changed ${field}, then executes what was signed`, async () => {
@@ -540,19 +586,22 @@ describe("Execution Mechanics", () => {
           const { roles, invoker, relayer } = fixture;
           const { roleTx, hash, signature } = await signedTx(fixture);
 
-          await expect(
-            roles
-              .connect(relayer)
-              .execTransactionWithRoleSigned(
-                { ...roleTx, ...tamper(fixture) },
-                signature,
-              ),
-          ).to.be.revertedWithCustomError(roles, "NotAuthorized");
+          await viem.assertions.revertWithCustomError(
+            roles.write.execTransactionWithRoleSigned(
+              [{ ...roleTx, ...tamper(fixture) }, signature],
+              { account: relayer.account },
+            ),
+            roles,
+            "NotAuthorized",
+          );
 
-          await roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(roleTx, signature);
-          expect(await roles.consumed(invoker.address, hash)).to.equal(true);
+          await roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+            account: relayer.account,
+          });
+          assert.equal(
+            await roles.read.consumed([invoker.account.address, hash]),
+            true,
+          );
         });
 
       it("rejects a signature for another Roles instance (verifyingContract)", async () => {
@@ -567,24 +616,32 @@ describe("Execution Mechanics", () => {
         } = fixture;
         // the same invoker, membership and permission on a second instance
         const other = await deployRolesMod(
-          owner.address,
+          owner.account.address,
           avatarAddress,
           avatarAddress,
         );
-        await other.grantRole(invoker.address, ROLE_KEY, 0, 0, 0);
-        await other.allowTargetPacked(
+        await other.write.grantRole([
+          invoker.account.address,
+          ROLE_KEY,
+          0n,
+          0n,
+          0n,
+        ]);
+        await other.write.allowTargetPacked([
           ROLE_KEY,
           testContractAddress,
           "0x",
           ExecutionOptions.None,
-        );
+        ]);
         const { roleTx, signature } = await signedTx(fixture);
 
-        await expect(
-          other
-            .connect(relayer)
-            .execTransactionWithRoleSigned(roleTx, signature),
-        ).to.be.revertedWithCustomError(other, "NotAuthorized");
+        await viem.assertions.revertWithCustomError(
+          other.write.execTransactionWithRoleSigned([roleTx, signature], {
+            account: relayer.account,
+          }),
+          other,
+          "NotAuthorized",
+        );
       });
     });
 
@@ -594,24 +651,40 @@ describe("Execution Mechanics", () => {
 
       for (const [data, revertData] of [
         [
-          iface.encodeFunctionData("fnThatMaybeReverts", [100, true]),
-          testContract.interface.encodeErrorResult("AnError"),
+          encodeFunctionData({
+            abi,
+            functionName: "fnThatMaybeReverts",
+            args: [100n, true],
+          }),
+          encodeErrorResult({ abi: testContract.abi, errorName: "AnError" }),
         ],
-        [iface.encodeFunctionData("revertWith", ["0x"]), "0x"],
-      ]) {
+        [
+          encodeFunctionData({
+            abi,
+            functionName: "revertWith",
+            args: ["0x"],
+          }),
+          "0x" as Hex,
+        ],
+      ] as const) {
         const { roleTx, hash, signature } = await signedTx(fixture, { data });
 
-        await expect(
-          roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(roleTx, signature),
-        )
-          .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
-          .withArgs(revertData);
-        expect(await roles.consumed(invoker.address, hash)).to.equal(false);
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+            account: relayer.account,
+          }),
+          roles,
+          "ModuleTransactionFailed",
+          [revertData],
+        );
+        assert.equal(
+          await roles.read.consumed([invoker.account.address, hash]),
+          false,
+        );
       }
-      expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-        1000,
+      assert.equal(
+        (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+        1000n,
       );
     });
 
@@ -624,17 +697,22 @@ describe("Execution Mechanics", () => {
         const late = await signedTx(fixture, { deadline });
 
         await time.setNextBlockTimestamp(deadline);
-        await roles
-          .connect(relayer)
-          .execTransactionWithRoleSigned(onTime.roleTx, onTime.signature);
+        await roles.write.execTransactionWithRoleSigned(
+          [onTime.roleTx, onTime.signature],
+          { account: relayer.account },
+        );
 
         await time.setNextBlockTimestamp(deadline + 1n);
-        await expect(
-          roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(late.roleTx, late.signature),
-        ).to.be.revertedWithCustomError(roles, "SignatureExpired");
-        expect(await roles.consumed(invoker.address, late.hash)).to.equal(
+        await viem.assertions.revertWithCustomError(
+          roles.write.execTransactionWithRoleSigned(
+            [late.roleTx, late.signature],
+            { account: relayer.account },
+          ),
+          roles,
+          "SignatureExpired",
+        );
+        assert.equal(
+          await roles.read.consumed([invoker.account.address, late.hash]),
           false,
         );
       });
@@ -642,23 +720,25 @@ describe("Execution Mechanics", () => {
       it("treats deadline 0 as always expired", async () => {
         const fixture = await loadFixture(signedSetup);
         const { roles, relayer } = fixture;
-        const { roleTx, signature } = await signedTx(fixture, { deadline: 0 });
+        const { roleTx, signature } = await signedTx(fixture, { deadline: 0n });
 
-        await expect(
-          roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(roleTx, signature),
-        ).to.be.revertedWithCustomError(roles, "SignatureExpired");
+        await viem.assertions.revertWithCustomError(
+          roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+            account: relayer.account,
+          }),
+          roles,
+          "SignatureExpired",
+        );
       });
 
       // The signature is checked first (moduleOnlySigned), then the
       // deadline, then the membership.
       const PRECEDENCE: {
         expired: string;
-        error: string;
+        error: "NotAuthorized" | "HashAlreadyConsumed" | "SignatureExpired";
         arrange: (f: Fixture) => Promise<{
           signer: Fixture["invoker"];
-          beforeSending?: (hash: string) => any;
+          beforeSending?: (hash: Hex) => Promise<Hex>;
         }>;
       }[] = [
         {
@@ -671,14 +751,15 @@ describe("Execution Mechanics", () => {
           error: "HashAlreadyConsumed",
           arrange: async ({ roles, invoker }) => ({
             signer: invoker,
-            beforeSending: (hash) => roles.connect(invoker).invalidate(hash),
+            beforeSending: (hash) =>
+              roles.write.invalidate([hash], { account: invoker.account }),
           }),
         },
         {
           expired: "signed by an enabled module without a membership",
           error: "SignatureExpired",
           arrange: async ({ roles, stranger }) => {
-            await roles.enableModule(stranger.address);
+            await roles.write.enableModule([stranger.account.address]);
             return { signer: stranger };
           },
         },
@@ -691,16 +772,18 @@ describe("Execution Mechanics", () => {
           const { signer, beforeSending } = await arrange(fixture);
           const { roleTx, hash, signature } = await signedTx(
             fixture,
-            { deadline: 0 },
+            { deadline: 0n },
             signer,
           );
           await beforeSending?.(hash);
 
-          await expect(
-            roles
-              .connect(relayer)
-              .execTransactionWithRoleSigned(roleTx, signature),
-          ).to.be.revertedWithCustomError(roles, error);
+          await viem.assertions.revertWithCustomError(
+            roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+              account: relayer.account,
+            }),
+            roles,
+            error,
+          );
         });
     });
 
@@ -710,20 +793,28 @@ describe("Execution Mechanics", () => {
         const { roles, invoker, relayer, ALLOWANCE_KEY } = fixture;
         const { roleTx, hash, signature } = await signedTx(fixture);
 
-        await expect(roles.connect(invoker).invalidate(hash))
-          .to.emit(roles, "HashInvalidated")
-          .withArgs(hash);
-        expect(await roles.consumed(invoker.address, hash)).to.equal(true);
+        await viem.assertions.emitWithArgs(
+          roles.write.invalidate([hash], { account: invoker.account }),
+          roles,
+          "HashInvalidated",
+          [hash],
+        );
+        assert.equal(
+          await roles.read.consumed([invoker.account.address, hash]),
+          true,
+        );
 
-        await expect(
-          roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(roleTx, signature),
-        )
-          .to.be.revertedWithCustomError(roles, "HashAlreadyConsumed")
-          .withArgs(hash);
-        expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-          1000,
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+            account: relayer.account,
+          }),
+          roles,
+          "HashAlreadyConsumed",
+          [hash],
+        );
+        assert.equal(
+          (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+          1000n,
         );
       });
 
@@ -733,55 +824,76 @@ describe("Execution Mechanics", () => {
         const { roleTx, hash, signature } = await signedTx(fixture);
 
         // anyone may call it (the relayer is not a module), for itself only
-        await roles.connect(relayer).invalidate(hash);
-        expect(await roles.consumed(relayer.address, hash)).to.equal(true);
-        expect(await roles.consumed(invoker.address, hash)).to.equal(false);
+        await roles.write.invalidate([hash], { account: relayer.account });
+        assert.equal(
+          await roles.read.consumed([relayer.account.address, hash]),
+          true,
+        );
+        assert.equal(
+          await roles.read.consumed([invoker.account.address, hash]),
+          false,
+        );
 
-        await roles
-          .connect(relayer)
-          .execTransactionWithRoleSigned(roleTx, signature);
-        expect(await roles.consumed(invoker.address, hash)).to.equal(true);
-        expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-          900,
+        await roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+          account: relayer.account,
+        });
+        assert.equal(
+          await roles.read.consumed([invoker.account.address, hash]),
+          true,
+        );
+        assert.equal(
+          (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+          900n,
         );
       });
 
       it("cancels a refused signature that would pass later", async () => {
         const fixture = await loadFixture(signedSetup);
         const { roles, owner, invoker, relayer, ALLOWANCE_KEY } = fixture;
-        await roles.connect(owner).setAllowance(ALLOWANCE_KEY, 50, 0, 0, 0, 0);
+        await roles.write.setAllowance([ALLOWANCE_KEY, 50n, 0n, 0n, 0n, 0n], {
+          account: owner.account,
+        });
         const cancelled = await signedTx(fixture);
         const kept = await signedTx(fixture);
 
         // refused (over the allowance): the digests stay unconsumed
         for (const { roleTx, hash, signature } of [cancelled, kept]) {
-          await expect(
-            roles
-              .connect(relayer)
-              .execTransactionWithRoleSigned(roleTx, signature),
-          ).to.be.revertedWithCustomError(roles, "ConditionViolation");
-          expect(await roles.consumed(invoker.address, hash)).to.equal(false);
+          await viem.assertions.revertWithCustomError(
+            roles.write.execTransactionWithRoleSigned([roleTx, signature], {
+              account: relayer.account,
+            }),
+            roles,
+            "ConditionViolation",
+          );
+          assert.equal(
+            await roles.read.consumed([invoker.account.address, hash]),
+            false,
+          );
         }
 
-        await roles.connect(invoker).invalidate(cancelled.hash);
-        await roles
-          .connect(owner)
-          .setAllowance(ALLOWANCE_KEY, 1000, 0, 0, 0, 0);
+        await roles.write.invalidate([cancelled.hash], {
+          account: invoker.account,
+        });
+        await roles.write.setAllowance([ALLOWANCE_KEY, 1000n, 0n, 0n, 0n, 0n], {
+          account: owner.account,
+        });
 
-        await expect(
-          roles
-            .connect(relayer)
-            .execTransactionWithRoleSigned(
-              cancelled.roleTx,
-              cancelled.signature,
-            ),
-        ).to.be.revertedWithCustomError(roles, "HashAlreadyConsumed");
+        await viem.assertions.revertWithCustomError(
+          roles.write.execTransactionWithRoleSigned(
+            [cancelled.roleTx, cancelled.signature],
+            { account: relayer.account },
+          ),
+          roles,
+          "HashAlreadyConsumed",
+        );
         // the one not invalidated now passes
-        await roles
-          .connect(relayer)
-          .execTransactionWithRoleSigned(kept.roleTx, kept.signature);
-        expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
-          900,
+        await roles.write.execTransactionWithRoleSigned(
+          [kept.roleTx, kept.signature],
+          { account: relayer.account },
+        );
+        assert.equal(
+          (await roles.read.accruedAllowance([ALLOWANCE_KEY]))[0],
+          900n,
         );
       });
     });
@@ -793,7 +905,7 @@ describe("Execution Mechanics", () => {
     async function send(
       fixture: Fixture,
       entrypoint: Entrypoint,
-      data: string,
+      data: Hex,
       value = 0n,
       operation = 0,
     ) {
@@ -802,7 +914,7 @@ describe("Execution Mechanics", () => {
       const sender =
         entrypoint === "execTransactionWithRoleSigned" ? relayer : invoker;
       return sender.sendTransaction({
-        to: await roles.getAddress(),
+        to: roles.address,
         data: await encodeEntrypoint(
           roles,
           entrypoint,
@@ -823,12 +935,20 @@ describe("Execution Mechanics", () => {
         const fixture = await loadFixture(signedSetup);
         const { testContract, testContractAddress } = fixture;
 
-        await expect(
-          send(fixture, entrypoint, iface.encodeFunctionData("anything"), 7n),
-        )
-          .to.emit(testContract, "Invoked")
-          .withArgs(iface.getFunction("anything")!.selector);
-        expect(await ethers.provider.getBalance(testContractAddress)).to.equal(
+        await viem.assertions.emitWithArgs(
+          send(
+            fixture,
+            entrypoint,
+            encodeFunctionData({ abi, functionName: "anything" }),
+            7n,
+          ),
+          testContract,
+          "Invoked",
+          [toFunctionSelector("anything()")],
+        );
+        const publicClient = await viem.getPublicClient();
+        assert.equal(
+          await publicClient.getBalance({ address: testContractAddress }),
           7n,
         );
       });
@@ -838,41 +958,54 @@ describe("Execution Mechanics", () => {
         const { testContract, avatarAddress } = fixture;
 
         // the target's code runs in the avatar: the event comes from it
-        await expect(
-          send(
-            fixture,
-            entrypoint,
-            iface.encodeFunctionData("anything"),
-            0n,
-            1,
-          ),
-        )
-          .to.emit(testContract.attach(avatarAddress), "Invoked")
-          .and.not.to.emit(testContract, "Invoked");
+        const hash = await send(
+          fixture,
+          entrypoint,
+          encodeFunctionData({ abi, functionName: "anything" }),
+          0n,
+          1,
+        );
+        const avatarTestContract = await viem.getContractAt(
+          "TestContract",
+          avatarAddress,
+        );
+        await viem.assertions.emit(hash, avatarTestContract, "Invoked");
+        await assertNotEmitted(viem, hash, testContract, "Invoked");
       });
 
       it(`${entrypoint} keeps a membership's last use when the call fails`, async () => {
         const fixture = await loadFixture(signedSetup);
         const { roles, invoker, ROLE_KEY } = fixture;
-        await roles.grantRole(invoker.address, ROLE_KEY, 0, 0, 1);
-        const failing = iface.encodeFunctionData("fnThatMaybeReverts", [
-          100,
-          true,
+        await roles.write.grantRole([
+          invoker.account.address,
+          ROLE_KEY,
+          0n,
+          0n,
+          1n,
         ]);
+        const failing = encodeFunctionData({
+          abi,
+          functionName: "fnThatMaybeReverts",
+          args: [100n, true],
+        });
 
-        if (entrypoint.startsWith("execTransactionFromModule"))
+        if (entrypoint.startsWith("execTransactionFromModule")) {
           // returns false: nothing to roll back, nothing settled
-          await expect(send(fixture, entrypoint, failing))
-            .to.not.emit(roles, "RevokeRole")
-            .and.not.to.emit(roles, "UpdateRole");
-        else
-          await expect(
+          const hash = await send(fixture, entrypoint, failing);
+          await assertNotEmitted(viem, hash, roles, "RevokeRole");
+          await assertNotEmitted(viem, hash, roles, "UpdateRole");
+        } else {
+          await viem.assertions.revertWithCustomError(
             send(fixture, entrypoint, failing),
-          ).to.be.revertedWithCustomError(roles, "ModuleTransactionFailed");
+            roles,
+            "ModuleTransactionFailed",
+          );
+        }
 
-        expect(
-          await roles.membershipOf(invoker.address, ROLE_KEY),
-        ).to.deep.equal([true, 0n, maxUint64, 1n]);
+        assert.deepEqual(
+          await roles.read.membershipOf([invoker.account.address, ROLE_KEY]),
+          [true, 0n, maxUint64, 1n],
+        );
       });
     }
   });
@@ -880,27 +1013,29 @@ describe("Execution Mechanics", () => {
   describe("default role", () => {
     it("reverts NoDefaultRole on both IAvatar entrypoints when none is set", async () => {
       const { roles, invoker, testContractAddress } = await loadFixture(setup);
-      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
-        100,
-        false,
-      ]);
-      await roles.setDefaultRole(invoker.address, ethers.ZeroHash);
+      const calldata = encodeFunctionData({
+        abi,
+        functionName: "fnThatMaybeReverts",
+        args: [100n, false],
+      });
+      await roles.write.setDefaultRole([invoker.account.address, zeroHash]);
 
-      await expect(
-        roles
-          .connect(invoker)
-          .execTransactionFromModule(testContractAddress, 0, calldata, 0),
-      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
-      await expect(
-        roles
-          .connect(invoker)
-          .execTransactionFromModuleReturnData(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-          ),
-      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, calldata, 0],
+          { account: invoker.account },
+        ),
+        roles,
+        "NoDefaultRole",
+      );
+      await viem.assertions.revertWithCustomError(
+        roles.write.execTransactionFromModuleReturnData(
+          [testContractAddress, 0n, calldata, 0],
+          { account: invoker.account },
+        ),
+        roles,
+        "NoDefaultRole",
+      );
     });
   });
 });

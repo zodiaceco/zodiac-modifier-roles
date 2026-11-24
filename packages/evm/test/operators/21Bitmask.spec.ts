@@ -1,6 +1,11 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, concat } from "ethers";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  concat,
+  encodeAbiParameters,
+  parseAbiParameters,
+  type Hex,
+} from "viem";
 
 import { network } from "hardhat";
 
@@ -14,14 +19,8 @@ import {
   packConditions,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 // Helper: compValue = [shift (2 bytes)][mask (N bytes)][expected (N bytes)]
-function encodeCompValue(
-  shift: number,
-  mask: string,
-  expected: string,
-): string {
+function encodeCompValue(shift: number, mask: string, expected: string): Hex {
   if (mask.length !== expected.length) {
     throw new Error("mask and expected must have same length");
   }
@@ -30,7 +29,7 @@ function encodeCompValue(
 }
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract, setupFn } = createSetup(connection);
 const setupDynamicParam = setupFn("function fn(bytes)");
@@ -42,7 +41,8 @@ describe("Operator - Bitmask", () => {
 
   describe("parsing and bounds", () => {
     it("extracts shift and derives mask length correctly", async () => {
-      const { allowFunction, invoke } = await loadFixture(setupDynamicParam);
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupDynamicParam);
 
       // shift=3, mask=2 bytes -> reads bytes[3:5]
       await allowFunction(
@@ -61,10 +61,14 @@ describe("Operator - Bitmask", () => {
       );
 
       // bytes[3:5] = 0xaabb -> passes
-      await expect(invoke("0x000000aabb")).to.not.be.revert(ethers);
+      await invoke("0x000000aabb");
 
       // bytes[3:5] = 0xccdd -> fails
-      await expect(invoke("0x000000ccdd")).to.be.revert(ethers);
+      await viem.assertions.revertWithCustomError(
+        invoke("0x000000ccdd"),
+        roles,
+        "ConditionViolation",
+      );
     });
 
     it("fails with BitmaskOverflow when shift + length exceeds data size", async () => {
@@ -88,16 +92,19 @@ describe("Operator - Bitmask", () => {
       );
 
       // 33 bytes -> passes
-      await expect(invoke("0x" + "ab".repeat(33))).to.not.be.revert(ethers);
+      await invoke("0x" + "ab".repeat(33));
 
       // 32 bytes -> fails (crosses into second word but data only has one word)
-      await expect(invoke("0x" + "ab".repeat(32)))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskOverflow, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x" + "ab".repeat(32)),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskOverflow, 1n, anyValue],
+      );
     });
 
     it("fails with CalldataOverflow when declared dynamic content is truncated", async () => {
-      const { roles, member, testContractAddress, fn, allowFunction } =
+      const { roles, member, testContractAddress, selector, allowFunction } =
         await loadFixture(setupDynamicParam);
 
       await allowFunction(
@@ -116,18 +123,20 @@ describe("Operator - Bitmask", () => {
       );
 
       const malformedCall = concat([
-        fn.selector,
-        abiCoder.encode(["uint256", "uint256"], [32, 32]),
-        `0x${"11".repeat(31)}`,
+        selector,
+        encodeAbiParameters(parseAbiParameters("uint256, uint256"), [32n, 32n]),
+        `0x${"11".repeat(31)}` as Hex,
       ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, malformedCall, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.CalldataOverflow, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, malformedCall, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, 1n, anyValue],
+      );
     });
   });
 
@@ -150,7 +159,7 @@ describe("Operator - Bitmask", () => {
         ExecutionOptions.None,
       );
 
-      await expect(invoke("0xaabb")).to.not.be.revert(ethers);
+      await invoke("0xaabb");
     });
 
     it("fails when (data & mask) != expected", async () => {
@@ -172,9 +181,12 @@ describe("Operator - Bitmask", () => {
         ExecutionOptions.None,
       );
 
-      await expect(invoke("0xaacc"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xaacc"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, 1n, anyValue],
+      );
     });
 
     it("ignores bits outside the mask and rinses trailing garbage", async () => {
@@ -198,15 +210,18 @@ describe("Operator - Bitmask", () => {
       );
 
       // 0xab & 0xf0 = 0xa0 -> passes (low nibble 0xb ignored)
-      await expect(invoke("0xab7777")).to.not.be.revert(ethers);
+      await invoke("0xab7777");
 
       // 0xaf & 0xf0 = 0xa0 -> passes (low nibble 0xf ignored)
-      await expect(invoke("0xaf8888888888")).to.not.be.revert(ethers);
+      await invoke("0xaf8888888888");
 
       // 0xbb & 0xf0 = 0xb0 != 0xa0 -> fails
-      await expect(invoke("0xbb"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xbb"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, 1n, anyValue],
+      );
     });
   });
 
@@ -230,7 +245,7 @@ describe("Operator - Bitmask", () => {
         ExecutionOptions.None,
       );
 
-      await expect(invoke("0x" + "ab".repeat(64))).to.not.be.revert(ethers);
+      await invoke("0x" + "ab".repeat(64));
     });
 
     it("fails on mismatch in any chunk (first or subsequent)", async () => {
@@ -254,14 +269,20 @@ describe("Operator - Bitmask", () => {
       );
 
       // First byte wrong (first chunk mismatch)
-      await expect(invoke("0xcd" + "ab".repeat(63)))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcd" + "ab".repeat(63)),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, 1n, anyValue],
+      );
 
       // Last byte wrong (second chunk mismatch)
-      await expect(invoke("0x" + "ab".repeat(63) + "cd"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x" + "ab".repeat(63) + "cd"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, 1n, anyValue],
+      );
     });
   });
 
@@ -287,12 +308,15 @@ describe("Operator - Bitmask", () => {
       );
 
       // byte[5] = 0xcd -> passes
-      await expect(invoke("0x0000000000cd4444444444")).to.not.be.revert(ethers);
+      await invoke("0x0000000000cd4444444444");
 
       // byte[5] = 0xab -> fails
-      await expect(invoke("0x0000000000ab"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x0000000000ab"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, 1n, anyValue],
+      );
     });
   });
 
@@ -315,13 +339,16 @@ describe("Operator - Bitmask", () => {
         }),
       );
 
-      await expect(invoke("0xccdd"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xccdd"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.BitmaskNotAllowed,
-          1, // Bitmask node at BFS index 1
+          1n, // Bitmask node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -345,13 +372,16 @@ describe("Operator - Bitmask", () => {
       // 50 bytes of data, padded to 64 bytes
       const fiftyBytes =
         "0xccdd000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
-      await expect(invoke(fiftyBytes))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(fiftyBytes),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.BitmaskNotAllowed,
           anyValue,
-          36, // calldataOffset: dynamic param at byte 36 (4 + 32)
-        );
+          36n, // calldataOffset: dynamic param at byte 36 (4 + 32)
+        ],
+      );
     });
   });
 
@@ -366,7 +396,7 @@ describe("Operator - Bitmask", () => {
         Encoding.AbiEncoded,
         Encoding.EtherValue,
       ]) {
-        await expect(
+        await viem.assertions.revertWithCustomError(
           packConditions(roles, [
             {
               parent: 0,
@@ -375,7 +405,9 @@ describe("Operator - Bitmask", () => {
               compValue: encodeCompValue(0, "ff", "ab"),
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableParameterType");
+          evaluator,
+          "UnsuitableParameterType",
+        );
       }
     });
 
@@ -383,7 +415,7 @@ describe("Operator - Bitmask", () => {
       it("reverts UnsuitableCompValue when compValue is less than 4 bytes", async () => {
         const { roles, evaluator } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           packConditions(roles, [
             {
               parent: 0,
@@ -392,13 +424,15 @@ describe("Operator - Bitmask", () => {
               compValue: "0x0000", // 2 bytes (only shift, no mask/expected)
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+          evaluator,
+          "UnsuitableCompValue",
+        );
       });
 
       it("reverts UnsuitableCompValue when (length - 2) is odd", async () => {
         const { roles, evaluator } = await loadFixture(setupTestContract);
 
-        await expect(
+        await viem.assertions.revertWithCustomError(
           packConditions(roles, [
             {
               parent: 0,
@@ -407,14 +441,16 @@ describe("Operator - Bitmask", () => {
               compValue: "0x0000aabbcc", // 5 bytes: 2 shift + 3 (odd, can't split evenly)
             },
           ]),
-        ).to.be.revertedWithCustomError(evaluator, "UnsuitableCompValue");
+          evaluator,
+          "UnsuitableCompValue",
+        );
       });
     });
 
     it("reverts LeafNodeCannotHaveChildren when Bitmask has children", async () => {
       const { roles, evaluator } = await loadFixture(setupTestContract);
 
-      await expect(
+      await viem.assertions.revertWithCustomError(
         packConditions(roles, [
           {
             parent: 0,
@@ -429,7 +465,9 @@ describe("Operator - Bitmask", () => {
             compValue: "0x",
           },
         ]),
-      ).to.be.revertedWithCustomError(evaluator, "LeafNodeCannotHaveChildren");
+        evaluator,
+        "LeafNodeCannotHaveChildren",
+      );
     });
   });
 });

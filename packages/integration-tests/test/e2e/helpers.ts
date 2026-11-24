@@ -3,31 +3,35 @@
  * the Safe's owner, MultiSend batches, the condition enums they use and a
  * seeded PRNG.
  */
+import { randomBytes } from "node:crypto"
 import {
-  AbiCoder,
-  Interface,
-  ZeroAddress,
-  ZeroHash,
+  type Address,
+  type Hex,
+  type WalletClient,
   concat,
-  hexlify,
-  randomBytes,
-} from "ethers"
-import type { Signer } from "ethers"
-import type { HardhatEthers } from "@nomicfoundation/hardhat-ethers/types"
+  encodeAbiParameters,
+  encodeFunctionData,
+  parseAbi,
+  toFunctionSelector,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem"
+import type { NetworkConnection } from "hardhat/types/network"
+import "@nomicfoundation/hardhat-viem"
 
-import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
+import { abi as abiSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 
-import { encodeMultisendPayload } from "../../../evm/test/utils.js"
+import {
+  type RolesContract,
+  encodeMultisendPayload,
+} from "../../../evm/test/utils.js"
 
 export { NO_DEADLINE, ROLE_TX_TYPES } from "../../../evm/test/roleTx.js"
 export type { RoleTx } from "../../../evm/test/roleTx.js"
 
-const abi = AbiCoder.defaultAbiCoder()
-
-export const multiSendIface = new Interface([
-  "function multiSend(bytes transactions)",
-])
+export const multiSendAbi = parseAbi(["function multiSend(bytes transactions)"])
 
 /** The members of Roles' enums that these specs write conditions with. */
 export const Encoding = { EtherValue: 6 } as const
@@ -39,103 +43,114 @@ export const ExecutionOptions = {
   Both: 3,
 } as const
 
-export const randomKey = () => hexlify(randomBytes(32))
+export const randomKey = (): Hex => toHex(randomBytes(32))
 
 /** Roles, with its own Evaluator, avatar and target `avatar`. */
 export async function deployRoles(
-  ethers: HardhatEthers,
-  owner: string,
-  avatar: string
-) {
-  const integrity = await (
-    await ethers.getContractFactory("Integrity")
-  ).deploy()
-  const evaluator = await (
-    await ethers.getContractFactory("Evaluator", {
-      libraries: { Integrity: await integrity.getAddress() },
-    })
-  ).deploy()
-  return (await ethers.getContractFactory("Roles")).deploy(
+  viem: NetworkConnection["viem"],
+  owner: Address,
+  avatar: Address
+): Promise<RolesContract> {
+  const integrity = await viem.deployContract("Integrity")
+  const evaluator = await viem.deployContract("Evaluator", [], {
+    libraries: { Integrity: integrity.address },
+  })
+  return viem.deployContract("Roles", [
     owner,
     avatar,
     avatar,
-    await evaluator.getAddress()
-  )
+    evaluator.address,
+  ])
 }
 
-/** `owner` (threshold 1) executes a call from the Safe, and waits for it. */
+/** `owner` (threshold 1) executes a call from the Safe, and returns its tx hash. */
 export async function execSafe(
-  owner: Signer,
-  safe: string,
-  to: string,
-  data: string,
+  owner: WalletClient,
+  safe: Address,
+  to: Address,
+  data: Hex,
   operation = 0,
   value = 0n
 ) {
   const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
+    encodeAbiParameters([{ type: "address" }], [owner.account!.address]),
+    zeroHash,
     "0x01",
   ])
-  const tx = await owner.sendTransaction({
+  return owner.sendTransaction({
+    account: owner.account!,
+    chain: owner.chain,
     to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      to,
-      value,
-      data,
-      operation,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      approval,
-    ]),
+    data: encodeFunctionData({
+      abi: abiSafe,
+      functionName: "execTransaction",
+      args: [
+        to,
+        value,
+        data,
+        operation,
+        0n,
+        0n,
+        0n,
+        zeroAddress,
+        zeroAddress,
+        approval,
+      ],
+    }),
   })
-  return tx.wait()
 }
 
 /** A Safe owned by `owner` with a Roles Modifier enabled as its module. */
-export async function safeWithRoles(ethers: HardhatEthers, owner: Signer) {
+export async function safeWithRoles(
+  viem: NetworkConnection["viem"],
+  owner: WalletClient
+) {
   const safe = await deploySafe(
     {
-      owners: [await owner.getAddress()],
+      owners: [owner.account!.address],
       threshold: 1,
       creationNonce: BigInt(randomKey()),
     },
-    owner as any
+    owner
   )
-  const roles = await deployRoles(ethers, await owner.getAddress(), safe)
+  const roles = await deployRoles(viem, owner.account!.address, safe)
   await execSafe(
     owner,
     safe,
     safe,
-    ifaceSafe.encodeFunctionData("enableModule", [await roles.getAddress()])
+    encodeFunctionData({
+      abi: abiSafe,
+      functionName: "enableModule",
+      args: [roles.address],
+    })
   )
   return { safe, roles }
 }
 
 /** MultiSend, with its unwrapper registered on `roles` (connected to its
  *  owner). Returns MultiSend's address. */
-export async function deployMultiSend(ethers: HardhatEthers, roles: any) {
-  const multiSend = await (
-    await ethers.getContractFactory("MultiSend")
-  ).deploy()
-  const unwrapper = await (
-    await ethers.getContractFactory("MultiSendUnwrapper")
-  ).deploy()
-  await roles.setTransactionUnwrapper(
-    await multiSend.getAddress(),
-    multiSendIface.getFunction("multiSend")!.selector,
-    await unwrapper.getAddress()
+export async function deployMultiSend(
+  viem: NetworkConnection["viem"],
+  roles: RolesContract,
+  owner?: WalletClient
+): Promise<Address> {
+  const multiSend = await viem.deployContract("MultiSend")
+  const unwrapper = await viem.deployContract("MultiSendUnwrapper")
+  await roles.write.setTransactionUnwrapper(
+    [
+      multiSend.address,
+      toFunctionSelector("multiSend(bytes)"),
+      unwrapper.address,
+    ],
+    owner ? { account: owner.account } : undefined
   )
-  return multiSend.getAddress()
+  return multiSend.address
 }
 
 export type MultiSendTx = {
-  to: string
+  to: Address
   value: bigint
-  data?: string
+  data?: Hex
   operation?: number
 }
 
@@ -151,7 +166,11 @@ export const packMultiSend = (txs: MultiSendTx[]) =>
   )
 
 export const encodeMultiSend = (txs: MultiSendTx[]) =>
-  multiSendIface.encodeFunctionData("multiSend", [packMultiSend(txs)])
+  encodeFunctionData({
+    abi: multiSendAbi,
+    functionName: "multiSend",
+    args: [packMultiSend(txs)],
+  })
 
 /** A seeded PRNG (an LCG), so a failing fuzz run is replayed by its seed. */
 export function prng(seed: number) {
