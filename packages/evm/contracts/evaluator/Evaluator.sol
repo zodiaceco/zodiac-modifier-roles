@@ -7,7 +7,6 @@ pragma solidity >=0.8.17 <0.9.0;
 import {Operation} from "@gnosis-guild/zodiac-core/contracts/core/Operation.sol";
 
 import "../IEvaluator.sol";
-import "../ImmutableStorage.sol";
 
 import "./AbiLocation.sol";
 import "./Engine.sol";
@@ -38,8 +37,9 @@ contract Evaluator is IEvaluator, IEvaluatorError {
         Operation operation,
         Consumption[] memory consumptions
     ) external view override returns (Result memory) {
-        address pointer = address(uint160(scopeConfig));
-        bytes memory buffer = ImmutableStorage.load(pointer);
+        bytes memory buffer = _extcodecopy(address(uint160(scopeConfig)));
+
+        // Empty buffer: no payload restrictions (pass-through)
         if (buffer.length == 0) {
             return Result(0, 0, 0, consumptions);
         }
@@ -71,5 +71,28 @@ contract Evaluator is IEvaluator, IEvaluatorError {
     ) external pure override returns (bytes memory buffer) {
         Integrity.enforce(conditions);
         return Packer.pack(conditions);
+    }
+
+    /// @dev Reads the packed condition buffer stored as runtime code at
+    ///      `pointer` (SSTORE2, written by Core's `ExtCode`). Reverts with
+    ///      `PointerWithoutCode` if `pointer` has no code; returns empty bytes
+    ///      for an unrestricted scope. Does not validate the stored bytes.
+    function _extcodecopy(
+        address pointer
+    ) private view returns (bytes memory buffer) {
+        uint256 codeSize = pointer.code.length;
+        if (codeSize == 0) revert PointerWithoutCode();
+
+        assembly {
+            let size := sub(codeSize, 1)
+
+            buffer := mload(0x40)
+            mstore(buffer, size)
+            // keep the free memory pointer word-aligned
+            mstore(0x40, add(add(buffer, 0x20), and(add(size, 31), not(31))))
+
+            // skip the 0x00 prefix
+            extcodecopy(pointer, add(buffer, 0x20), 0x01, size)
+        }
     }
 }

@@ -143,6 +143,7 @@ and that `rawTree` is the expected tree for them.
 
 - `Model.lean` matches the Solidity: a hand transcription, tested as above.
 - The EVM semantics of the memory instructions used, as written in `Model.lean`.
-- `ImmutableStorage` returns the bytes it stored (the buffer is written with
-  `store` and read back with `extcodecopy` between pack and unpack).
+- The `ExtCode` pointer returns the bytes it stored (the buffer is written
+  with `ExtCode.write` and read back with `extcodecopy` between pack and
+  unpack).
 - The Lean 4.35 kernel.
