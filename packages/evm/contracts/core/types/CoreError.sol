@@ -12,8 +12,12 @@ interface ICoreError {
                             EXECUTION ERRORS
     //////////////////////////////////////////////////////////////*/
 
-    /// Sender is allowed to make this call, but the internal transaction failed
-    error ModuleTransactionFailed();
+    /// Sender is allowed to make this call, but the internal transaction
+    /// failed. Carries the data it reverted with.
+    error ModuleTransactionFailed(bytes returnData);
+
+    /// The signed transaction's deadline has passed
+    error SignatureExpired();
 
     /// Reentrant call detected
     error Reentrancy();
@@ -21,6 +25,9 @@ interface ICoreError {
     /*//////////////////////////////////////////////////////////////
                           AUTHORIZATION ERRORS
     //////////////////////////////////////////////////////////////*/
+
+    /// Sender has no default role set
+    error NoDefaultRole();
 
     /// Sender is not a member of the role
     error NoMembership();

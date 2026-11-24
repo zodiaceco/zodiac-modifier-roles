@@ -19,6 +19,14 @@ enum ExecutionOptions {
     Both
 }
 
+/**
+ * @dev `members` packs each membership into one word:
+ *
+ * ┌────────────────┬────────────────┬─────────────────────────────────┐
+ * │ startTimestamp │  endTimestamp  │            usesLeft             │
+ * │    64 bits     │    64 bits     │            128 bits             │
+ * └────────────────┴────────────────┴─────────────────────────────────┘
+ */
 struct Role {
     mapping(address => uint256) members;
     mapping(address => Clearance) clearance;

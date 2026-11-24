@@ -179,6 +179,7 @@ describe("Roles composition, end to end", () => {
       operation: 0,
       roleKey: roleB,
       salt,
+      deadline: 2n ** 64n - 1n,
     }
     const digest = TypedDataEncoder.hash(
       {
@@ -193,6 +194,7 @@ describe("Roles composition, end to end", () => {
           { name: "operation", type: "uint8" },
           { name: "roleKey", type: "bytes32" },
           { name: "salt", type: "bytes32" },
+          { name: "deadline", type: "uint64" },
         ],
       },
       message
@@ -206,15 +208,7 @@ describe("Roles composition, end to end", () => {
     )
 
     // Anyone relays it with M's contract signature (address, empty payload).
-    await R.connect(relayer).execTransactionWithSignature(
-      message.to,
-      message.value,
-      message.data,
-      message.operation,
-      message.roleKey,
-      message.salt,
-      safeM
-    )
+    await R.connect(relayer).execTransactionWithRoleSigned(message, safeM)
     expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
   })
 
@@ -354,6 +348,6 @@ describe("Roles composition, end to end", () => {
       roleP
     )
     // revoked by the call: settlement reads the membership after execution
-    expect(await R.isMember(roleP, memberAddr)).to.equal(false)
+    expect((await R.membershipOf(memberAddr, roleP)).active).to.equal(false)
   })
 })

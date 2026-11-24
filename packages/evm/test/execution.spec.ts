@@ -12,7 +12,7 @@ import { createSetup } from "./setup.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
-const { loadFixture } = networkHelpers;
+const { loadFixture, time } = networkHelpers;
 const { deployRolesMod } = createSetup(connection);
 
 const iface = new Interface([
@@ -33,7 +33,7 @@ const iface = new Interface([
  *   are committed on success and discarded on failure.
  *
  * Covers `execTransactionFromModule`, `execTransactionFromModuleReturnData`,
- * `execTransactionWithRole`, and `execTransactionWithSignature`.
+ * `execTransactionWithRole`, and `execTransactionWithRoleSigned`.
  */
 
 describe("Execution Mechanics", () => {
@@ -317,7 +317,7 @@ describe("Execution Mechanics", () => {
       ).to.be.revertedWithCustomError(roles, "NoMembership");
     });
 
-    it("reverts with the inner error and does not persist consumption on failed inner execution", async () => {
+    it("reverts with ModuleTransactionFailed carrying the inner error and does not persist consumption on failed inner execution", async () => {
       const {
         roles,
         invoker,
@@ -341,13 +341,15 @@ describe("Execution Mechanics", () => {
             0,
             ROLE_KEY,
           ),
-      ).to.be.revertedWithCustomError(testContract, "AnError");
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs(testContract.interface.encodeErrorResult("AnError"));
 
       const { balance } = await roles.accruedAllowance(ALLOWANCE_KEY);
       expect(balance).to.equal(1000);
     });
 
-    it("reverts with ModuleTransactionFailed when inner execution reverts without data", async () => {
+    it("reverts with empty ModuleTransactionFailed when inner execution reverts without data", async () => {
       const { roles, invoker, testContractAddress, ROLE_KEY } =
         await loadFixture(setup);
       const calldata = iface.encodeFunctionData("fnThatRevertsEmpty");
@@ -362,11 +364,15 @@ describe("Execution Mechanics", () => {
             0,
             ROLE_KEY,
           ),
-      ).to.be.revertedWithCustomError(roles, "ModuleTransactionFailed");
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs("0x");
     });
   });
 
-  describe("execTransactionWithSignature", () => {
+  describe("execTransactionWithRoleSigned", () => {
+    const NO_DEADLINE = 2n ** 64n - 1n;
+
     async function signedSetup() {
       const fixture = await setup();
       const [, , relayer] = await ethers.getSigners();
@@ -386,6 +392,7 @@ describe("Execution Mechanics", () => {
         { name: "operation", type: "uint8" },
         { name: "roleKey", type: "bytes32" },
         { name: "salt", type: "bytes32" },
+        { name: "deadline", type: "uint64" },
       ],
     };
 
@@ -411,6 +418,7 @@ describe("Execution Mechanics", () => {
         operation: 0,
         roleKey: ROLE_KEY,
         salt,
+        deadline: NO_DEADLINE,
       };
 
       const domain = await buildDomain(roles);
@@ -423,13 +431,16 @@ describe("Execution Mechanics", () => {
 
       const returnData = await roles
         .connect(relayer)
-        .execTransactionWithSignature.staticCall(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          salt,
+        .execTransactionWithRoleSigned.staticCall(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
           signature,
         );
       expect(
@@ -437,17 +448,18 @@ describe("Execution Mechanics", () => {
       ).to.equal(100n);
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       )
         .to.emit(roles, "HashExecuted")
         .withArgs(expectedHash);
@@ -477,21 +489,23 @@ describe("Execution Mechanics", () => {
           operation: 0,
           roleKey: ROLE_KEY,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
     });
 
@@ -515,33 +529,36 @@ describe("Execution Mechanics", () => {
           operation: 0,
           roleKey: ROLE_KEY,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
-      await roles
-        .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          salt,
-          signature,
-        );
+      await roles.connect(relayer).execTransactionWithRoleSigned(
+        {
+          to: testContractAddress,
+          value: 0,
+          data: calldata,
+          operation: 0,
+          roleKey: ROLE_KEY,
+          salt: salt,
+          deadline: NO_DEADLINE,
+        },
+        signature,
+      );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "HashAlreadyConsumed");
     });
 
@@ -572,37 +589,40 @@ describe("Execution Mechanics", () => {
           operation: 0,
           roleKey: ROLE_KEY,
           salt,
+          deadline: NO_DEADLINE,
         },
       );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            otherRoleKey,
-            salt,
-            signature,
-          ),
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: otherRoleKey,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
       ).to.be.revertedWithCustomError(roles, "NotAuthorized");
 
-      await roles
-        .connect(relayer)
-        .execTransactionWithSignature(
-          testContractAddress,
-          0,
-          calldata,
-          0,
-          ROLE_KEY,
-          salt,
-          signature,
-        );
+      await roles.connect(relayer).execTransactionWithRoleSigned(
+        {
+          to: testContractAddress,
+          value: 0,
+          data: calldata,
+          operation: 0,
+          roleKey: ROLE_KEY,
+          salt: salt,
+          deadline: NO_DEADLINE,
+        },
+        signature,
+      );
     });
 
-    it("reverts with the inner error and rolls back digest consumption on failed inner execution", async () => {
+    it("reverts with ModuleTransactionFailed and rolls back digest consumption on failed inner execution", async () => {
       const {
         roles,
         invoker,
@@ -626,6 +646,7 @@ describe("Execution Mechanics", () => {
         operation: 0,
         roleKey: ROLE_KEY,
         salt,
+        deadline: NO_DEADLINE,
       };
       const hash = TypedDataEncoder.hash(domain, roleTxTypes, message);
       const signature = await invoker.signTypedData(
@@ -635,18 +656,21 @@ describe("Execution Mechanics", () => {
       );
 
       await expect(
-        roles
-          .connect(relayer)
-          .execTransactionWithSignature(
-            testContractAddress,
-            0,
-            calldata,
-            0,
-            ROLE_KEY,
-            salt,
-            signature,
-          ),
-      ).to.be.revertedWithCustomError(testContract, "AnError");
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: calldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: salt,
+            deadline: NO_DEADLINE,
+          },
+          signature,
+        ),
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs(testContract.interface.encodeErrorResult("AnError"));
       expect(await roles.consumed(invoker.address, hash)).to.equal(false);
       expect((await roles.accruedAllowance(ALLOWANCE_KEY)).balance).to.equal(
         1000,
@@ -661,6 +685,7 @@ describe("Execution Mechanics", () => {
         operation: 0,
         roleKey: ROLE_KEY,
         salt: emptySalt,
+        deadline: NO_DEADLINE,
       };
       const emptyHash = TypedDataEncoder.hash(
         domain,
@@ -674,19 +699,112 @@ describe("Execution Mechanics", () => {
       );
 
       await expect(
+        roles.connect(relayer).execTransactionWithRoleSigned(
+          {
+            to: testContractAddress,
+            value: 0,
+            data: emptyCalldata,
+            operation: 0,
+            roleKey: ROLE_KEY,
+            salt: emptySalt,
+            deadline: NO_DEADLINE,
+          },
+          emptySignature,
+        ),
+      )
+        .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+        .withArgs("0x");
+      expect(await roles.consumed(invoker.address, emptyHash)).to.equal(false);
+    });
+
+    it("executes up to the deadline and reverts SignatureExpired after it", async () => {
+      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
+        await loadFixture(signedSetup);
+      const domain = await buildDomain(roles);
+      const deadline = (await time.latest()) + 100;
+      const roleTx = (salt: string) => ({
+        to: testContractAddress,
+        value: 0,
+        data: iface.encodeFunctionData("fnThatMaybeReverts", [100, false]),
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt,
+        deadline,
+      });
+      const onTime = roleTx(ethers.id("salt-on-time"));
+      const late = roleTx(ethers.id("salt-late"));
+
+      await time.setNextBlockTimestamp(deadline);
+      await roles
+        .connect(relayer)
+        .execTransactionWithRoleSigned(
+          onTime,
+          await invoker.signTypedData(domain, roleTxTypes, onTime),
+        );
+
+      await expect(
         roles
           .connect(relayer)
-          .execTransactionWithSignature(
+          .execTransactionWithRoleSigned(
+            late,
+            await invoker.signTypedData(domain, roleTxTypes, late),
+          ),
+      ).to.be.revertedWithCustomError(roles, "SignatureExpired");
+    });
+
+    it("rejects changing the deadline after signing", async () => {
+      const { roles, invoker, relayer, testContractAddress, ROLE_KEY } =
+        await loadFixture(signedSetup);
+      const roleTx = {
+        to: testContractAddress,
+        value: 0,
+        data: iface.encodeFunctionData("fnThatMaybeReverts", [100, false]),
+        operation: 0,
+        roleKey: ROLE_KEY,
+        salt: ethers.id("salt-deadline"),
+        deadline: (await time.latest()) + 100,
+      };
+      const signature = await invoker.signTypedData(
+        await buildDomain(roles),
+        roleTxTypes,
+        roleTx,
+      );
+
+      await expect(
+        roles
+          .connect(relayer)
+          .execTransactionWithRoleSigned(
+            { ...roleTx, deadline: NO_DEADLINE },
+            signature,
+          ),
+      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
+    });
+  });
+
+  describe("default role", () => {
+    it("reverts NoDefaultRole on both IAvatar entrypoints when none is set", async () => {
+      const { roles, invoker, testContractAddress } = await loadFixture(setup);
+      const calldata = iface.encodeFunctionData("fnThatMaybeReverts", [
+        100,
+        false,
+      ]);
+      await roles.setDefaultRole(invoker.address, ethers.ZeroHash);
+
+      await expect(
+        roles
+          .connect(invoker)
+          .execTransactionFromModule(testContractAddress, 0, calldata, 0),
+      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
+      await expect(
+        roles
+          .connect(invoker)
+          .execTransactionFromModuleReturnData(
             testContractAddress,
             0,
-            emptyCalldata,
+            calldata,
             0,
-            ROLE_KEY,
-            emptySalt,
-            emptySignature,
           ),
-      ).to.be.revertedWithCustomError(roles, "ModuleTransactionFailed");
-      expect(await roles.consumed(invoker.address, emptyHash)).to.equal(false);
+      ).to.be.revertedWithCustomError(roles, "NoDefaultRole");
     });
   });
 });

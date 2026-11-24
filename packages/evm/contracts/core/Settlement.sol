@@ -18,40 +18,6 @@ import "./Storage.sol";
  * @author  gnosisguild
  */
 abstract contract Settlement is RolesStorage {
-    /// @dev Calculates an allowance's accrued balance and timestamp at
-    ///      `blockTimestamp` from Core storage.
-    function _accrue(
-        bytes32 allowanceKey,
-        uint64 blockTimestamp
-    ) internal view returns (uint128 balance, uint64 timestamp) {
-        Allowance memory a = allowances[allowanceKey];
-
-        // No refill configured.
-        if (a.period == 0) return (a.balance, a.timestamp);
-
-        // Nothing accrues when the configured timestamp is current or in the future.
-        // This also makes the elapsed-time subtraction below safe.
-        if (blockTimestamp <= a.timestamp) return (a.balance, a.timestamp);
-
-        // Calculate full periods elapsed.
-        uint64 elapsedIntervals = (blockTimestamp - a.timestamp) / a.period;
-        if (elapsedIntervals == 0) return (a.balance, a.timestamp);
-
-        // Timestamp always advances, even when balance is at cap
-        timestamp = a.timestamp + elapsedIntervals * a.period;
-
-        // Already at cap, or initial balance was set above maxRefill
-        if (a.balance >= a.maxRefill) return (a.balance, timestamp);
-
-        // Add refill for each elapsed period, capping at maxRefill.
-        uint256 accruedBalance = uint256(a.balance) +
-            uint256(a.refill) *
-            elapsedIntervals;
-        balance = accruedBalance < a.maxRefill
-            ? uint128(accruedBalance)
-            : a.maxRefill;
-    }
-
     /**
      * @dev Settles allowance consumption and membership updates after a successful execution.
      *
@@ -68,7 +34,7 @@ abstract contract Settlement is RolesStorage {
         for (uint256 i; i < count; ++i) {
             Consumption memory consumption = consumptions[i];
 
-            uint128 updatedBalance = _persistConsumption(
+            uint128 updatedBalance = _consume(
                 consumption.allowanceKey,
                 consumption.consumed
             );
@@ -106,9 +72,43 @@ abstract contract Settlement is RolesStorage {
         }
     }
 
+    /// @dev Calculates an allowance's accrued balance and timestamp at
+    ///      `blockTimestamp` from Core storage.
+    function _accrue(
+        bytes32 allowanceKey,
+        uint64 blockTimestamp
+    ) private view returns (uint128 balance, uint64 timestamp) {
+        Allowance memory a = allowances[allowanceKey];
+
+        // No refill configured.
+        if (a.period == 0) return (a.balance, a.timestamp);
+
+        // Nothing accrues when the configured timestamp is current or in the future.
+        // This also makes the elapsed-time subtraction below safe.
+        if (blockTimestamp <= a.timestamp) return (a.balance, a.timestamp);
+
+        // Calculate full periods elapsed.
+        uint64 elapsedIntervals = (blockTimestamp - a.timestamp) / a.period;
+        if (elapsedIntervals == 0) return (a.balance, a.timestamp);
+
+        // Timestamp always advances, even when balance is at cap
+        timestamp = a.timestamp + elapsedIntervals * a.period;
+
+        // Already at cap, or initial balance was set above maxRefill
+        if (a.balance >= a.maxRefill) return (a.balance, timestamp);
+
+        // Add refill for each elapsed period, capping at maxRefill.
+        uint256 accruedBalance = uint256(a.balance) +
+            uint256(a.refill) *
+            elapsedIntervals;
+        balance = accruedBalance < a.maxRefill
+            ? uint128(accruedBalance)
+            : a.maxRefill;
+    }
+
     /// @dev Re-accrues the allowance from Core storage, deducts `consumed`,
     ///      writes back balance and timestamp, and returns the new balance.
-    function _persistConsumption(
+    function _consume(
         bytes32 allowanceKey,
         uint128 consumed
     ) private returns (uint128 updatedBalance) {
@@ -145,5 +145,50 @@ abstract contract Settlement is RolesStorage {
                 )
             )
         }
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                                VIEWS
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev Returns a module's membership of a role.
+    /// @param module Address of the module
+    /// @param roleKey Identifier of the role
+    /// @return active Whether the module can currently execute under the
+    ///         role: it is enabled and the membership is within its validity
+    ///         window
+    /// @return start Timestamp from which the membership is valid
+    /// @return end Timestamp until which it is valid (uint64 max = no expiry)
+    /// @return usesLeft Remaining uses (uint128 max = unlimited)
+    function membershipOf(
+        address module,
+        bytes32 roleKey
+    )
+        external
+        view
+        returns (bool active, uint64 start, uint64 end, uint128 usesLeft)
+    {
+        uint256 membership = roles[roleKey].members[module];
+        start = uint64(membership >> 192);
+        end = uint64(membership >> 128);
+        usesLeft = uint128(membership);
+
+        active =
+            roleKey != 0 &&
+            membership != 0 &&
+            block.timestamp >= start &&
+            block.timestamp <= end &&
+            isModuleEnabled(module);
+    }
+
+    /// @dev Returns the accrued allowance balance at current block.timestamp.
+    ///      Read by the Evaluator (see IRolesCore).
+    /// @param allowanceKey The allowance key.
+    /// @return balance The accrued balance.
+    /// @return timestamp The timestamp of the last accrual point.
+    function accruedAllowance(
+        bytes32 allowanceKey
+    ) external view returns (uint128 balance, uint64 timestamp) {
+        return _accrue(allowanceKey, uint64(block.timestamp));
     }
 }
