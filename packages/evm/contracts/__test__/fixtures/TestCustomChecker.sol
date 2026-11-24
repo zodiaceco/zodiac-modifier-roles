@@ -62,11 +62,7 @@ contract TestCustomCheckerConsuming is ICustomCondition {
     }
 }
 
-contract TestCustomCheckerNoInterface {
-    function dummy() external pure returns (uint256) {
-        return 42;
-    }
-}
+contract TestCustomCheckerNoInterface {}
 
 contract TestCustomCheckerReverting is ICustomCondition {
     function check(

@@ -6,145 +6,54 @@
  * function does on its own. They pin down documented behaviour:
  * - a signature of a Safe counts wherever its EIP-1271 signature does, so a
  *   role that can make it sign raw hashes acts with that Safe's roles
- *   (docs: general/signing, "What a signature authorizes");
- * - settlement runs after execution: for allowances it re-accrues from current
- *   storage and deducts consumption (reverting if an executed call reduced the
- *   allowance below what was consumed); for memberships it writes the
- *   pre-computed next state, overwriting changes the executed transaction made
- *   (docs: general/allowances and general/membership).
+ *   (docs: general/signing, "What a signature authorizes"); its digest is
+ *   still used once, and only until its deadline;
+ * - authorization runs before execution, against the allowance as it is
+ *   then; settlement runs after: for allowances it re-accrues from current
+ *   storage and deducts consumption (reverting if an executed call reduced
+ *   the allowance below what was consumed); for memberships it reads the
+ *   membership as the executed transaction left it, so a revocation by the
+ *   batch stands (docs: general/allowances and general/membership).
  */
 import { expect } from "chai"
-import {
-  AbiCoder,
-  Interface,
-  TypedDataEncoder,
-  ZeroAddress,
-  ZeroHash,
-  concat,
-  hexlify,
-  randomBytes,
-  solidityPacked,
-} from "ethers"
-import type { Signer } from "ethers"
+import { Interface, TypedDataEncoder } from "ethers"
 import { network } from "hardhat"
 
-import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
-import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
+import {
+  Encoding,
+  ExecutionOptions,
+  NO_DEADLINE,
+  Operator,
+  ROLE_TX_TYPES,
+  deployMultiSend,
+  encodeMultiSend,
+  randomKey,
+  safeWithRoles,
+} from "./helpers.js"
 
 const connection = await network.create()
 const { ethers } = connection
 
-const abi = AbiCoder.defaultAbiCoder()
-
-const Encoding = { None: 0, Static: 1, EtherValue: 6 } as const
-const Operator = { Pass: 0, WithinAllowance: 28 } as const
-const ExecutionOptions = { None: 0, Send: 1, DelegateCall: 2, Both: 3 }
-
 const libIface = new Interface(["function signMessage(bytes message)"])
-const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
-
-const randomKey = () => hexlify(randomBytes(32))
-
-async function deployRoles(owner: string, avatar: string) {
-  const integrity = await (
-    await ethers.getContractFactory("Integrity")
-  ).deploy()
-  const evaluator = await (
-    await ethers.getContractFactory("Evaluator", {
-      libraries: { Integrity: await integrity.getAddress() },
-    })
-  ).deploy()
-  const factory = await ethers.getContractFactory("Roles")
-  const roles = await factory.deploy(
-    owner,
-    avatar,
-    avatar,
-    await evaluator.getAddress()
-  )
-  return roles
-}
-
-/** `owner` (threshold 1) executes a call from the Safe. */
-async function execSafe(
-  owner: Signer,
-  safe: string,
-  to: string,
-  data: string,
-  operation = 0,
-  value = 0n
-) {
-  const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
-    "0x01",
-  ])
-  return owner.sendTransaction({
-    to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      to,
-      value,
-      data,
-      operation,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      approval,
-    ]),
-  })
-}
-
-/** A Safe owned by `owner`, with a Roles modifier enabled as its module. */
-async function safeWithRoles(owner: Signer) {
-  const safe = await deploySafe(
-    {
-      owners: [await owner.getAddress()],
-      threshold: 1,
-      creationNonce: BigInt(randomKey()),
-    },
-    owner as any
-  )
-  const roles = await deployRoles(await owner.getAddress(), safe)
-  await execSafe(
-    owner,
-    safe,
-    safe,
-    ifaceSafe.encodeFunctionData("enableModule", [await roles.getAddress()])
-  )
-  return { safe, roles }
-}
-
-const encodeMultiSend = (
-  txs: { to: string; value: bigint; data: string; operation: number }[]
-) =>
-  multiSendIface.encodeFunctionData("multiSend", [
-    concat(
-      txs.map((t) =>
-        solidityPacked(
-          ["uint8", "address", "uint256", "uint256", "bytes"],
-          [t.operation, t.to, t.value, (t.data.length - 2) / 2, t.data]
-        )
-      )
-    ),
-  ])
 
 describe("Roles composition, end to end", () => {
+  before(async () => {
+    await deployMastercopies(ethers)
+  })
   after(async () => {
     await connection.close()
   })
 
   it("a role that can make a member Safe sign raw hashes acts with that Safe's roles (ERC-1271)", async () => {
-    await deployMastercopies(ethers)
     const [ownerA, ownerM, signerS, relayer] = await ethers.getSigners()
     const lib = await (
       await ethers.getContractFactory("SignTypedMessageLib")
     ).deploy()
 
     // Safe A with Roles R. Safe M is a module of R with role B: send 1 ETH to Y.
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const { safe: safeM, roles: Rm } = await safeWithRoles(ownerM)
+    const { safe: safeA, roles: R } = await safeWithRoles(ethers, ownerA)
+    const { safe: safeM, roles: Rm } = await safeWithRoles(ethers, ownerM)
     await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("2") })
     const Y = ethers.Wallet.createRandom().address
     const roleB = randomKey()
@@ -170,184 +79,315 @@ describe("Roles composition, end to end", () => {
       ExecutionOptions.DelegateCall
     )
 
-    // S makes M sign the digest of a RoleTx for R, role B.
-    const salt = randomKey()
-    const message = {
-      to: Y,
-      value: ethers.parseEther("1"),
-      data: "0x",
-      operation: 0,
-      roleKey: roleB,
-      salt,
-      deadline: 2n ** 64n - 1n,
+    /** S makes M sign the digest of a RoleTx for R, role B: 1 ETH to Y. */
+    const signedByM = async (deadline: bigint) => {
+      const message = {
+        to: Y,
+        value: ethers.parseEther("1"),
+        data: "0x",
+        operation: 0,
+        roleKey: roleB,
+        salt: randomKey(),
+        deadline,
+      }
+      const digest = TypedDataEncoder.hash(
+        {
+          chainId: (await ethers.provider.getNetwork()).chainId,
+          verifyingContract: await R.getAddress(),
+        },
+        ROLE_TX_TYPES,
+        message
+      )
+      await Rm.connect(signerS).execTransactionWithRole(
+        await lib.getAddress(),
+        0,
+        libIface.encodeFunctionData("signMessage", [digest]),
+        1,
+        roleS
+      )
+      return message
     }
-    const digest = TypedDataEncoder.hash(
-      {
-        chainId: (await ethers.provider.getNetwork()).chainId,
-        verifyingContract: await R.getAddress(),
-      },
-      {
-        RoleTx: [
-          { name: "to", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "data", type: "bytes" },
-          { name: "operation", type: "uint8" },
-          { name: "roleKey", type: "bytes32" },
-          { name: "salt", type: "bytes32" },
-          { name: "deadline", type: "uint64" },
-        ],
-      },
-      message
-    )
-    await Rm.connect(signerS).execTransactionWithRole(
-      await lib.getAddress(),
-      0,
-      libIface.encodeFunctionData("signMessage", [digest]),
-      1,
-      roleS
-    )
 
     // Anyone relays it with M's contract signature (address, empty payload).
+    const message = await signedByM(NO_DEADLINE)
     await R.connect(relayer).execTransactionWithRoleSigned(message, safeM)
+    expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
+
+    // M's approval of the digest stays, but the digest is used once.
+    await expect(
+      R.connect(relayer).execTransactionWithRoleSigned(message, safeM)
+    ).to.be.revertedWithCustomError(R, "HashAlreadyConsumed")
+
+    // An approved digest past its deadline moves nothing.
+    const expired = await signedByM(
+      BigInt((await ethers.provider.getBlock("latest"))!.timestamp)
+    )
+    await expect(
+      R.connect(relayer).execTransactionWithRoleSigned(expired, safeM)
+    ).to.be.revertedWithCustomError(R, "SignatureExpired")
     expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
   })
 
-  it("settlement re-accrues allowances from storage after the executed batch", async () => {
-    await deployMastercopies(ethers)
-    const [ownerA, member] = await ethers.getSigners()
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const Raddr = await R.getAddress()
-    await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("1") })
+  describe("settlement re-accrues allowances from storage after the executed batch", () => {
+    /** Role P sends ether to Y within allowance K, and may call
+     *  R.setAllowance; the Safe owns R. */
+    async function setup() {
+      const [ownerA, member] = await ethers.getSigners()
+      const { safe: safeA, roles: R } = await safeWithRoles(ethers, ownerA)
+      const Raddr = await R.getAddress()
+      await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("1") })
 
-    const multiSend = await (
-      await ethers.getContractFactory("MultiSend")
-    ).deploy()
-    const unwrapper = await (
-      await ethers.getContractFactory("MultiSendUnwrapper")
-    ).deploy()
-    await R.connect(ownerA).setTransactionUnwrapper(
-      await multiSend.getAddress(),
-      multiSendIface.getFunction("multiSend")!.selector,
-      await unwrapper.getAddress()
-    )
+      const multiSendAddr = await deployMultiSend(ethers, R.connect(ownerA))
 
-    // Role P: send ether to Y within allowance K, and call R.setAllowance.
-    const K = randomKey()
-    const roleP = randomKey()
-    const Y = ethers.Wallet.createRandom().address
-    await R.connect(ownerA).setAllowance(K, 100, 0, 0, 0, 0)
-    await R.connect(ownerA).grantRole(await member.getAddress(), roleP, 0, 0, 0)
-    await R.connect(ownerA).scopeTarget(roleP, Y)
-    await R.connect(ownerA).allowTarget(
-      roleP,
-      Y,
-      [
-        {
-          parent: 0,
-          paramType: Encoding.EtherValue,
-          operator: Operator.WithinAllowance,
-          compValue: K,
-        },
-      ],
-      ExecutionOptions.Send
-    )
-    await R.connect(ownerA).scopeTarget(roleP, Raddr)
-    await R.connect(ownerA).allowFunction(
-      roleP,
-      Raddr,
-      R.interface.getFunction("setAllowance")!.selector,
-      [],
-      ExecutionOptions.None
-    )
-    // the Safe owns R from here on
-    await R.connect(ownerA).transferOwnership(safeA)
-
-    // Reducing K below the batch's consumption reverts during settlement.
-    const batchToZero = encodeMultiSend([
-      {
-        to: R.target as string,
-        value: 0n,
-        data: R.interface.encodeFunctionData("setAllowance", [
-          K,
-          0,
-          0,
-          0,
-          0,
-          0,
-        ]),
-        operation: 0,
-      },
-      { to: Y, value: 10n, data: "0x", operation: 0 },
-    ])
-    await expect(
-      R.connect(member).execTransactionWithRole(
-        await multiSend.getAddress(),
+      const K = randomKey()
+      const roleP = randomKey()
+      const Y = ethers.Wallet.createRandom().address
+      await R.connect(ownerA).grantRole(
+        await member.getAddress(),
+        roleP,
         0,
-        batchToZero,
+        0,
+        0
+      )
+      await R.connect(ownerA).setDefaultRole(await member.getAddress(), roleP)
+      await R.connect(ownerA).scopeTarget(roleP, Y)
+      await R.connect(ownerA).allowTarget(
+        roleP,
+        Y,
+        [
+          {
+            parent: 0,
+            paramType: Encoding.EtherValue,
+            operator: Operator.WithinAllowance,
+            compValue: K,
+          },
+        ],
+        ExecutionOptions.Send
+      )
+      await R.connect(ownerA).scopeTarget(roleP, Raddr)
+      await R.connect(ownerA).allowFunction(
+        roleP,
+        Raddr,
+        R.interface.getFunction("setAllowance")!.selector,
+        [],
+        ExecutionOptions.None
+      )
+
+      /** A batch setting K to `balance`, then sending 10 to Y. */
+      const setThenSend = (balance: number) =>
+        encodeMultiSend([
+          {
+            to: Raddr,
+            value: 0n,
+            data: R.interface.encodeFunctionData("setAllowance", [
+              K,
+              balance,
+              0,
+              0,
+              0,
+              0,
+            ]),
+            operation: 0,
+          },
+          { to: Y, value: 10n, data: "0x", operation: 0 },
+        ])
+
+      return {
+        ownerA,
+        member,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      }
+    }
+
+    it("reverts when the batch lowered the allowance below its consumption, on either entrypoint", async () => {
+      const {
+        ownerA,
+        member,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.connect(ownerA).setAllowance(K, 100, 0, 0, 0, 0)
+      await R.connect(ownerA).transferOwnership(safeA)
+
+      await expect(
+        R.connect(member).execTransactionWithRole(
+          multiSendAddr,
+          0,
+          setThenSend(0),
+          1,
+          roleP
+        )
+      )
+        .to.be.revertedWithCustomError(R, "AllowanceExceeded")
+        .withArgs(K)
+      // settlement reverts: no `false` from the IAvatar entrypoint either
+      await expect(
+        R.connect(member).execTransactionFromModule(
+          multiSendAddr,
+          0,
+          setThenSend(0),
+          1
+        )
+      )
+        .to.be.revertedWithCustomError(R, "AllowanceExceeded")
+        .withArgs(K)
+      expect(await ethers.provider.getBalance(Y)).to.equal(0n)
+      expect((await R.allowances(K)).balance).to.equal(100n)
+    })
+
+    it("deducts from the balance the batch set, not the one before it", async () => {
+      const {
+        ownerA,
+        member,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.connect(ownerA).setAllowance(K, 100, 0, 0, 0, 0)
+      await R.connect(ownerA).transferOwnership(safeA)
+
+      // 50 - 10, not 100 - 10
+      await R.connect(member).execTransactionWithRole(
+        multiSendAddr,
+        0,
+        setThenSend(50),
         1,
         roleP
       )
-    )
-      .to.be.revertedWithCustomError(R, "AllowanceExceeded")
-      .withArgs(K)
-    expect(await ethers.provider.getBalance(Y)).to.equal(0n)
-    expect((await R.allowances(K)).balance).to.equal(100n)
+      expect(await ethers.provider.getBalance(Y)).to.equal(10n)
+      expect((await R.allowances(K)).balance).to.equal(40n)
+    })
 
-    // Updating K to a balance that covers the consumption settles against
-    // the new balance (50 - 10 = 40), not the pre-execution balance (100 - 10).
-    const batchToFifty = encodeMultiSend([
-      {
-        to: R.target as string,
-        value: 0n,
-        data: R.interface.encodeFunctionData("setAllowance", [
-          K,
-          50,
+    it("authorizes against the balance before execution, which a raise in the batch cannot help", async () => {
+      const {
+        ownerA,
+        member,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.connect(ownerA).setAllowance(K, 5, 0, 0, 0, 0)
+      await R.connect(ownerA).transferOwnership(safeA)
+
+      await expect(
+        R.connect(member).execTransactionWithRole(
+          multiSendAddr,
           0,
-          0,
-          0,
-          0,
-        ]),
-        operation: 0,
-      },
-      { to: Y, value: 10n, data: "0x", operation: 0 },
-    ])
-    await R.connect(member).execTransactionWithRole(
-      await multiSend.getAddress(),
-      0,
-      batchToFifty,
-      1,
-      roleP
-    )
-    expect(await ethers.provider.getBalance(Y)).to.equal(10n)
-    expect((await R.allowances(K)).balance).to.equal(40n)
+          setThenSend(100),
+          1,
+          roleP
+        )
+      ).to.be.revertedWithCustomError(R, "ConditionViolation")
+      expect(await ethers.provider.getBalance(Y)).to.equal(0n)
+      expect((await R.allowances(K)).balance).to.equal(5n)
+    })
   })
 
-  it("settlement does not restore a limited membership the executed call revoked", async () => {
-    await deployMastercopies(ethers)
-    const [ownerA, member] = await ethers.getSigners()
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const Raddr = await R.getAddress()
-    const roleP = randomKey()
-    const memberAddr = await member.getAddress()
-    await R.connect(ownerA).grantRole(memberAddr, roleP, 0, 0, 5)
-    await R.connect(ownerA).scopeTarget(roleP, Raddr)
-    await R.connect(ownerA).allowFunction(
-      roleP,
-      Raddr,
-      R.interface.getFunction("revokeRole")!.selector,
-      [],
-      ExecutionOptions.None
-    )
-    await R.connect(ownerA).transferOwnership(safeA)
+  describe("settlement does not restore a limited membership the executed batch revoked", () => {
+    /** Role P (5 uses) sends ether to Y and may call R.revokeRole; the Safe
+     *  owns R. */
+    async function setup() {
+      const [ownerA, member] = await ethers.getSigners()
+      const { safe: safeA, roles: R } = await safeWithRoles(ethers, ownerA)
+      const Raddr = await R.getAddress()
+      await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("1") })
 
-    await R.connect(member).execTransactionWithRole(
-      Raddr,
-      0,
-      R.interface.encodeFunctionData("revokeRole", [memberAddr, roleP]),
-      0,
-      roleP
-    )
-    // revoked by the call: settlement reads the membership after execution
-    expect((await R.membershipOf(memberAddr, roleP)).active).to.equal(false)
+      const multiSendAddr = await deployMultiSend(ethers, R.connect(ownerA))
+      const reverter = await (
+        await (await ethers.getContractFactory("Reverter")).deploy()
+      ).getAddress()
+
+      const roleP = randomKey()
+      const memberAddr = await member.getAddress()
+      const Y = ethers.Wallet.createRandom().address
+      await R.connect(ownerA).grantRole(memberAddr, roleP, 0, 0, 5)
+      for (const t of [Y, reverter]) {
+        await R.connect(ownerA).scopeTarget(roleP, t)
+        await R.connect(ownerA).allowTarget(roleP, t, [], ExecutionOptions.Send)
+      }
+      await R.connect(ownerA).scopeTarget(roleP, Raddr)
+      await R.connect(ownerA).allowFunction(
+        roleP,
+        Raddr,
+        R.interface.getFunction("revokeRole")!.selector,
+        [],
+        ExecutionOptions.None
+      )
+      await R.connect(ownerA).transferOwnership(safeA)
+
+      /** A batch sending 10 to Y and revoking the member's role, then
+       *  calling `last` if given. */
+      const sendRevoke = (last?: string) =>
+        encodeMultiSend([
+          { to: Y, value: 10n, data: "0x", operation: 0 },
+          {
+            to: Raddr,
+            value: 0n,
+            data: R.interface.encodeFunctionData("revokeRole", [
+              memberAddr,
+              roleP,
+            ]),
+            operation: 0,
+          },
+          ...(last ? [{ to: last, value: 0n, data: "0x", operation: 0 }] : []),
+        ])
+      const exec = (batch: string) =>
+        R.connect(member).execTransactionWithRole(
+          multiSendAddr,
+          0,
+          batch,
+          1,
+          roleP
+        )
+
+      return { R, memberAddr, roleP, Y, reverter, sendRevoke, exec }
+    }
+
+    it("the revocation stands after the batch", async () => {
+      const { R, memberAddr, roleP, Y, sendRevoke, exec } = await setup()
+
+      await expect(exec(sendRevoke()))
+        .to.emit(R, "RevokeRole")
+        .withArgs(roleP, memberAddr)
+        .and.not.to.emit(R, "UpdateRole")
+      expect(await ethers.provider.getBalance(Y)).to.equal(10n)
+      expect(await R.membershipOf(memberAddr, roleP)).to.deep.equal([
+        false,
+        0n,
+        0n,
+        0n,
+      ])
+    })
+
+    it("a later entry reverting rolls back the revocation and the transfer", async () => {
+      const { R, memberAddr, roleP, Y, reverter, sendRevoke, exec } =
+        await setup()
+
+      await expect(exec(sendRevoke(reverter))).to.be.revertedWithCustomError(
+        R,
+        "ModuleTransactionFailed"
+      )
+      expect(await ethers.provider.getBalance(Y)).to.equal(0n)
+      expect((await R.membershipOf(memberAddr, roleP)).usesLeft).to.equal(5n)
+    })
   })
 })

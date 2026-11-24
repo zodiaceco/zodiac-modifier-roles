@@ -22,24 +22,13 @@ import { spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import {
-  AbiCoder,
-  Interface,
-  ZeroAddress,
-  ZeroHash,
-  concat,
-  getBytes,
-  hexlify,
-  randomBytes,
-  solidityPacked,
-  toBeHex,
-} from "ethers"
-import type { Signer } from "ethers"
+import { AbiCoder, Interface, getBytes, hexlify, randomBytes } from "ethers"
 import { network } from "hardhat"
 
 import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
+import { count, deployRoles, execSafe, packMultiSend, prng } from "./helpers.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LEAN_BIN = path.resolve(
@@ -52,17 +41,7 @@ const { ethers } = connection
 const abi = AbiCoder.defaultAbiCoder()
 
 const CASES = Number(process.env.BATCH_CASES ?? 200)
-let seed = Number(process.env.BATCH_SEED ?? 1)
-const rnd = () => {
-  seed = (seed * 1103515245 + 12345) % 2 ** 31
-  return seed / 2 ** 31
-}
-const pick = <T>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]
-const int = (n: number) => Math.floor(rnd() * n)
-const chance = (p: number) => rnd() < p
-const count = (t: Record<string, number>, k: string) => {
-  t[k] = (t[k] ?? 0) + 1
-}
+const { rnd, int, pick, chance } = prng(Number(process.env.BATCH_SEED ?? 1))
 
 const fnIface = new Interface([
   "function fn(uint256 a, uint256 b, uint256[] arr)",
@@ -246,14 +225,7 @@ function randomData(): string {
 }
 
 const packBatch = (txs: Tx[]) =>
-  concat(
-    txs.map((t) =>
-      solidityPacked(
-        ["uint8", "address", "uint256", "uint256", "bytes"],
-        [t.op, t.to, t.value, getBytes(t.data).length, t.data]
-      )
-    )
-  )
+  packMultiSend(txs.map(({ op, ...t }) => ({ ...t, operation: op })))
 
 function mutateBatch(data: string): string {
   const b = getBytes(data)
@@ -269,46 +241,6 @@ function lean(line: string): string {
   const res = spawnSync(LEAN_BIN, [], { input: line + "\n", encoding: "utf8" })
   if (res.status !== 0) throw new Error(`lean driver failed: ${res.stderr}`)
   return res.stdout.trim()
-}
-
-async function deployRoles(owner: string, avatar: string) {
-  const integrity = await (
-    await ethers.getContractFactory("Integrity")
-  ).deploy()
-  const evaluator = await (
-    await ethers.getContractFactory("Evaluator", {
-      libraries: { Integrity: await integrity.getAddress() },
-    })
-  ).deploy()
-  return (await ethers.getContractFactory("Roles")).deploy(
-    owner,
-    avatar,
-    avatar,
-    await evaluator.getAddress()
-  )
-}
-
-async function execSafe(owner: Signer, safe: string, to: string, data: string) {
-  const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
-    "0x01",
-  ])
-  return owner.sendTransaction({
-    to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      to,
-      0n,
-      data,
-      0,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      approval,
-    ]),
-  })
 }
 
 describe("batches on chain: Roles authorizes and settles as the Lean batch model", () => {
@@ -330,7 +262,7 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
       },
       owner as any
     )
-    const roles: any = await deployRoles(await owner.getAddress(), safe)
+    const roles: any = await deployRoles(ethers, await owner.getAddress(), safe)
     await execSafe(
       owner,
       safe,
@@ -459,14 +391,20 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
           reason =
             err?.name === "ConditionViolation"
               ? `status ${err.args[0]}`
-              : (err?.name ?? "?")
+              : (err?.name ?? `unparsed ${raw.slice(0, 10)}`)
         } catch {
-          reason = "?"
+          reason = `unparsed ${raw.slice(0, 10) || String(e.shortMessage ?? e.message).slice(0, 80)}`
         }
       }
 
       const ctx = `case ${i}: ${JSON.stringify({ tx: { ...tx, value: String(tx.value) }, perms, balances: balances.map(String) })}`
       expect(ok, `${ctx}\nmodel: ${model}`).to.equal(model !== "none")
+      // when the model refuses, Roles' authorization must be what refuses:
+      // not the executed call (ModuleTransactionFailed), not out of gas
+      if (!ok)
+        expect(reason, `${ctx}\nrefused, but not by Roles`).to.not.match(
+          /^(unparsed|ModuleTransactionFailed$)/
+        )
       count(tally, ok ? "through" : "refused")
       if (!ok) count(refusals, reason)
       else count(tally, tx.to === msAddr ? "batch through" : "single through")
@@ -485,7 +423,11 @@ describe("batches on chain: Roles authorizes and settles as the Lean batch model
       }
     }
     console.log("batches", tally, refusals)
-    expect(tally.through ?? 0).to.be.greaterThan(0)
-    expect(tally["keys charged"] ?? 0).to.be.greaterThan(0)
+    for (const k of ["single through", "batch through", "keys charged"])
+      expect(tally[k] ?? 0, `${k} never reached`).to.be.greaterThan(0)
+    expect(
+      Object.keys(refusals).filter((r) => r.startsWith("status ")),
+      "no condition ever refused"
+    ).to.not.be.empty
   })
 })

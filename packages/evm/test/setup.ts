@@ -4,7 +4,10 @@ import { deployFactories } from "@gnosis-guild/zodiac-core/tooling";
 
 import { ExecutionOptions } from "./utils.js";
 import { createEIP1193 } from "../tasks/createEIP1193.js";
-import type { ConditionFlatStruct } from "../typechain-types/contracts/Roles.js";
+import type {
+  ConditionFlatStruct,
+  Roles,
+} from "../typechain-types/contracts/Roles.js";
 
 // Side-effect imports to pull in the NetworkConnection augmentations
 // (adds `ethers` and `networkHelpers` to NetworkConnection).
@@ -51,6 +54,22 @@ export function createSetup({ ethers, provider }: NetworkConnection) {
     const modifier = await Modifier.deploy(owner, avatar, target, evaluator);
     await modifier.waitForDeployment();
     return modifier;
+  }
+
+  /** MultiSend and its unwrapper, registered on `roles` (as its owner). */
+  async function deployMultiSend(roles: Roles) {
+    const multisend = await (
+      await ethers.getContractFactory("MultiSend")
+    ).deploy();
+    const unwrapper = await (
+      await ethers.getContractFactory("MultiSendUnwrapper")
+    ).deploy();
+    await roles.setTransactionUnwrapper(
+      await multisend.getAddress(),
+      multisend.interface.getFunction("multiSend").selector,
+      await unwrapper.getAddress(),
+    );
+    return { multisend, unwrapper };
   }
 
   async function setupTestContract() {
@@ -139,6 +158,7 @@ export function createSetup({ ethers, provider }: NetworkConnection) {
   return {
     deployEvaluator,
     deployRolesMod,
+    deployMultiSend,
     setupTestContract,
     setupFn,
   };

@@ -51,11 +51,7 @@ contract MockPricingEmptyParams {
 }
 
 /// @dev Contract with code but no getPrice() and no fallback
-contract MockPricingNoInterface {
-    function dummy() external pure returns (uint256) {
-        return 42;
-    }
-}
+contract MockPricingNoInterface {}
 
 /// @dev Contract that implements IPricing but always reverts
 contract MockPricingReverting {

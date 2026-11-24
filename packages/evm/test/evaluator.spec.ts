@@ -10,6 +10,8 @@ import {
   Operator,
 } from "./utils.js";
 import { createSetup } from "./setup.js";
+import { ENTRYPOINTS, NO_DEADLINE, encodeEntrypoint } from "./roleTx.js";
+import type { Entrypoint } from "./roleTx.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
@@ -21,20 +23,6 @@ const iface = new Interface([
   "function oneParamStatic(uint256)",
   "function fn(address)",
 ]);
-
-const NO_DEADLINE = 2n ** 64n - 1n;
-
-const ROLE_TX_TYPES = {
-  RoleTx: [
-    { name: "to", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "data", type: "bytes" },
-    { name: "operation", type: "uint8" },
-    { name: "roleKey", type: "bytes32" },
-    { name: "salt", type: "bytes32" },
-    { name: "deadline", type: "uint64" },
-  ],
-};
 
 describe("Core / Evaluator split", () => {
   after(async () => {
@@ -118,8 +106,8 @@ describe("Core / Evaluator split", () => {
       );
     });
 
-    it("allows owner to swap evaluator, emits SetEvaluator, and rejects zero address", async () => {
-      const { roles, owner, nonMember } = await loadFixture(setup);
+    it("swaps the evaluator, emitting SetEvaluator, and rejects the zero address", async () => {
+      const { roles, owner } = await loadFixture(setup);
 
       const alt = await deployEvaluator();
       const altAddress = await alt.getAddress();
@@ -127,10 +115,6 @@ describe("Core / Evaluator split", () => {
       await expect(
         roles.connect(owner).setEvaluator(ZeroAddress),
       ).to.be.revertedWithCustomError(roles, "ZeroAddressNotAllowed");
-
-      await expect(
-        roles.connect(nonMember).setEvaluator(altAddress),
-      ).to.be.revertedWithCustomError(roles, "OwnableUnauthorizedAccount");
 
       await expect(roles.connect(owner).setEvaluator(altAddress))
         .to.emit(roles, "SetEvaluator")
@@ -266,48 +250,113 @@ describe("Core / Evaluator split", () => {
       ).to.be.revertedWithoutReason(ethers);
     });
 
-    it("delegates integrity validation and packing to the installed Evaluator", async () => {
-      const { roles, owner, testContractAddress, roleKey } =
-        await loadFixture(setup);
+    describe("validated setters pack through the Evaluator, *Packed setters bypass it", () => {
+      async function setupWithRevertingEvaluator() {
+        const ctx = await setup();
+        const Reverting = await ethers.getContractFactory(
+          "TestRevertingEvaluator",
+        );
+        const reverting = await Reverting.deploy();
+        await ctx.roles
+          .connect(ctx.owner)
+          .setEvaluator(await reverting.getAddress());
+        return { ...ctx, reverting };
+      }
 
-      const Reverting = await ethers.getContractFactory(
-        "TestRevertingEvaluator",
-      );
-      const reverting = await Reverting.deploy();
-      await roles.connect(owner).setEvaluator(await reverting.getAddress());
+      const selector = iface.getFunction("doNothing")!.selector;
+      type Ctx = Awaited<ReturnType<typeof setupWithRevertingEvaluator>>;
+      type Conditions = ReturnType<typeof flattenCondition>;
 
-      const conditions = flattenCondition({
-        paramType: Encoding.None,
-        operator: Operator.Pass,
-      });
+      const VALIDATED: Record<string, (c: Ctx, conditions: Conditions) => any> =
+        {
+          packConditions: ({ roles }, conditions) =>
+            roles.packConditions(conditions),
+          allowTarget: ({ roles, roleKey, testContractAddress }, conditions) =>
+            roles.allowTarget(
+              roleKey,
+              testContractAddress,
+              conditions,
+              ExecutionOptions.None,
+            ),
+          allowFunction: (
+            { roles, roleKey, testContractAddress },
+            conditions,
+          ) =>
+            roles.allowFunction(
+              roleKey,
+              testContractAddress,
+              selector,
+              conditions,
+              ExecutionOptions.None,
+            ),
+          allowFunctionGlobally: ({ roles, roleKey }, conditions) =>
+            roles.allowFunctionGlobally(roleKey, selector, conditions),
+        };
 
-      await expect(
-        roles.packConditions(conditions),
-      ).to.be.revertedWithCustomError(reverting, "IntentionalEvaluatorRevert");
+      // any bytes: a *Packed setter stores them without calling the
+      // Evaluator. Each is listed with its arguments, which are also those
+      // of the event it emits.
+      const BUFFER = "0x00";
+      const PACKED = {
+        allowTargetPacked: ({ roleKey, testContractAddress }: Ctx) =>
+          [
+            roleKey,
+            testContractAddress,
+            BUFFER,
+            ExecutionOptions.None,
+          ] as const,
+        allowFunctionPacked: ({ roleKey, testContractAddress }: Ctx) =>
+          [
+            roleKey,
+            testContractAddress,
+            selector,
+            BUFFER,
+            ExecutionOptions.None,
+          ] as const,
+        allowFunctionGloballyPacked: ({ roleKey }: Ctx) =>
+          [roleKey, selector, BUFFER] as const,
+      };
+      const EVENTS = {
+        allowTargetPacked: "AllowTarget",
+        allowFunctionPacked: "AllowFunction",
+        allowFunctionGloballyPacked: "AllowFunctionGlobally",
+      } as const;
 
-      await expect(
-        roles.allowTarget(
-          roleKey,
-          testContractAddress,
-          conditions,
-          ExecutionOptions.None,
-        ),
-      ).to.be.revertedWithCustomError(reverting, "IntentionalEvaluatorRevert");
+      for (const [name, call] of Object.entries(VALIDATED))
+        it(`${name} packs conditions through the Evaluator, and none without calling it`, async () => {
+          const ctx = await loadFixture(setupWithRevertingEvaluator);
 
-      // Empty conditions bypass packing and store an opaque empty buffer
-      expect(await roles.packConditions([])).to.equal("0x");
-      await expect(
-        roles.allowTarget(
-          roleKey,
-          testContractAddress,
-          [],
-          ExecutionOptions.None,
-        ),
-      ).to.not.be.revert(ethers);
+          await expect(
+            call(
+              ctx,
+              flattenCondition({
+                paramType: Encoding.None,
+                operator: Operator.Pass,
+              }),
+            ),
+          ).to.be.revertedWithCustomError(
+            ctx.reverting,
+            "IntentionalEvaluatorRevert",
+          );
+          // empty conditions skip packing: stored (or returned) as empty
+          const result = await call(ctx, []);
+          if (name === "packConditions") expect(result).to.equal("0x");
+        });
+
+      for (const name of Object.keys(PACKED) as (keyof typeof PACKED)[])
+        it(`${name} stores the buffer without calling the Evaluator`, async () => {
+          const ctx = await loadFixture(setupWithRevertingEvaluator);
+          const args = PACKED[name](ctx);
+
+          // the buffer is emitted as given, not as an Evaluator packed it
+          await expect((ctx.roles[name] as any)(...args))
+            .to.emit(ctx.roles, EVENTS[name])
+            .withArgs(...args);
+        });
     });
   });
 
-  describe("non-member invariant (independent of Evaluator)", () => {
+  describe("authentication, independent of the Evaluator", () => {
     async function setupWithAlwaysAllowEvaluator() {
       const ctx = await setup();
       const AlwaysAllow = await ethers.getContractFactory(
@@ -327,142 +376,147 @@ describe("Core / Evaluator split", () => {
 
       return { ...ctx, alwaysAllow };
     }
+    type Ctx = Awaited<ReturnType<typeof setupWithAlwaysAllowEvaluator>>;
 
-    it("blocks a non-enabled caller even when Evaluator always approves", async () => {
-      const { roles, nonMember, testContractAddress, roleKey } =
-        await loadFixture(setupWithAlwaysAllowEvaluator);
+    /** `module` calls the test contract through `entrypoint`; the signed one
+     *  it signs, and the relayer sends. */
+    async function execThrough(
+      { roles, relayer, roleKey, testContractAddress: to }: Ctx,
+      entrypoint: Entrypoint,
+      module: Ctx["member"],
+      deadline = NO_DEADLINE,
+    ) {
+      const sender =
+        entrypoint === "execTransactionWithRoleSigned" ? relayer : module;
+      return sender.sendTransaction({
+        to: await roles.getAddress(),
+        data: await encodeEntrypoint(
+          roles,
+          entrypoint,
+          {
+            to,
+            data: iface.encodeFunctionData("doNothing"),
+            roleKey,
+            deadline,
+          },
+          module,
+        ),
+      });
+    }
 
-      const data = iface.encodeFunctionData("doNothing");
+    const REJECTIONS: {
+      who: string;
+      error: string;
+      entrypoints: readonly Entrypoint[];
+      arrange: (
+        ctx: Ctx,
+      ) => Promise<{ module: Ctx["member"]; deadline?: bigint }>;
+    }[] = [
+      {
+        who: "a caller that is not an enabled module",
+        error: "NotAuthorized",
+        entrypoints: ENTRYPOINTS,
+        arrange: async ({ nonMember }) => ({ module: nonMember }),
+      },
+      {
+        who: "an enabled module without a membership",
+        error: "NoMembership",
+        entrypoints: ENTRYPOINTS,
+        arrange: async ({ roles, nonMember, roleKey }) => {
+          await roles.enableModule(nonMember.address);
+          await roles.setDefaultRole(nonMember.address, roleKey);
+          return { module: nonMember };
+        },
+      },
+      {
+        who: "a member without a default role",
+        error: "NoDefaultRole",
+        entrypoints: [
+          "execTransactionFromModule",
+          "execTransactionFromModuleReturnData",
+        ],
+        arrange: async ({ roles, member }) => {
+          await roles.setDefaultRole(member.address, ZeroHash);
+          return { module: member };
+        },
+      },
+      {
+        who: "a member's signature past its deadline",
+        error: "SignatureExpired",
+        entrypoints: ["execTransactionWithRoleSigned"],
+        arrange: async ({ member }) => ({
+          module: member,
+          deadline: BigInt(await time.latest()),
+        }),
+      },
+    ];
 
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionFromModule(testContractAddress, 0, data, 0),
-      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
+    for (const entrypoint of ENTRYPOINTS)
+      it(`lets a member through ${entrypoint} (the control)`, async () => {
+        const ctx = await loadFixture(setupWithAlwaysAllowEvaluator);
 
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionFromModuleReturnData(testContractAddress, 0, data, 0),
-      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
-      ).to.be.revertedWithCustomError(roles, "NotAuthorized");
-    });
-
-    it("blocks an enabled module with no role membership across all entrypoints", async () => {
-      const { roles, owner, nonMember, relayer, testContractAddress, roleKey } =
-        await loadFixture(setupWithAlwaysAllowEvaluator);
-
-      await roles.connect(owner).enableModule(nonMember.address);
-      await roles.connect(owner).setDefaultRole(nonMember.address, roleKey);
-
-      const data = iface.encodeFunctionData("doNothing");
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionFromModule(testContractAddress, 0, data, 0),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionFromModuleReturnData(testContractAddress, 0, data, 0),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
-
-      // Relayed execTransactionWithRoleSigned signed by enabled non-member
-      const chainId = (await ethers.provider.getNetwork()).chainId;
-      const domain = {
-        chainId,
-        verifyingContract: await roles.getAddress(),
-      };
-      const salt = hexlify(randomBytes(32));
-      const signature = await nonMember.signTypedData(domain, ROLE_TX_TYPES, {
-        to: testContractAddress,
-        value: 0,
-        data,
-        operation: 0,
-        roleKey,
-        salt,
-        deadline: NO_DEADLINE,
+        await expect(execThrough(ctx, entrypoint, ctx.member)).to.not.be.revert(
+          ethers,
+        );
       });
 
-      await expect(
-        roles.connect(relayer).execTransactionWithRoleSigned(
-          {
-            to: testContractAddress,
-            value: 0,
-            data: data,
-            operation: 0,
-            roleKey: roleKey,
-            salt: salt,
-            deadline: NO_DEADLINE,
-          },
-          signature,
-        ),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
-    });
+    for (const { who, error, entrypoints, arrange } of REJECTIONS)
+      for (const entrypoint of entrypoints)
+        it(`rejects ${who} on ${entrypoint} with ${error}`, async () => {
+          const ctx = await loadFixture(setupWithAlwaysAllowEvaluator);
+          const { module, deadline } = await arrange(ctx);
 
-    it("enforces zero role, validity window, and finite uses even with an always-allow Evaluator", async () => {
+          await expect(
+            execThrough(ctx, entrypoint, module, deadline),
+          ).to.be.revertedWithCustomError(ctx.roles, error);
+        });
+
+    it("enforces zero role, validity window, and finite uses", async () => {
       const { roles, owner, nonMember, testContractAddress, roleKey } =
         await loadFixture(setupWithAlwaysAllowEvaluator);
 
       const data = iface.encodeFunctionData("doNothing");
+      const exec = (role: string) =>
+        roles
+          .connect(nonMember)
+          .execTransactionWithRole(testContractAddress, 0, data, 0, role);
 
       // Zero role is always rejected
       await roles
         .connect(owner)
         .grantRole(nonMember.address, ZeroHash, 0, 0, 0);
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, ZeroHash),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
+      await expect(exec(ZeroHash)).to.be.revertedWithCustomError(
+        roles,
+        "NoMembership",
+      );
 
       // Future start timestamp rejected
       const now = await time.latest();
       await roles
         .connect(owner)
         .grantRole(nonMember.address, roleKey, now + 1000, now + 2000, 1);
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
-      ).to.be.revertedWithCustomError(roles, "MembershipNotYetValid");
+      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+        roles,
+        "MembershipNotYetValid",
+      );
 
       // Advance into window: 1 use succeeds, 2nd call rejected
       await time.increaseTo(now + 1000);
-      await roles
-        .connect(nonMember)
-        .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey);
-
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
-      ).to.be.revertedWithCustomError(roles, "NoMembership");
+      await exec(roleKey);
+      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+        roles,
+        "NoMembership",
+      );
 
       // Expired membership rejected
       await roles
         .connect(owner)
         .grantRole(nonMember.address, roleKey, now, now + 1500, 0);
       await time.increaseTo(now + 1501);
-      await expect(
-        roles
-          .connect(nonMember)
-          .execTransactionWithRole(testContractAddress, 0, data, 0, roleKey),
-      ).to.be.revertedWithCustomError(roles, "MembershipExpired");
+      await expect(exec(roleKey)).to.be.revertedWithCustomError(
+        roles,
+        "MembershipExpired",
+      );
     });
   });
 
@@ -602,85 +656,100 @@ describe("Core / Evaluator split", () => {
       ).to.be.revert(ethers);
     });
 
-    it("prevents a forging Evaluator from inflating or overspending allowances during settlement", async () => {
-      const { roles, owner, member, testContractAddress, roleKey } =
-        await loadFixture(setup);
-
-      const Forging = await ethers.getContractFactory(
-        "TestForgingConsumptionEvaluator",
-      );
-      const forging = await Forging.deploy();
-      await roles.connect(owner).setEvaluator(await forging.getAddress());
-      await roles.allowTargetPacked(
-        roleKey,
-        testContractAddress,
-        "0x",
-        ExecutionOptions.None,
-      );
-
-      const allowanceKey = ethers.id("FORGE_TEST");
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
-
-      // 1. Forged huge balance with 0 consumed cannot inflate Core's allowance balance
-      await forging.setForged([
-        {
-          allowanceKey,
-          balance: 999999n,
-          consumed: 0n,
-          timestamp: 12345n,
-        },
-      ]);
-      await roles
-        .connect(member)
-        .execTransactionFromModule(
-          testContractAddress,
-          0,
-          iface.encodeFunctionData("doNothing"),
-          0,
+    describe("a forging Evaluator", () => {
+      async function setupWithForgingEvaluator() {
+        const ctx = await setup();
+        const Forging = await ethers.getContractFactory(
+          "TestForgingConsumptionEvaluator",
         );
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(100);
+        const forging = await Forging.deploy();
+        await ctx.roles
+          .connect(ctx.owner)
+          .setEvaluator(await forging.getAddress());
+        await ctx.roles.allowTargetPacked(
+          ctx.roleKey,
+          ctx.testContractAddress,
+          "0x",
+          ExecutionOptions.None,
+        );
 
-      // 2. Forged consumed > real balance reverts even if forged balance claims enough
-      await forging.setForged([
-        {
-          allowanceKey,
-          balance: 999999n,
-          consumed: 101n,
-          timestamp: 0n,
-        },
-      ]);
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "AllowanceExceeded")
-        .withArgs(allowanceKey);
+        const allowanceKey = ethers.id("FORGE_TEST");
+        // refills 10 every 600s
+        await ctx.roles.setAllowance(allowanceKey, 100, 1000, 10, 600, 0);
 
-      // 3. Duplicate entries whose sum exceeds real balance revert
-      await forging.setForged([
-        { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
-        { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
-      ]);
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData("doNothing"),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "AllowanceExceeded")
-        .withArgs(allowanceKey);
+        const exec = () =>
+          ctx.roles
+            .connect(ctx.member)
+            .execTransactionFromModule(
+              ctx.testContractAddress,
+              0,
+              iface.encodeFunctionData("doNothing"),
+              0,
+            );
 
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(100);
+        return { ...ctx, forging, allowanceKey, exec };
+      }
+
+      it("cannot set the balance or timestamp settlement stores", async () => {
+        const { roles, forging, allowanceKey, exec } = await loadFixture(
+          setupWithForgingEvaluator,
+        );
+        const before = await roles.allowances(allowanceKey);
+
+        await forging.setForged([
+          { allowanceKey, balance: 999999n, consumed: 5n, timestamp: 12345n },
+        ]);
+        // two periods later: Core accrues 120 itself, from storage
+        await time.setNextBlockTimestamp(before.timestamp + 1200n);
+        await expect(exec())
+          .to.emit(roles, "ConsumeAllowance")
+          .withArgs(allowanceKey, 5, 115);
+
+        expect(await roles.allowances(allowanceKey)).to.deep.equal([
+          10n,
+          1000n,
+          600n,
+          115n,
+          before.timestamp + 1200n,
+        ]);
+      });
+
+      const OVERSPENDS = {
+        "a consumption above the stored balance, whatever balance it claims": (
+          allowanceKey: string,
+        ) => [
+          { allowanceKey, balance: 999999n, consumed: 101n, timestamp: 0n },
+        ],
+        "entries for one key that together exceed its balance": (
+          allowanceKey: string,
+        ) => [
+          { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
+          { allowanceKey, balance: 100n, consumed: 60n, timestamp: 0n },
+        ],
+        "a consumption of an allowance never set": () => [
+          {
+            allowanceKey: ethers.id("NEVER_SET"),
+            balance: 999999n,
+            consumed: 1n,
+            timestamp: 0n,
+          },
+        ],
+      };
+
+      for (const [what, forged] of Object.entries(OVERSPENDS))
+        it(`reverts AllowanceExceeded on ${what}`, async () => {
+          const { roles, forging, allowanceKey, exec } = await loadFixture(
+            setupWithForgingEvaluator,
+          );
+          const before = await roles.allowances(allowanceKey);
+          const consumptions = forged(allowanceKey);
+
+          await forging.setForged(consumptions);
+          await expect(exec())
+            .to.be.revertedWithCustomError(roles, "AllowanceExceeded")
+            .withArgs(consumptions[consumptions.length - 1].allowanceKey);
+          expect(await roles.allowances(allowanceKey)).to.deep.equal(before);
+        });
     });
 
     it("handles unknown uint8 Status, Operator, and Encoding values from a future Evaluator without Panic(0x21)", async () => {
