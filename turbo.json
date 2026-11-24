@@ -8,10 +8,9 @@
     "KV_REST_API_READ_ONLY_TOKEN"
   ],
   "tasks": {
-    "generate": { "cache": false },
     "test": { "cache": false, "dependsOn": ["build"] },
     "build": {
-      "dependsOn": ["^generate", "^build"],
+      "dependsOn": ["^build"],
       "outputs": ["build"]
     },
     "clean": { "cache": false },

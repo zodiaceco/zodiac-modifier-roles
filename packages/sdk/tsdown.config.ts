@@ -4,7 +4,6 @@ export default defineConfig([
   {
     entry: {
       index: "./src/main/index.ts",
-      kit: "./src/kit/index.ts",
       annotations: "./src/annotations/index.ts",
     },
     format: ["cjs", "esm"],

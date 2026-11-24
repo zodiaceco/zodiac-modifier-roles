@@ -9,8 +9,6 @@
 .yarn/cache
 .yarn/install-state.gz
 
-packages/sdk/eth-sdk/tmp
-
 # Mastercopy deployment metadata is managed outside this repository.
 **/mastercopy.json
 **/mastercopies.json
