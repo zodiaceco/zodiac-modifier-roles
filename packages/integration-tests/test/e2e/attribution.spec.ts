@@ -25,22 +25,22 @@
  * replayed, tampered and cross-domain signatures; calls that succeed, fail,
  * re-enter, or are batches). A reference model predicts each outcome (the
  * exact error) and the state after it: allowance balance, consumed digests,
- * membership updates and uses, ether sent. `ATTRIBUTION_STEPS` (default 800),
- * `ATTRIBUTION_SEED`.
+ * membership updates and uses, ether sent. It also requires that the default
+ * run reaches every kind of outcome. `ATTRIBUTION_STEPS` (default 800) and
+ * `ATTRIBUTION_SEED` (default 1); fewer steps or another seed skip that
+ * requirement, as which outcomes a run reaches depends on both.
  */
 import { expect } from "chai"
 import {
-  AbiCoder,
   Interface,
   ParamType,
+  Signature,
   TypedDataEncoder,
-  ZeroAddress,
   ZeroHash,
   concat,
   hexlify,
   randomBytes,
   recoverAddress,
-  solidityPacked,
   toBeHex,
 } from "ethers"
 import type { Signer, TransactionReceipt } from "ethers"
@@ -49,109 +49,42 @@ import { network } from "hardhat"
 import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
+import {
+  Encoding,
+  ExecutionOptions as Options,
+  NO_DEADLINE,
+  Operator,
+  count,
+  deployRoles,
+  encodeMultiSend,
+  execSafe,
+  multiSendIface,
+  prng,
+  randomKey,
+  ROLE_TX_TYPES,
+} from "./helpers.js"
+import type { RoleTx as SharedRoleTx } from "./helpers.js"
 
 const connection = await network.create()
 const { ethers } = connection
-const abi = AbiCoder.defaultAbiCoder()
 
-const STEPS = Number(process.env.ATTRIBUTION_STEPS ?? 800)
-let seed = Number(process.env.ATTRIBUTION_SEED ?? 1)
-const rnd = () => {
-  seed = (seed * 1103515245 + 12345) % 2 ** 31
-  return seed / 2 ** 31
-}
-const int = (n: number) => Math.floor(rnd() * n)
-const pick = <T>(xs: readonly T[]): T => xs[int(xs.length)]
-const chance = (p: number) => rnd() < p
-const bump = (t: Record<string, number>, k: string) => {
-  t[k] = (t[k] ?? 0) + 1
-}
+/** The run that reaches every outcome below `required`. */
+const FULL_STEPS = 800
+const FULL_SEED = 1
+const STEPS = Number(process.env.ATTRIBUTION_STEPS ?? FULL_STEPS)
+const SEED = Number(process.env.ATTRIBUTION_SEED ?? FULL_SEED)
+const { int, pick, chance } = prng(SEED)
 
-const Encoding = { None: 0, Static: 1, EtherValue: 6 } as const
-const Operator = { Pass: 0, WithinAllowance: 28 } as const
-const Options = { None: 0, Send: 1, DelegateCall: 2, Both: 3 }
 const SENTINEL = "0x0000000000000000000000000000000000000001"
-const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
-const randomKey = () => hexlify(randomBytes(32))
 /** Enough gas for every call: with an estimated limit, a call through
  *  non-reverting IAvatar entrypoints (`execTransactionFromModule*`) that fails
  *  without reverting can be given too little gas. */
 const G = { gasLimit: 15_000_000 }
 
-const NO_DEADLINE = 2n ** 64n - 1n
-
-const ROLE_TX = {
-  RoleTx: [
-    { name: "to", type: "address" },
-    { name: "value", type: "uint256" },
-    { name: "data", type: "bytes" },
-    { name: "operation", type: "uint8" },
-    { name: "roleKey", type: "bytes32" },
-    { name: "salt", type: "bytes32" },
-    { name: "deadline", type: "uint64" },
-  ],
-}
-type RoleTx = {
-  to: string
-  value: bigint
-  data: string
-  operation: number
-  roleKey: string
-  salt: string
-  deadline: bigint
-}
+/** As signed here: amounts are bigints. */
+type RoleTx = SharedRoleTx & { value: bigint; deadline: bigint }
 
 /* ------------------------------------------------------------------ setup */
-
-async function deployRoles(owner: string, avatar: string) {
-  const integrity = await (
-    await ethers.getContractFactory("Integrity")
-  ).deploy()
-  const evaluator = await (
-    await ethers.getContractFactory("Evaluator", {
-      libraries: { Integrity: await integrity.getAddress() },
-    })
-  ).deploy()
-  const factory = await ethers.getContractFactory("Roles")
-  return factory.deploy(owner, avatar, avatar, await evaluator.getAddress())
-}
-
-async function execSafe(owner: Signer, safe: string, to: string, data: string) {
-  const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
-    "0x01",
-  ])
-  await (
-    await owner.sendTransaction({
-      to: safe,
-      data: ifaceSafe.encodeFunctionData("execTransaction", [
-        to,
-        0n,
-        data,
-        0,
-        0n,
-        0n,
-        0n,
-        ZeroAddress,
-        ZeroAddress,
-        approval,
-      ]),
-    })
-  ).wait()
-}
-
-const encodeMultiSend = (txs: { to: string; value: bigint }[]) =>
-  multiSendIface.encodeFunctionData("multiSend", [
-    concat(
-      txs.map((t) =>
-        solidityPacked(
-          ["uint8", "address", "uint256", "uint256", "bytes"],
-          [0, t.to, t.value, 0, "0x"]
-        )
-      )
-    ),
-  ])
 
 /** Everything the cases share. */
 async function world() {
@@ -165,8 +98,8 @@ async function world() {
     },
     ownerA as any
   )
-  const R = await deployRoles(await ownerA.getAddress(), safe)
-  const R2 = await deployRoles(await ownerA.getAddress(), safe)
+  const R = await deployRoles(ethers, await ownerA.getAddress(), safe)
+  const R2 = await deployRoles(ethers, await ownerA.getAddress(), safe)
   for (const r of [R, R2])
     await execSafe(
       ownerA,
@@ -237,9 +170,9 @@ async function world() {
 
   const chainId = (await ethers.provider.getNetwork()).chainId
   const digest = (r: string, m: RoleTx) =>
-    TypedDataEncoder.hash({ chainId, verifyingContract: r }, ROLE_TX, m)
+    TypedDataEncoder.hash({ chainId, verifyingContract: r }, ROLE_TX_TYPES, m)
   const sign = (s: Signer, r: string, m: RoleTx) =>
-    s.signTypedData({ chainId, verifyingContract: r }, ROLE_TX, m)
+    s.signTypedData({ chainId, verifyingContract: r }, ROLE_TX_TYPES, m)
 
   return {
     ownerA,
@@ -264,6 +197,17 @@ async function world() {
 
 type World = Awaited<ReturnType<typeof world>>
 
+const revertData = (e: any): string | undefined => {
+  const data = e?.data ?? e?.error?.data ?? e?.info?.error?.data
+  return typeof data === "string" ? data : undefined
+}
+
+/** What the Reverter target reverts with. */
+const REVERTER_DATA = new Interface(["error Error(string)"]).encodeErrorResult(
+  "Error",
+  ["reverter"]
+)
+
 const errorName = (w: World, e: any): string => {
   const data = e?.data ?? e?.error?.data ?? e?.info?.error?.data
   if (typeof data === "string" && data.length >= 10) {
@@ -279,7 +223,7 @@ const errorName = (w: World, e: any): string => {
 async function outcome(
   w: World,
   send: () => Promise<any>
-): Promise<{ result: string; receipt?: TransactionReceipt }> {
+): Promise<{ result: string; receipt?: TransactionReceipt; data?: string }> {
   try {
     const tx = await send()
     const receipt: TransactionReceipt = await tx.wait()
@@ -295,7 +239,7 @@ async function outcome(
     }
     return { result, receipt }
   } catch (e) {
-    return { result: errorName(w, e) }
+    return { result: errorName(w, e), data: revertData(e) }
   }
 }
 
@@ -374,10 +318,12 @@ describe("attribution and reentrancy, end to end", () => {
       const r = await outcome(w, () => H.act(addr.R, data))
       expect(r.result).to.equal("ok")
     }
-    // from inside an execution (the avatar calls H), each reverts
+    // from inside an execution (the avatar calls H), each reverts; a fresh
+    // plan, whose signed entry has not been consumed
+    const inner = await reentryPlan(w)
     await H.setPlan(
-      plan.map(() => addr.R),
-      plan,
+      inner.map(() => addr.R),
+      inner,
       false
     )
     const r = await outcome(w, () =>
@@ -393,8 +339,8 @@ describe("attribution and reentrancy, end to end", () => {
       )
     )
     expect(r.result).to.equal("ok")
-    const results = await Promise.all(plan.map((_, i) => H.results(i)))
-    expect(results).to.deep.equal(plan.map(() => sel(w, "Reentrancy")))
+    const results = await Promise.all(inner.map((_, i) => H.results(i)))
+    expect(results).to.deep.equal(inner.map(() => sel(w, "Reentrancy")))
   })
 
   it("from inside an executed call, only Roles functions keyed by the caller succeed", async () => {
@@ -539,7 +485,19 @@ describe("attribution and reentrancy, end to end", () => {
     const sig = await w.sign(e1, addr.R, m)
     expect((await relay(R, m, sig)).result).to.equal("ok")
     expect((await relay(R, m, sig)).result).to.equal("HashAlreadyConsumed")
-    // malleated (high s): ecrecover gives another address
+    // malleated (s -> n - s, v flipped): ecrecover still gives e1, and the
+    // digest is consumed whatever the signature's bytes
+    const n =
+      0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n
+    const { r: sr, s: ss, v: sv } = Signature.from(sig)
+    const malleated = concat([
+      sr,
+      toBeHex(n - BigInt(ss), 32),
+      sv === 27 ? "0x1c" : "0x1b",
+    ])
+    expect((await relay(R, m, malleated)).result).to.equal(
+      "HashAlreadyConsumed"
+    )
     // cancelled before use
     const mc = tx()
     await R.connect(e1).invalidate(w.digest(addr.R, mc))
@@ -576,8 +534,6 @@ describe("attribution and reentrancy, end to end", () => {
 
     // a failed relayed call reverts with ModuleTransactionFailed and rolls back digest consumption
     const fail = tx({ to: addr.Rev, value: 0n })
-    await R.connect(ownerA).scopeTarget(role1, addr.Rev)
-    await R.connect(ownerA).allowTarget(role1, addr.Rev, [], Options.None)
     expect(
       (await relay(R, fail, await w.sign(e1, addr.R, fail))).result
     ).to.equal("ModuleTransactionFailed")
@@ -769,9 +725,10 @@ describe("attribution and reentrancy, end to end", () => {
     const ROLES = [role1, role2, ZeroHash]
     const EXEC_ROLES = [role1, role1, role1, role2, role2, ZeroHash]
 
+    const plan = await reentryPlan(w)
     await H.setPlan(
-      (await reentryPlan(w)).map(() => addr.R),
-      await reentryPlan(w),
+      plan.map(() => addr.R),
+      plan,
       false
     )
 
@@ -787,7 +744,9 @@ describe("attribution and reentrancy, end to end", () => {
     }
     const memKey = (role: string, m: string) => `${role}:${m.toLowerCase()}`
     const digests: { signer: string; digest: string }[] = []
-    const used: { m: RoleTx; sig: string; signer: string }[] = []
+    const used: { m: RoleTx; sig: string; signer: string; call: Call }[] = []
+    // every digest a known signer submitted, to check its consumption at the end
+    const tried = new Map<string, { signer: string; digest: string }>()
     const tally: Record<string, number> = {}
     /** Whether S accepts a digest now. */
     const validS = (d: string) =>
@@ -909,7 +868,7 @@ describe("attribution and reentrancy, end to end", () => {
         charge?: bigint
         mem?: Mem
       },
-      r: { result: string; receipt?: TransactionReceipt },
+      r: { result: string; receipt?: TransactionReceipt; data?: string },
       module: string,
       role: string,
       c: Call,
@@ -917,7 +876,15 @@ describe("attribution and reentrancy, end to end", () => {
     ) => {
       const want = predicted.error ?? (predicted.success ? "ok" : "false")
       expect(r.result, `${label}: outcome`).to.equal(want)
-      bump(tally, `${label} ${want}`)
+      if (want === "ModuleTransactionFailed") {
+        // the only executed call the generator makes fail is the reverter's
+        expect(c.kind, `${label}: the call that failed`).to.equal("revert")
+        expect(
+          R.interface.parseError(r.data!)!.args[0],
+          `${label}: inner revert data`
+        ).to.equal(REVERTER_DATA)
+      }
+      count(tally, `${label} ${want}`)
       const ok = want === "ok"
       if (ok) {
         model.allowance -= predicted.charge!
@@ -946,7 +913,7 @@ describe("attribution and reentrancy, end to end", () => {
             expect(await H.results(i), `${label}: reentry`).to.equal(
               sel(w, "Reentrancy")
             )
-          bump(tally, "reentries refused")
+          count(tally, "reentries refused")
         }
       }
       const sent =
@@ -1005,13 +972,13 @@ describe("attribution and reentrancy, end to end", () => {
           uses: uses === 0n ? "inf" : uses,
         })
         model.enabled.add(modAddr(m).toLowerCase())
-        bump(tally, "grant")
+        count(tally, "grant")
       } else if (a < 14) {
         const m = pick(MODULES)
         const role = pick([role1, role2])
         await at(() => R.connect(ownerA).revokeRole(modAddr(m), role))
         model.members.delete(memKey(role, modAddr(m)))
-        bump(tally, "revoke")
+        count(tally, "revoke")
       } else if (a < 15) {
         // a module renounces
         const m = pick(MODULES)
@@ -1020,7 +987,7 @@ describe("attribution and reentrancy, end to end", () => {
           asModule(m, R.interface.encodeFunctionData("renounceRole", [role]))
         )
         model.members.delete(memKey(role, modAddr(m)))
-        bump(tally, "renounce")
+        count(tally, "renounce")
       } else if (a < 18) {
         // owner disables or enables a module
         const m = pick(MODULES)
@@ -1037,26 +1004,26 @@ describe("attribution and reentrancy, end to end", () => {
             )
           )
           model.enabled.delete(a_.toLowerCase())
-          bump(tally, "disable")
+          count(tally, "disable")
         } else if (!model.enabled.has(a_.toLowerCase())) {
           await at(() => R.connect(ownerA).enableModule(a_))
           model.enabled.add(a_.toLowerCase())
-          bump(tally, "enable")
+          count(tally, "enable")
         }
       } else if (a < 20) {
         const m = pick(MODULES)
         const role = pick(ROLES)
         await at(() => R.connect(ownerA).setDefaultRole(modAddr(m), role))
         model.defaults.set(modAddr(m).toLowerCase(), role)
-        bump(tally, "default role")
+        count(tally, "default role")
       } else if (a < 23) {
         model.now += BigInt(pick([10, 600, 3000]))
-        bump(tally, "time")
+        count(tally, "time")
       } else if (a < 25) {
         const b = BigInt(int(1000))
         await at(() => R.connect(ownerA).setAllowance(K1, b, 0, 0, 0, 0))
         model.allowance = b
-        bump(tally, "set allowance")
+        count(tally, "set allowance")
       } else if (a < 27) {
         model.mode = pick([0, 0, 1, 2, 3, 4, 5])
         await at(() => S.setMode(model.mode))
@@ -1129,6 +1096,16 @@ describe("attribution and reentrancy, end to end", () => {
         // relayed execution
         const c = randomCall()
         const role = pick(EXEC_ROLES)
+        // the transaction is mined at model.now + 1
+        const deadline = pick([
+          ...Array(6).fill(NO_DEADLINE),
+          model.now + 1n,
+          model.now + 1n + BigInt(int(1000)),
+          model.now + 1n + BigInt(int(1000)),
+          // expired
+          model.now,
+          0n,
+        ])
         const m: RoleTx = {
           to: c.to,
           value: c.value,
@@ -1136,7 +1113,7 @@ describe("attribution and reentrancy, end to end", () => {
           operation: c.operation,
           roleKey: role,
           salt: randomKey(),
-          deadline: NO_DEADLINE,
+          deadline,
         }
         const kind = pick([
           "e1",
@@ -1181,7 +1158,9 @@ describe("attribution and reentrancy, end to end", () => {
           sig = await w.sign(e1, addr.R2, m)
         } else if (kind === "tamper") {
           sig = await w.sign(e1, addr.R, m)
-          sub = { ...m, salt: randomKey() }
+          sub = chance(0.5)
+            ? { ...m, salt: randomKey() }
+            : { ...m, deadline: m.deadline === NO_DEADLINE ? 0n : NO_DEADLINE }
         } else {
           if (!used.length) continue
           const u = pick(used)
@@ -1207,14 +1186,19 @@ describe("attribution and reentrancy, end to end", () => {
               }
         // kinds whose signature belongs to the message: replay keeps its call
         const call: Call =
-          kind === "replay" ? (used.find((u) => u.m === sub) as any).call : c2
+          kind === "replay" ? used.find((u) => u.m === sub)!.call : c2
         const d = w.digest(addr.R, sub)
         let predicted: any
         if (!signer || !model.enabled.has(signer.toLowerCase()))
           predicted = { error: "NotAuthorized" }
         else if (model.consumed.has(`${signer.toLowerCase()}:${d}`))
           predicted = { error: "HashAlreadyConsumed" }
+        // after the signature, before the membership
+        else if (model.now + 1n > sub.deadline)
+          predicted = { error: "SignatureExpired" }
         else predicted = predictExec(signer, sub.roleKey, call, true)
+        if (signer)
+          tried.set(`${signer.toLowerCase()}:${d}`, { signer, digest: d })
         const r = await at(() =>
           outcome(w, () =>
             R.connect(relayer).execTransactionWithRoleSigned(sub, sig, G)
@@ -1232,7 +1216,7 @@ describe("attribution and reentrancy, end to end", () => {
         if (signer && r.result === "ok") {
           model.consumed.add(`${signer.toLowerCase()}:${d}`)
           digests.push({ signer, digest: d })
-          if (kind !== "replay") used.push({ m: sub, sig, signer, call } as any)
+          if (kind !== "replay") used.push({ m: sub, sig, signer, call })
         }
       } else {
         // a signer cancels a digest it has not used yet
@@ -1256,8 +1240,8 @@ describe("attribution and reentrancy, end to end", () => {
           sig: await w.sign(s, addr.R, m),
           signer,
           call: { kind: "send", to: okT, value: 1n, data: "0x", operation: 0 },
-        } as any)
-        bump(tally, "invalidate")
+        })
+        count(tally, "invalidate")
       }
 
       if (step % 50 === 49)
@@ -1275,10 +1259,24 @@ describe("attribution and reentrancy, end to end", () => {
           model.now <= mem.end &&
           model.enabled.has(modAddr(m).toLowerCase())
         expect(
-          (await R.membershipOf(modAddr(m), role)).active,
-          `membership.active ${m}`
-        ).to.equal(active)
+          await R.membershipOf(modAddr(m), role),
+          `membership ${m}`
+        ).to.deep.equal(
+          mem
+            ? [
+                active,
+                mem.start,
+                mem.end,
+                mem.uses === "inf" ? 2n ** 128n - 1n : mem.uses,
+              ]
+            : [false, 0n, 0n, 0n]
+        )
       }
+    // refused, failed and expired signatures stay unconsumed
+    for (const [key, { signer, digest }] of tried)
+      expect(await R.consumed(signer, digest), `consumed ${key}`).to.equal(
+        model.consumed.has(key)
+      )
 
     const outcomes = new Map<string, number>()
     for (const [k, n] of Object.entries(tally)) {
@@ -1297,5 +1295,46 @@ describe("attribution and reentrancy, end to end", () => {
           .map(([k, n]) => `${k}: ${n}`)
           .join("\n      ")
     )
+
+    // Every step's outcome is checked against the model, but only the
+    // outcomes a run reaches. Fail if the generator stops reaching one in
+    // the default run; a shorter run (a smoke test) or another seed is not
+    // expected to reach the rare ones.
+    const reached = (re: RegExp) =>
+      Object.entries(tally).reduce((n, [k, v]) => (re.test(k) ? n + v : n), 0)
+    const required: [string, RegExp][] = [
+      ["direct ok", / direct .* ok$/],
+      ["direct false (IAvatar call fails)", / direct .* false$/],
+      ["direct batch ok", / direct .* batch ok$/],
+      ["direct by contract module ok", / direct [HS] .* ok$/],
+      ["signed ok by EOA", / signed e[12] .* ok$/],
+      ["signed ok by ERC-1271", / signed S .* ok$/],
+      ["signed batch ok", / signed .* batch ok$/],
+      ["signed replay refused", / signed replay .* HashAlreadyConsumed$/],
+      ["ModuleTransactionFailed", / ModuleTransactionFailed$/],
+      ["SignatureExpired", / signed .* SignatureExpired$/],
+      ["signed tampered refused", / signed tamper .* NotAuthorized$/],
+      ["ConditionViolation", / ConditionViolation$/],
+      ["NoMembership", / NoMembership$/],
+      ["MembershipExpired", / MembershipExpired$/],
+      ["MembershipNotYetValid", / MembershipNotYetValid$/],
+      ["NoDefaultRole", / NoDefaultRole$/],
+      ["NotAuthorized", / NotAuthorized$/],
+      ["TransactionNotAllowed", / TransactionNotAllowed$/],
+      ["SendNotAllowed", / SendNotAllowed$/],
+      ["reentries refused", /^reentries refused$/],
+      ["invalidate", /^invalidate$/],
+      ["renounce", /^renounce$/],
+      ["revoke", /^revoke$/],
+      ["disable", /^disable$/],
+    ]
+    if (STEPS < FULL_STEPS || SEED !== FULL_SEED) return
+    const missing = required
+      .filter(([, re]) => reached(re) === 0)
+      .map(([name]) => name)
+    expect(
+      missing,
+      `outcomes never reached (ATTRIBUTION_STEPS=${STEPS}, ATTRIBUTION_SEED=${SEED})`
+    ).to.deep.equal([])
   })
 })

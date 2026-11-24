@@ -1,8 +1,11 @@
 import { expect } from "chai";
+import type { Interface } from "ethers";
 import { network } from "hardhat";
 
-import { ExecutionOptions } from "./utils.js";
+import { ExecutionOptions, maxUint64 } from "./utils.js";
 import { createSetup } from "./setup.js";
+import { ENTRYPOINTS, encodeEntrypoint } from "./roleTx.js";
+import type { Entrypoint } from "./roleTx.js";
 
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
@@ -15,7 +18,10 @@ const { deployRolesMod } = createSetup(connection);
  * Scope: Reentrancy Protection.
  *
  * This file verifies that every execution entry point in the module is non-reentrant.
- * It ensures that the module prevents nested calls back into itself during an active transaction, protecting against reentrancy attacks.
+ * From inside a call executed through any of the four entry points, a call back into
+ * any of the four reverts with `Reentrancy`, even though the caller is an enabled
+ * member module whose call would otherwise be authorized. The guard is released
+ * afterwards.
  */
 
 describe("Reentrancy", () => {
@@ -35,37 +41,22 @@ describe("Reentrancy", () => {
       avatarAddress,
       avatarAddress,
     );
-
-    // Enable invoker as module so it can call execTransactionWithRole
-    await roles.connect(owner).enableModule(invoker.address);
-
-    return {
-      roles,
-      owner,
-      invoker,
-    };
-  }
-
-  it("blocks reentrant call - doNothing is never executed", async () => {
-    const { roles, invoker } = await loadFixture(setup);
-
-    const roleKey = ethers.hexlify(ethers.randomBytes(32));
+    const rolesAddress = await roles.getAddress();
 
     const ReentrancyChecker =
       await ethers.getContractFactory("ReentrancyChecker");
-    const checker = await ReentrancyChecker.deploy(
-      await roles.getAddress(),
-      roleKey,
-    );
+    const checker = await ReentrancyChecker.deploy(rolesAddress);
     const checkerAddress = await checker.getAddress();
 
-    // Setup: grant role to invoker
-    await roles.grantRole(invoker.address, roleKey, 0, 0, 0);
+    const roleKey = ethers.hexlify(ethers.randomBytes(32));
 
-    // Setup: enable checker as module and grant same role so it can callback
-    await roles.enableModule(checkerAddress);
-    await roles.grantRole(checkerAddress, roleKey, 0, 0, 0);
-
+    // invoker (the signer) and checker (which sends and relays every call):
+    // members with a default role (granting enables them as modules), so
+    // that only the reentrancy guard stops the checker's call
+    for (const module of [invoker.address, checkerAddress]) {
+      await roles.grantRole(module, roleKey, 0, 0, 0);
+      await roles.setDefaultRole(module, roleKey);
+    }
     await roles.allowTargetPacked(
       roleKey,
       checkerAddress,
@@ -73,23 +64,112 @@ describe("Reentrancy", () => {
       ExecutionOptions.None,
     );
 
-    await roles
-      .connect(invoker)
-      .execTransactionWithRole(
-        checkerAddress,
-        0,
-        checker.interface.encodeFunctionData("attack"),
-        0,
-        roleKey,
+    /** Calldata for `entrypoint`, to call `data` on the checker; the signed
+     *  one is signed by the invoker, an enabled member module. */
+    const encode = (entrypoint: Entrypoint, data: string) =>
+      encodeEntrypoint(
+        roles,
+        entrypoint,
+        { to: checkerAddress, data, roleKey },
+        invoker,
       );
 
-    // Verify attack() was executed
-    expect(await checker.attackCalled()).to.equal(true);
+    /** A call that only passes once the guard is released. */
+    const probe = () =>
+      encode(
+        "execTransactionWithRole",
+        checker.interface.encodeFunctionData("probe"),
+      );
 
-    // Verify the reentrant call was caught with Reentrancy error
-    expect(await checker.caughtReentrancy()).to.equal(true);
+    return { roles, checker, invoker, roleKey, encode, probe };
+  }
 
-    // Verify that doNothing was NOT called (reentrancy was blocked)
-    expect(await checker.doNothingCalled()).to.equal(false);
-  });
+  // The guard is transient storage, which clears at the end of every
+  // transaction: whether an entrypoint releases it shows only within the same
+  // transaction, so `callTwice` probes right after the outer call.
+
+  for (const outer of ENTRYPOINTS)
+    for (const inner of ENTRYPOINTS)
+      it(`blocks ${inner} from inside ${outer}, then releases`, async () => {
+        const { roles, checker, encode, probe } = await loadFixture(setup);
+
+        await checker.setReentry(
+          await encode(
+            inner,
+            checker.interface.encodeFunctionData("doNothing"),
+          ),
+        );
+        await checker.callTwice(
+          await encode(outer, checker.interface.encodeFunctionData("attack")),
+          await probe(),
+        );
+
+        expect(await checker.attackCalled()).to.equal(true);
+        expect(await checker.reentered()).to.equal(false);
+        expect(await checker.reentryResult()).to.equal(
+          roles.interface.getError("Reentrancy")!.selector,
+        );
+        expect(await checker.doNothingCalled()).to.equal(false);
+
+        expect(await checker.secondSucceeded()).to.equal(true);
+        expect(await checker.probeCalled()).to.equal(true);
+      });
+
+  // The target catches the refused reentry and returns normally: the outer
+  // execution settles as usual, and the blocked call left nothing behind.
+  for (const outer of ENTRYPOINTS)
+    it(`${outer} settles normally when the target catches the refused reentry`, async () => {
+      const { roles, checker, invoker, roleKey, encode } =
+        await loadFixture(setup);
+      // the outer call is attributed to its signer, or else its sender
+      const module =
+        outer === "execTransactionWithRoleSigned"
+          ? invoker.address
+          : await checker.getAddress();
+      await roles.grantRole(module, roleKey, 0, 0, 3);
+      await checker.setReentry(
+        await encode(
+          "execTransactionWithRole",
+          checker.interface.encodeFunctionData("doNothing"),
+        ),
+      );
+
+      await expect(
+        checker.callTwice(
+          await encode(outer, checker.interface.encodeFunctionData("attack")),
+          "0x",
+        ),
+      )
+        .to.emit(roles, "UpdateRole")
+        .withArgs(roleKey, module, 0, maxUint64, 2);
+      expect(await checker.reentryResult()).to.equal(
+        roles.interface.getError("Reentrancy")!.selector,
+      );
+      expect(await checker.doNothingCalled()).to.equal(false);
+      expect((await roles.membershipOf(module, roleKey)).usesLeft).to.equal(2);
+    });
+
+  // The IAvatar entrypoints return false, without reverting, when the call
+  // fails: nothing rolls the guard back, so the entrypoint must release it.
+  for (const outer of [
+    "execTransactionFromModule",
+    "execTransactionFromModuleReturnData",
+  ] as const)
+    it(`${outer} releases the guard when the call fails`, async () => {
+      const { roles, checker, encode, probe } = await loadFixture(setup);
+
+      await checker.callTwice(
+        await encode(outer, checker.interface.encodeFunctionData("fail")),
+        await probe(),
+      );
+
+      // it returned success = false
+      const [success] = (roles.interface as Interface).decodeFunctionResult(
+        outer,
+        await checker.firstResult(),
+      );
+      expect(success).to.equal(false);
+      expect(await checker.secondSucceeded()).to.equal(true);
+      expect(await checker.probeCalled()).to.equal(true);
+    });
 });

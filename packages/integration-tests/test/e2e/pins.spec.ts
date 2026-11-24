@@ -18,33 +18,32 @@ import { expect } from "chai"
 import {
   AbiCoder,
   Interface,
-  ZeroAddress,
-  ZeroHash,
   concat,
   getBytes,
   hexlify,
   keccak256,
   randomBytes,
   toBeHex,
-  zeroPadValue,
 } from "ethers"
 import type { Signer } from "ethers"
 import { network } from "hardhat"
 
 import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
-import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
+import { count, prng, safeWithRoles } from "./helpers.js"
 
 import { calldataMatches } from "../../../sdk/src/main/target/authoring/c/matches.js"
 import { or } from "../../../sdk/src/main/target/authoring/c/branching.js"
 import {
-  encodeAbiTypes,
   encodeTypedDomain,
   encodeTypedMessage,
   toAbiTypes,
 } from "../../../sdk/src/main/eip712-signer/encode/index.js"
 import { normalizeCondition } from "../../../sdk/src/main/condition/normalize/index.js"
 import { flattenCondition } from "../../../sdk/src/main/condition/flattenCondition.js"
+// from the built package: its source imports a module with top-level await,
+// which cannot be loaded from here
+import { allowSignTypedMessage } from "zodiac-roles-sdk"
 
 const connection = await network.create()
 const { ethers } = connection
@@ -57,59 +56,17 @@ const libIface = new Interface([
   "function signMessage(bytes message)",
   "event SignMsg(bytes32 indexed msgHash)",
 ])
+const safeIface = new Interface([
+  "function signedMessages(bytes32) view returns (uint256)",
+])
 
-let seed = Number(process.env.PIN_SEED ?? 1)
-const rnd = () => {
-  seed = (seed * 1103515245 + 12345) % 2 ** 31
-  return seed / 2 ** 31
-}
-const pick = <T>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]
-const int = (n: number) => Math.floor(rnd() * n)
-const count = (t: Record<string, number>, k: string) => {
-  t[k] = (t[k] ?? 0) + 1
-}
+const { rnd, int, pick } = prng(Number(process.env.PIN_SEED ?? 1))
+/** Outcomes that are neither a stored key nor a refusal by Roles or the
+ *  library: out of gas, a revert without data, a call that stored nothing. */
+const unexpected = (t: Record<string, number>) =>
+  Object.keys(t).filter((k) => !["stored", "roles", "library"].includes(k))
 const bytesOf = (n: number) =>
   hexlify(Uint8Array.from({ length: n }, () => int(256)))
-
-async function deployRoles(owner: string, avatar: string) {
-  const integrity = await (
-    await ethers.getContractFactory("Integrity")
-  ).deploy()
-  const evaluator = await (
-    await ethers.getContractFactory("Evaluator", {
-      libraries: { Integrity: await integrity.getAddress() },
-    })
-  ).deploy()
-  return (await ethers.getContractFactory("Roles")).deploy(
-    owner,
-    avatar,
-    avatar,
-    await evaluator.getAddress()
-  )
-}
-
-async function execSafe(owner: Signer, safe: string, to: string, data: string) {
-  const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
-    "0x01",
-  ])
-  return owner.sendTransaction({
-    to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      to,
-      0n,
-      data,
-      0,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      approval,
-    ]),
-  })
-}
 
 const flat = (condition: any) =>
   flattenCondition(normalizeCondition(condition)).map((c) => ({
@@ -153,10 +110,15 @@ function mutate(base: string, decoys: string[]): string {
         )
         break
       case 2: {
-        // change a length word
-        const p = Number(BigInt(hexlify(out.slice(4, 36)))) + 4
-        if (p + 32 <= out.length)
-          set(p, word(pick([0, 1, 31, 32, 33, 96, 2n ** 64n, 2n ** 256n - 1n])))
+        // change the length word of one of the arguments
+        const h = head(int(3))
+        if (h + 32 > out.length) break
+        const pointer = BigInt(hexlify(out.slice(h, h + 32)))
+        if (pointer + 36n > BigInt(out.length)) break
+        set(
+          Number(pointer) + 4,
+          word(pick([0, 1, 31, 32, 33, 96, 2n ** 64n, 2n ** 256n - 1n]))
+        )
         break
       }
       case 3:
@@ -207,21 +169,7 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
     const encoder = await (
       await ethers.getContractFactory("MockEIP712Encoder")
     ).deploy()
-    const safe = await deploySafe(
-      {
-        owners: [await owner.getAddress()],
-        threshold: 1,
-        creationNonce: BigInt(hexlify(randomBytes(32))),
-      },
-      owner as any
-    )
-    const roles = await deployRoles(await owner.getAddress(), safe)
-    await execSafe(
-      owner,
-      safe,
-      safe,
-      ifaceSafe.encodeFunctionData("enableModule", [await roles.getAddress()])
-    )
+    const { safe, roles } = await safeWithRoles(ethers, owner)
     const ds = abi.decode(
       ["bytes32"],
       await owner.call({
@@ -245,7 +193,25 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
     const role = hexlify(randomBytes(32))
     await roles.grantRole(await member.getAddress(), role, 0, 0, 0)
     await roles.scopeTarget(role, libAddr)
-    return { roles, member, lib, libAddr, encoder, safe, key, role }
+    /** The Safe has the key signed: `signedMessages(key) == 1`. */
+    const signedBySafe = async (k: string) =>
+      BigInt(
+        await ethers.provider.call({
+          to: safe,
+          data: safeIface.encodeFunctionData("signedMessages", [k]),
+        })
+      ) === 1n
+    return {
+      roles,
+      member,
+      lib,
+      libAddr,
+      encoder,
+      safe,
+      key,
+      role,
+      signedBySafe,
+    }
   }
 
   /** Runs `data` through Roles; the stored key, or why it was refused. */
@@ -266,7 +232,8 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
       const log = receipt.logs.find(
         (l: any) => l.topics[0] === libIface.getEvent("SignMsg")!.topicHash
       )
-      return { key: log?.topics[1] }
+      if (!log) return { refused: "other: succeeded without SignMsg" }
+      return { key: log.topics[1] }
     } catch (e: any) {
       const raw: string =
         typeof e.data === "string"
@@ -274,18 +241,20 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
           : (e.data?.data ?? e.info?.error?.data ?? "")
       const sel = typeof raw === "string" ? raw.slice(0, 10) : ""
       const rolesErr = sel ? roles.interface.getError(sel) : null
-      if (rolesErr && rolesErr.name !== "ModuleTransactionFailed")
-        return { refused: "roles" }
-      if (sel !== "") return { refused: "library" }
+      // the library's revert reaches us wrapped by Roles; anything else
+      // (a Panic, an unknown selector, no data) is unexpected
+      if (rolesErr?.name === "ModuleTransactionFailed")
+        return { refused: "library" }
+      if (rolesErr) return { refused: "roles" }
       return {
-        refused: "other:" + String(e.shortMessage ?? e.message).slice(0, 80),
+        refused: `other: ${sel || String(e.shortMessage ?? e.message).slice(0, 80)}`,
       }
     }
   }
 
   it(`signMessage: a stored key is a pinned message's (${CASES} calls)`, async function () {
     this.timeout(0)
-    const { roles, member, libAddr, key, role } = await setup()
+    const { roles, member, libAddr, key, role, signedBySafe } = await setup()
     const lens = [0, 1, 31, 32, 33, 64, 100]
     const pinned = [bytesOf(pick(lens)), bytesOf(pick(lens))]
     await roles.allowFunction(
@@ -311,159 +280,205 @@ describe("signing routes on chain: Roles' pins restrict what the library signs",
       if (r.key) {
         tally.stored++
         expect(keys, `stored key for ${data}`).to.include(r.key)
+        expect(await signedBySafe(r.key), `signed ${r.key}`).to.equal(true)
       } else count(tally, r.refused!)
     }
     console.log("signMessage", tally)
     expect(tally.stored).to.be.greaterThan(0)
+    expect(tally.roles, "Roles never refused").to.be.greaterThan(0)
+    expect(unexpected(tally), "unexpected outcomes").to.deep.equal([])
   })
 
-  it(`signTypedMessage: the library hashes the pinned types (${CASES} calls)`, async function () {
-    this.timeout(0)
-    const { roles, member, libAddr, encoder, key, role } = await setup()
-    const types = {
-      EIP712Domain: [
-        { name: "chainId", type: "uint256" },
-        { name: "verifyingContract", type: "address" },
-      ],
-      Order: [
-        { name: "amount", type: "uint256" },
-        { name: "note", type: "string" },
-      ],
-    } as const
-    const domain = { chainId: 1, verifyingContract: libAddr as `0x${string}` }
-    const nodes = toAbiTypes({ domain, types: types as any })
-    const typesValue = nodes.map((n: any) => [n.parent, n.encoding, n.typeHash])
-    // the condition allowSignTypedMessage builds: domain pinned, message
-    // free, types pinned (an array of (uint256, uint8, bytes32))
-    const S = { paramType: 1, operator: 0 }
-    const condition = {
-      paramType: 5,
-      operator: 5,
-      children: [
-        {
-          paramType: 5,
-          operator: 5,
-          compValue: "0x0000",
-          children: [
-            {
-              paramType: 1,
-              operator: 16,
-              compValue: abi.encode(["uint256"], [1]),
-            },
-            {
-              paramType: 1,
-              operator: 16,
-              compValue: abi.encode(["address"], [libAddr]),
-            },
-          ],
+  /** Types for signTypedMessage, with a message of them. */
+  const TYPED = {
+    flat: {
+      types: {
+        EIP712Domain: [
+          { name: "chainId", type: "uint256" },
+          { name: "verifyingContract", type: "address" },
+        ],
+        Order: [
+          { name: "amount", type: "uint256" },
+          { name: "note", type: "string" },
+        ],
+      },
+      message: { amount: 5n, note: "hello" },
+    },
+    "nested, with an array": {
+      types: {
+        EIP712Domain: [
+          { name: "chainId", type: "uint256" },
+          { name: "verifyingContract", type: "address" },
+        ],
+        Order: [
+          { name: "amount", type: "uint256" },
+          { name: "maker", type: "Person" },
+          { name: "ids", type: "uint256[]" },
+        ],
+        Person: [
+          { name: "name", type: "string" },
+          { name: "wallet", type: "address" },
+        ],
+      },
+      message: {
+        amount: 5n,
+        maker: {
+          name: "alice",
+          wallet: "0x00000000000000000000000000000000000000aa",
         },
-        {
-          paramType: 5,
-          operator: 5,
-          compValue: "0x0000",
-          children: [S, { paramType: 2, operator: 0 }],
-        },
-        {
-          paramType: 4,
-          operator: 16,
-          compValue: abi.encode(
-            ["tuple(uint256,uint8,bytes32)[]"],
-            [typesValue]
-          ),
-          children: [{ paramType: 3, operator: 0, children: [S, S, S] }],
-        },
-      ],
+        ids: [1n, 2n, 3n],
+      },
+    },
+  } as const
+
+  /** Allows the role the SDK's permission for `types`: domain pinned,
+   *  message free, types pinned. Returns the call signing `message`. */
+  async function allowTyped(
+    { roles, libAddr, role }: Awaited<ReturnType<typeof setup>>,
+    types: any,
+    message: any
+  ) {
+    const domain = {
+      chainId: 1,
+      verifyingContract: libAddr as `0x${string}`,
     }
-    const selector = keccak256(
-      encodeAbiTypes({ domain, types: types as any })
-    ).slice(0, 10)
-    await roles.allowFunction(role, libAddr, selector, flat(condition), 2)
+    const permission = allowSignTypedMessage({
+      types,
+      domain: { chainId: 1n, verifyingContract: libAddr } as any,
+      message: {} as any,
+    })
+    await roles.allowFunction(
+      role,
+      libAddr,
+      permission.selector,
+      flat(permission.condition),
+      2
+    )
+    const pinnedDomain = encodeTypedDomain({ domain, types })
+    const pinnedTypes = toAbiTypes({ types }).map(
+      (n: any) => [n.parent, n.encoding, n.typeHash] as const
+    )
     const signTyped = new Interface([
       "function signTypedMessage(bytes domain, bytes message, (uint256 parent, uint8 encoding, bytes32 typeHash)[] types)",
     ])
     const base =
-      selector +
+      permission.selector +
       signTyped
         .encodeFunctionData("signTypedMessage", [
-          encodeTypedDomain({ domain, types: types as any }),
-          encodeTypedMessage({
-            types: types as any,
-            message: { amount: 5n, note: "hello" },
-          } as any),
-          typesValue,
+          pinnedDomain,
+          encodeTypedMessage({ types, message } as any),
+          pinnedTypes,
         ])
         .slice(10)
-    const typesAt = (data: Uint8Array) => {
-      const load = (p: number) =>
-        BigInt(
-          hexlify(Uint8Array.from({ length: 32 }, (_, k) => data[p + k] ?? 0))
-        )
-      const ptr = Number((load(68) + 4n) % 2n ** 256n)
-      const n = Number(load(ptr))
-      return { ptr, n, load }
-    }
-    // the pinned types: those of the unmutated call
-    const pinnedTypes = (() => {
-      const d = getBytes(base)
-      const { ptr, n, load } = typesAt(d)
-      return Array.from({ length: n }, (_, i) => [
-        load(ptr + 32 + 96 * i),
-        load(ptr + 64 + 96 * i),
-        toBeHex(load(ptr + 96 + 96 * i), 32),
-      ])
-    })()
-    const decoys = [
-      // a types array with a different message type hash
-      "0x" +
-        abi
-          .encode(
-            ["tuple(uint256,uint8,bytes32)[]"],
-            [
-              pinnedTypes.map(([p, e, h], i) => [
-                p,
-                e,
-                i === 1 ? keccak256("0x01") : h,
-              ]),
-            ]
-          )
-          .slice(66),
-      bytesOf(64),
-    ]
+    return { domain, pinnedDomain, pinnedTypes, base }
+  }
 
-    const tally = { stored: 0, roles: 0, library: 0, unchecked: 0 }
-    for (let i = 0; i < CASES; i++) {
-      const data = rnd() < 0.2 ? base : mutate(base, decoys)
-      const r = await run(roles, member, libAddr, role, data)
-      if (!r.key) {
-        count(tally, r.refused!)
-        continue
-      }
-      tally.stored++
-      // what the fallback hands to the encoder
-      const d = getBytes(data)
-      const load = (p: number) =>
-        BigInt(
-          hexlify(Uint8Array.from({ length: 32 }, (_, k) => d[p + k] ?? 0))
+  for (const [name, { types, message }] of Object.entries(TYPED))
+    it(`signTypedMessage (${name}): the library hashes the pinned domain and types (${CASES} calls)`, async function () {
+      this.timeout(0)
+      const ctx = await setup()
+      const { roles, member, libAddr, encoder, key, role, signedBySafe } = ctx
+      const { domain, pinnedDomain, pinnedTypes, base } = await allowTyped(
+        ctx,
+        types,
+        message
+      )
+      const decoys = [
+        // a types array with a different message type hash
+        "0x" +
+          abi
+            .encode(
+              ["tuple(uint256,uint8,bytes32)[]"],
+              [
+                pinnedTypes.map(([p, e, h], i) => [
+                  p,
+                  e,
+                  i === 1 ? keccak256("0x01") : h,
+                ]),
+              ]
+            )
+            .slice(66),
+        // a domain with another chain id
+        encodeTypedDomain({
+          domain: { ...domain, chainId: 5 },
+          types: types as any,
+        }),
+        bytesOf(64),
+      ]
+
+      const tally = { stored: 0, roles: 0, library: 0 }
+      for (let i = 0; i < CASES; i++) {
+        const data = rnd() < 0.2 ? base : mutate(base, decoys)
+        const r = await run(roles, member, libAddr, role, data)
+        if (!r.key) {
+          count(tally, r.refused!)
+          continue
+        }
+        tally.stored++
+        const d = getBytes(data)
+        const load = (p: number) =>
+          BigInt(
+            hexlify(Uint8Array.from({ length: 32 }, (_, k) => d[p + k] ?? 0))
+          )
+        // The fallback takes `domain` and `message` offsets and lengths from
+        // the calldata, and reverts unless they lie within it
+        // (`SignTypedMessageLib._argument`): a stored key means they do.
+        const size = BigInt(d.length)
+        const arg = (j: number) => {
+          const pointer = load(4 + 32 * j)
+          if (size < 0x64n || pointer > size - 0x24n) return undefined
+          const off = pointer + 0x24n
+          const len = load(Number(pointer) + 4)
+          if (len > size - off) return undefined
+          return hexlify(d.slice(Number(off), Number(off + len)))
+        }
+        const [a0, a1] = [arg(0), arg(1)]
+        expect(
+          a0 !== undefined && a1 !== undefined,
+          `stored a key for arguments outside the calldata: ${data}`
+        ).to.equal(true)
+        // whatever domain the calldata carries, the key is the pinned one's
+        const digest = await encoder.hashTypedMessage(
+          pinnedDomain,
+          a1!,
+          pinnedTypes as any
         )
-      // The fallback takes `domain` and `message` offsets and lengths from
-      // the calldata, and reverts unless they lie within it.
-      const arg = (j: number) => {
-        const off = Number((load(4 + 32 * j) + 36n) % 2n ** 256n)
-        const len = load(off - 32)
-        if (len > BigInt(d.length + 4096)) return undefined
-        return hexlify(
-          Uint8Array.from({ length: Number(len) }, (_, k) => d[off + k] ?? 0)
+        expect(r.key, `stored key for ${data}`).to.equal(key(digest))
+        expect(await signedBySafe(r.key!), `signed ${r.key}`).to.equal(true)
+      }
+      console.log(`signTypedMessage (${name})`, tally)
+      expect(tally.stored).to.be.greaterThan(0)
+      expect(tally.roles, "Roles never refused").to.be.greaterThan(0)
+      expect(unexpected(tally), "unexpected outcomes").to.deep.equal([])
+    })
+
+  // Roles checks only what a condition walks: under `Pass` (the message is
+  // free) it does not read a nested struct's head. The library hashes the
+  // whole message, so it refuses a malformed field there: nothing is signed.
+  it("signTypedMessage: a malformed field the condition leaves free is refused by the library", async () => {
+    const ctx = await setup()
+    const { roles, member, libAddr, role } = ctx
+    const { types, message } = TYPED["nested, with an array"]
+    const { base } = await allowTyped(ctx, types, message)
+    const send = (data: string) =>
+      roles.connect(member).execTransactionWithRole(libAddr, 0, data, 1, role)
+
+    // message -> Order head: amount, maker's offset; maker's head: name's offset
+    const d = getBytes(base)
+    const word = (at: number) => Number(BigInt(hexlify(d.slice(at, at + 32))))
+    const messageAt = 4 + word(4 + 32) + 32
+    const makerAt = messageAt + word(messageAt + 32)
+    // maker.name's offset, far past the end
+    d.set(getBytes(toBeHex(2n ** 200n + 0x40n, 32)), makerAt)
+
+    await expect(send(hexlify(d)))
+      .to.be.revertedWithCustomError(roles, "ModuleTransactionFailed")
+      .withArgs(
+        new Interface(["error InvalidEIP712Encoding()"]).encodeErrorResult(
+          "InvalidEIP712Encoding"
         )
-      }
-      const [a0, a1] = [arg(0), arg(1)]
-      if (a0 === undefined || a1 === undefined) {
-        tally.unchecked++
-        continue
-      }
-      const digest = await encoder.hashTypedMessage(a0, a1, pinnedTypes)
-      expect(r.key, `stored key for ${data}`).to.equal(key(digest))
-    }
-    console.log("signTypedMessage", tally)
-    expect(tally.stored).to.be.greaterThan(0)
+      )
+    // the same call, well formed, is signed
+    await expect(send(base)).to.not.be.revert(ethers)
   })
 })

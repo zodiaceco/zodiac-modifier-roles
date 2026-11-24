@@ -17,7 +17,7 @@ import { createSetup } from "./setup.js";
 const connection = await network.create();
 const { ethers, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { deployRolesMod } = createSetup(connection);
+const { deployRolesMod, deployMultiSend } = createSetup(connection);
 
 const abiCoder = AbiCoder.defaultAbiCoder();
 
@@ -143,23 +143,11 @@ describe("Authorization", () => {
   async function setupMultiSend() {
     const base = await setup();
 
-    const MultiSend = await ethers.getContractFactory("MultiSend");
-    const multisend = await MultiSend.deploy();
+    const { multisend, unwrapper } = await deployMultiSend(base.roles);
     const multisendAddress = await multisend.getAddress();
-
-    const MultiSendUnwrapper =
-      await ethers.getContractFactory("MultiSendUnwrapper");
-    const unwrapper = await MultiSendUnwrapper.deploy();
     const unwrapperAddress = await unwrapper.getAddress();
-
     const multiSendSelector =
       multisend.interface.getFunction("multiSend").selector;
-
-    await base.roles.setTransactionUnwrapper(
-      multisendAddress,
-      multiSendSelector,
-      unwrapperAddress,
-    );
 
     const encodeBatch = (txs: Parameters<typeof encodeMultisendPayload>[0]) =>
       multisend.interface.encodeFunctionData("multiSend", [

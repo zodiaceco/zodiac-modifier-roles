@@ -6,6 +6,9 @@ import type {
   Roles,
 } from "../typechain-types/contracts/Roles.js";
 
+export const maxUint64 = 2n ** 64n - 1n;
+export const maxUint128 = 2n ** 128n - 1n;
+
 export interface MetaTransaction {
   to: string;
   value: BigNumberish;

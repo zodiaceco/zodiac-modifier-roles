@@ -7,6 +7,8 @@ import {
   ExecutionOptions,
   Operator,
   packConditions,
+  maxUint64,
+  maxUint128,
 } from "./utils.js";
 import { createSetup } from "./setup.js";
 
@@ -15,14 +17,11 @@ const { ethers, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
 const { deployEvaluator, deployRolesMod } = createSetup(connection);
 
-const maxUint64 = 2n ** 64n - 1n;
-const maxUint128 = 2n ** 128n - 1n;
-
 const iface = new Interface([
   "function doNothing()",
   "function doEvenLess()",
   "function oneParamStatic(uint256)",
-  "function fnThatReverts()",
+  "function other()",
 ]);
 
 /**
@@ -1322,14 +1321,19 @@ describe("Setup", () => {
       expect(allowance.period).to.equal(3600);
     });
 
-    it("emits SetAllowance event", async () => {
+    it("emits SetAllowance with the stored values, defaults resolved", async () => {
       const { roles } = await loadFixture(setup);
 
       const ALLOWANCE_KEY = ethers.id("TEST_ALLOWANCE");
 
-      await expect(
-        roles.setAllowance(ALLOWANCE_KEY, 500, 1000, 100, 3600, 0),
-      ).to.emit(roles, "SetAllowance");
+      const tx = await roles.setAllowance(ALLOWANCE_KEY, 500, 0, 100, 3600, 0);
+      const block = await ethers.provider.getBlock(
+        (await tx.wait())!.blockNumber,
+      );
+
+      await expect(tx)
+        .to.emit(roles, "SetAllowance")
+        .withArgs(ALLOWANCE_KEY, 500, maxUint128, 100, 3600, block!.timestamp);
     });
 
     describe("default values", () => {
@@ -1372,13 +1376,25 @@ describe("Setup", () => {
       const ALLOWANCE_KEY = ethers.id("TEST_ALLOWANCE");
 
       await roles.setAllowance(ALLOWANCE_KEY, 500, 1000, 100, 3600, 0);
-      await roles.setAllowance(ALLOWANCE_KEY, 999, 2000, 200, 7200, 0);
+      await time.increase(1000);
+      const tx = await roles.setAllowance(
+        ALLOWANCE_KEY,
+        999,
+        2000,
+        200,
+        7200,
+        0,
+      );
+      const block = await ethers.provider.getBlock(
+        (await tx.wait())!.blockNumber,
+      );
 
       const allowance = await roles.allowances(ALLOWANCE_KEY);
       expect(allowance.balance).to.equal(999);
       expect(allowance.maxRefill).to.equal(2000);
       expect(allowance.refill).to.equal(200);
       expect(allowance.period).to.equal(7200);
+      expect(allowance.timestamp).to.equal(block!.timestamp);
     });
   });
 
@@ -1426,16 +1442,18 @@ describe("Setup", () => {
       expect(allowance.timestamp).to.equal(initialAllowance.timestamp);
     });
 
-    it("emits SetAllowance event", async () => {
+    it("emits SetAllowance with the preserved balance and timestamp", async () => {
       const { roles } = await loadFixture(setup);
 
       const ALLOWANCE_KEY = ethers.id("TEST_ALLOWANCE");
 
       await roles.setAllowance(ALLOWANCE_KEY, 500, 1000, 100, 3600, 0);
+      const { timestamp } = await roles.allowances(ALLOWANCE_KEY);
+      await time.increase(1000);
 
-      await expect(
-        roles.updateAllowance(ALLOWANCE_KEY, 2000, 200, 7200),
-      ).to.emit(roles, "SetAllowance");
+      await expect(roles.updateAllowance(ALLOWANCE_KEY, 0, 200, 7200))
+        .to.emit(roles, "SetAllowance")
+        .withArgs(ALLOWANCE_KEY, 500, maxUint128, 200, 7200, timestamp);
     });
   });
 
@@ -1585,7 +1603,7 @@ describe("Setup", () => {
         await loadFixture(setup);
 
       const selector1 = iface.getFunction("doNothing")!.selector;
-      const selector2 = iface.getFunction("fnThatReverts")!.selector;
+      const selector2 = iface.getFunction("other")!.selector;
 
       await roles.grantRole(member.address, ROLE_KEY, 0, 0, 0);
       await roles.setDefaultRole(member.address, ROLE_KEY);
@@ -1619,7 +1637,7 @@ describe("Setup", () => {
           .execTransactionFromModule(
             testContractAddress,
             0,
-            iface.encodeFunctionData("fnThatReverts"),
+            iface.encodeFunctionData("other"),
             0,
           ),
       ).to.be.revertedWithCustomError(roles, "TransactionNotAllowed");
