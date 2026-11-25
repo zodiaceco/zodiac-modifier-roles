@@ -104,17 +104,13 @@ export const toFlatNodes = (flat: readonly ConditionFlatInput[]): FlatNode[] =>
 // Types (`Ty`, `K`)
 // ---------------------------------------------------------------------------
 
-/**
- * The ABI type a node describes (T1). An open tuple (`o`: a `Matches` whose
- * fields are not all static, T2) types the first fields only: the value may
- * have more. A call type is always open.
- */
+/** The ABI type a node describes (T1). */
 export type Ty =
   | { k: "static" }
   | { k: "dynamic" }
-  | { k: "tuple"; ts: Ty[]; o: boolean }
+  | { k: "tuple"; ts: Ty[] }
   | { k: "array"; t: Ty }
-  | { k: "call"; lb: number; ts: Ty[]; o: boolean }
+  | { k: "call"; lb: number; ts: Ty[] }
 
 const STATIC: Ty = { k: "static" }
 const DYNAMIC: Ty = { k: "dynamic" }
@@ -127,18 +123,15 @@ export const tyKey = (t: Ty): string => {
     case "dynamic":
       return "D"
     case "tuple":
-      return `T(${[...t.ts.map(tyKey), ...(t.o ? [".."] : [])].join(",")})`
+      return `T(${t.ts.map(tyKey).join(",")})`
     case "array":
       return `A(${tyKey(t.t)})`
     case "call":
-      return `C${t.lb}(${[...t.ts.map(tyKey), ...(t.o ? [".."] : [])].join(",")})`
+      return `C${t.lb}(${t.ts.map(tyKey).join(",")})`
   }
 }
 
 const tyEq = (a: Ty, b: Ty) => tyKey(a) === tyKey(b)
-
-const isStatic = (t: Ty): boolean =>
-  t.k === "static" || (t.k === "tuple" && t.ts.every(isStatic))
 
 const isBytesLike = (t: Ty): boolean => t.k === "dynamic" || t.k === "call"
 
@@ -149,10 +142,7 @@ const fits = (a: Ty, b: Ty): boolean => {
   if (isBytesLike(a) && isBytesLike(b)) return true
   if (a.k === "array" && b.k === "array") return fits(a.t, b.t)
   if (a.k === "tuple" && b.k === "tuple") {
-    const prefix = b.ts.every((t, i) => i < a.ts.length && fits(a.ts[i], t))
-    return b.o
-      ? b.ts.length <= a.ts.length && prefix
-      : !a.o && a.ts.length === b.ts.length && prefix
+    return a.ts.length === b.ts.length && a.ts.every((t, i) => fits(t, b.ts[i]))
   }
   return false
 }
@@ -680,9 +670,7 @@ const classifyNode = (
         return undefined
       // T2: no child without a type
       const ts = allTy(ks)
-      // T2: open if a Matches that is not static
-      const o = op === Op.Matches && !(ts ?? []).every(isStatic)
-      return ts && { k: "ty", t: { k: "tuple", ts, o } }
+      return ts && { k: "ty", t: { k: "tuple", ts } }
     }
     case Enc.Array: {
       // T2: below an operator that does not navigate, one exact child
@@ -707,7 +695,7 @@ const classifyNode = (
       // T2: a Matches may list no parameters, none without a type
       if (op !== Op.Matches) return undefined
       const ts = allTy(ks)
-      return ts && { k: "ty", t: { k: "call", lb, ts, o: true } }
+      return ts && { k: "ty", t: { k: "call", lb, ts } }
     }
     case Enc.None:
       // T1: a Zip reads the arrays in its slots, nothing where it sits

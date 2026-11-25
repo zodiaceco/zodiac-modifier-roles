@@ -335,18 +335,23 @@ suite("normalizeCondition()", () => {
         ).to.equal(Operator.Or)
       })
 
-      it("keeps checks of a prefix of one tuple apart", () => {
+      it("merges checks of one tuple that list all its fields", () => {
+        const word: Condition = {
+          paramType: Encoding.Static,
+          operator: Operator.Pass,
+        }
         const condition = {
           paramType: Encoding.None,
           operator: Operator.Or,
           children: [
-            call(DUMMY_COMP(0), tuple(dyn, DUMMY_COMP(1))),
+            call(DUMMY_COMP(0), tuple(dyn, DUMMY_COMP(1), word)),
             call(DUMMY_COMP(0), tuple(dyn, DUMMY_COMP(1), DUMMY_COMP(2))),
           ],
         }
-        expect(
-          normalizeCondition(structuredClone(condition)).operator
-        ).to.equal(Operator.Or)
+        const result = normalizeCondition(structuredClone(condition))
+        expect(result.operator).to.equal(Operator.Matches)
+        // the Or sits at the one field the branches differ in
+        expect(result.children![1].children![2].operator).to.equal(Operator.Or)
       })
     }
   )

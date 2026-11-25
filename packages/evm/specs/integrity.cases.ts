@@ -4857,8 +4857,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T3",
-    name: "the longer tuple prefix first",
-    valid: true,
+    name: "a longer tuple, then a shorter one",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Matches, compValue: "0x" },
@@ -4883,8 +4884,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T3",
-    name: "the shorter tuple prefix first",
-    valid: true,
+    name: "a shorter tuple, then a longer one",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Matches, compValue: "0x" },
@@ -4897,7 +4899,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T3",
-    name: "an open tuple first, then a closed one that fits it",
+    name: "a Matches tuple first, then a Pass one with the same fields",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5138,8 +5140,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open tuples of different lengths",
-    valid: true,
+    name: "Matches tuples of different lengths",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
@@ -5154,8 +5157,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "an open tuple and a longer closed one",
-    valid: true,
+    name: "a Matches tuple and a longer Pass one",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
@@ -5277,7 +5281,30 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open tuples that disagree on a field",
+    name: "Matches tuples that check different nested tuples",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 2, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 4, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 4, paramType: E.Static, operator: O.EqualTo, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
+      { parent: 5, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 6, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 6, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Static, operator: O.EqualTo, compValue: "0x0000000000000000000000000000000000000000000000000000000000000002" },
+    ],
+  },
+  {
+    rule: "T5",
+    name: "Matches tuples that disagree on a field",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
@@ -5310,7 +5337,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "in an array: a closed tuple first fits an open one",
+    name: "in an array: a Pass tuple first fits a Matches one",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5599,8 +5626,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T7",
-    name: "a shorter open tuple on tuples with bytes",
-    valid: true,
+    name: "a shorter Matches tuple on tuples with bytes",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [7] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },

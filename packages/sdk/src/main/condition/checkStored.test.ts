@@ -51,9 +51,8 @@ const pass = (e: number, ch?: N[]): N => ({ e, o: Op.Pass, ch })
 
 suite("checkStored()", () => {
   it("accepts a typed call and returns its type", () => {
-    // transfer(address to, uint256 amount) with amount == 1000 (`..`: open,
-    // a `Matches` reads the first arguments, there may be more)
-    expect(verdict(call([pass(Enc.Static), eqWord(1000)]))).toBe("C4(S,S,..)")
+    // transfer(address to, uint256 amount) with amount == 1000
+    expect(verdict(call([pass(Enc.Static), eqWord(1000)]))).toBe("C4(S,S)")
   })
 
   it("rejects parents and encodings that are not natural numbers", () => {
@@ -83,7 +82,7 @@ suite("checkStored()", () => {
       ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
     }
     const tree = call([{ e: Enc.None, o: Op.And, ch: [slice, eqWord(1)] }])
-    expect(verdict(tree)).toBe("C4(S,..)")
+    expect(verdict(tree)).toBe("C4(S)")
   })
 
   it("accepts variants: different call types on one bytes value", () => {
@@ -91,7 +90,7 @@ suite("checkStored()", () => {
     const b = call([pass(Enc.Dynamic)], "0x000422222222")
     const tree = call([{ e: Enc.None, o: Op.Or, ch: [a, b] }])
     // any bytes value has every call type (T5): the first one
-    expect(verdict(tree)).toBe("C4(C4(S,..),..)")
+    expect(verdict(tree)).toBe("C4(C4(S))")
   })
 })
 
@@ -103,7 +102,7 @@ suite("siblingsSameType()", () => {
     children: children as any,
   })
 
-  it("takes a static tuple as closed, whatever its operator (T2)", () => {
+  it("takes a tuple by its fields, whatever its operator (T2)", () => {
     expect(
       siblingsSameType([
         tuple(Op.Matches, word, word),
@@ -112,12 +111,18 @@ suite("siblingsSameType()", () => {
     ).toBe(true)
   })
 
-  it("tells an open tuple from a closed one", () => {
+  it("tells tuples with different fields apart", () => {
     const bytes = { paramType: Enc.Dynamic, operator: Op.Pass }
     expect(
       siblingsSameType([
         tuple(Op.Matches, word, bytes),
         tuple(Op.Pass, word, bytes),
+      ])
+    ).toBe(true)
+    expect(
+      siblingsSameType([
+        tuple(Op.Matches, word, bytes),
+        tuple(Op.Matches, word, bytes, word),
       ])
     ).toBe(false)
   })

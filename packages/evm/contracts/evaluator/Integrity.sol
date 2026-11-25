@@ -39,8 +39,7 @@ library Integrity {
      * ether value, an allowance, a Zip), or describes a value of some ABI
      * type. A type is a word, bytes, or the type of a Tuple, Array or
      * AbiEncoded node, written as TYPE_OF + that node's index:
-     * - Tuple:      the types of its children; open if the node is a
-     *               Matches, which may list only the first fields
+     * - Tuple:      the types of its children, one per field
      * - Array:      its element type (`Node.element`)
      * - AbiEncoded: nested calldata, interchangeable with bytes
      */
@@ -61,8 +60,6 @@ library Integrity {
         uint256 kind;
         /// Arrays: the element type
         uint256 element;
-        /// The node's type has a fixed size
-        bool staticType;
         /// The subtree is a plain type description: Pass nodes only
         bool exact;
         /// The node may be the root: calldata, or And / Or over such nodes
@@ -649,9 +646,7 @@ library Integrity {
             }
 
             node.kind = TYPE_OF + index;
-            if (encoding == Encoding.Tuple) {
-                node.staticType = children.allStatic;
-            } else if (encoding == Encoding.Array) {
+            if (encoding == Encoding.Array) {
                 node.element = _elementType(nodes, index);
             }
         } else {
@@ -663,8 +658,6 @@ library Integrity {
     struct Children {
         /// All are plain type descriptions
         bool allExact;
-        /// All have a type of fixed size
-        bool allStatic;
         /// All describe a value: none reads no calldata
         bool allTypes;
         /// All may sit below a root And / Or
@@ -677,13 +670,11 @@ library Integrity {
     ) private pure returns (Children memory children) {
         Node memory node = nodes[index];
         children.allExact = true;
-        children.allStatic = true;
         children.allTypes = true;
         children.allRoots = true;
         for (uint256 i; i < node.childCount; ++i) {
             Node memory child = nodes[node.childStart + i];
             if (!child.exact) children.allExact = false;
-            if (!_isStatic(nodes, child.kind)) children.allStatic = false;
             if (child.kind < STATIC) children.allTypes = false;
             // Below a root And / Or: another root, or a node that is
             // evaluated nowhere in particular
@@ -801,40 +792,14 @@ library Integrity {
             return _isSubtype(nodes, x.element, y.element);
         }
 
-        // Static tuples are always closed (inlined with exact field count).
-        bool openX = x.operator == Operator.Matches && !x.staticType;
-        bool openY = y.operator == Operator.Matches && !y.staticType;
-        if (!openY) {
-            return
-                !openX &&
-                x.childCount == y.childCount &&
-                _isPrefix(nodes, x, y);
-        }
-        return x.childCount >= y.childCount && _isPrefix(nodes, x, y);
-    }
-
-    /// @dev Whether the first fields of tuple `x` are subtypes of the fields
-    ///      of tuple `y`.
-    function _isPrefix(
-        Node[] memory nodes,
-        Node memory x,
-        Node memory y
-    ) private pure returns (bool) {
+        // Tuples: the same fields, one by one
+        if (x.childCount != y.childCount) return false;
         for (uint256 i; i < y.childCount; ++i) {
-            uint256 a = nodes[x.childStart + i].kind;
-            uint256 b = nodes[y.childStart + i].kind;
-            if (!_isSubtype(nodes, a, b)) return false;
+            uint256 fieldA = nodes[x.childStart + i].kind;
+            uint256 fieldB = nodes[y.childStart + i].kind;
+            if (!_isSubtype(nodes, fieldA, fieldB)) return false;
         }
         return true;
-    }
-
-    function _isStatic(
-        Node[] memory nodes,
-        uint256 kind
-    ) private pure returns (bool) {
-        return
-            kind == STATIC ||
-            (kind >= TYPE_OF && nodes[kind - TYPE_OF].staticType);
     }
 
     function _isBytes(

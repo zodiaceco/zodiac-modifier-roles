@@ -37,7 +37,6 @@ suite("packConditions()", () => {
         k: "call",
         lb: 4,
         ts: [{ k: "static" }, { k: "static" }],
-        o: true,
       },
     })
     expect(packed).toBe(
