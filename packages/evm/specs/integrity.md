@@ -147,8 +147,7 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - A container has at least one child, and every child has a type: none
     has kind _no type_ (`UnsuitableChildCount(i)`).
   - A container whose operator does not navigate has only _exact_ children
-    (`UnsuitableChildTypeTree(i)`). A node is exact if its encoding is
-    AbiEncoded, or its operator is Slice, or its operator does not navigate
+    (`UnsuitableChildTypeTree(i)`). A node is exact if its operator is Pass
     and all its children are exact.
   - A tuple type lists the types of its children in order. It is _open_ if
     the operator is Matches and _closed_ otherwise.
@@ -195,8 +194,7 @@ The remaining rules walk the tree from the root with a set `A` of slots that
 are known to be written, starting empty. Each node receives a set and returns
 one.
 
-- **P2. Writes.** A Pluck returns `A` plus its slot. Its children are not
-  visited.
+- **P2. Writes.** A Pluck returns `A` plus its slot.
 - **P3. Reads.** A read of a slot that is not in the set received is
   rejected (`PluckNotVisitedBeforeRef(i, slot)`).
   - WithinRatio reads its reference slot and its relative slot, and returns
@@ -213,6 +211,4 @@ one.
     sequence from `A`. ZipSome returns what its last field returns. ZipEvery
     returns `A`.
   - Slice: returns what its child returns.
-- **P5. Everything else.** Any other node returns `A`, and its children are
-  not visited. A Pluck below such a node writes nothing, and a read below it
-  is not checked.
+- **P5. Everything else.** Any other node returns `A`.

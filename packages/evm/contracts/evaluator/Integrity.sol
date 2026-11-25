@@ -63,7 +63,7 @@ library Integrity {
         uint256 element;
         /// The node's type has a fixed size
         bool staticType;
-        /// The subtree is a plain type description: nothing in it navigates
+        /// The subtree is a plain type description: Pass nodes only
         bool exact;
         /// The node may be the root: calldata, or And / Or over such nodes
         bool rootOk;
@@ -594,10 +594,7 @@ library Integrity {
             encoding == Encoding.EtherValue) && !isLogical;
 
         Children memory children = _children(nodes, index);
-        node.exact =
-            encoding == Encoding.AbiEncoded ||
-            op == Operator.Slice ||
-            (!navigates && children.allExact);
+        node.exact = op == Operator.Pass && children.allExact;
         node.rootOk =
             encoding == Encoding.AbiEncoded ||
             (isLogical && children.allRoots);
@@ -626,16 +623,9 @@ library Integrity {
                 revert IEvaluatorError.UnsuitableChildCount(index);
             }
 
-            /*
-             * Operators that read the container as a whole value (EqualTo,
-             * Custom, Pluck, Pass) size it from the children. Those must be
-             * a plain type description: a child that navigates (a Matches
-             * may list only some fields) would not give the value's size.
-             */
-            bool whole = encoding == Encoding.AbiEncoded
-                ? op != Operator.Matches
-                : !navigates;
-            if (whole && !children.allExact) {
+            // Non-navigating containers never evaluate their children; they
+            // only describe the ABI type, so the subtree must be Pass nodes.
+            if (!navigates && !children.allExact) {
                 revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
 

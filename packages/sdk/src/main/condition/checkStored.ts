@@ -642,16 +642,9 @@ const logicalTy = (s: boolean, ks: readonly K[]): Ty | undefined => {
   return undefined
 }
 
-/**
- * `exactTy`: a type description, as the children of a node that reads its
- * whole value must be (their sizes give the length read). No node of the
- * subtree navigates, except below nested calldata (sized as `bytes`) and a
- * `Slice` (a word or `bytes`), whose own children do not change their size.
- */
+/** Pure type description (Pass nodes only), required below non-navigating containers. */
 const exactTy = (c: Node): boolean =>
-  c.encoding === Enc.AbiEncoded ||
-  c.operator === Op.Slice ||
-  (!isNavOp(c.operator) && c.children.every(exactTy))
+  c.operator === Op.Pass && c.children.every(exactTy)
 
 const logicalKind = (s: boolean, ks: readonly K[]): K | undefined => {
   if (ks.length === 0) return undefined

@@ -4614,8 +4614,9 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T2",
-    name: "a Slice is exact",
-    valid: true,
+    name: "Pass on Tuple over Slice",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
@@ -4626,8 +4627,20 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T2",
-    name: "an AbiEncoded node is exact",
+    name: "Pass on Array over Pass on AbiEncoded",
     valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pass on Array over Matches on AbiEncoded",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
@@ -4706,6 +4719,41 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 1, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
       { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
       { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pass on Tuple over EqualTo",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.EqualTo, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pass on Tuple over Pluck",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pluck on Array over Pluck",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x05" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x00" },
     ],
   },
 
@@ -5657,20 +5705,6 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 2, paramType: E.Static, operator: O.Pluck, compValue: "0x01" },
     ],
   },
-  {
-    rule: "P2",
-    name: "a Pluck among the children of an array Pluck is not visited",
-    valid: false,
-    error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
-    flat: [
-      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.None, operator: O.WithinRatio, compValue: "0x001201060000000000002710" },
-      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x05" },
-      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x01" },
-      { parent: 3, paramType: E.Static, operator: O.Pluck, compValue: "0x00" },
-    ],
-  },
 
   // P3. Reads
   {
@@ -6114,29 +6148,15 @@ export const integrityCases: readonly IntegrityCase[] = [
   // P5. Everything else
   {
     rule: "P5",
-    name: "a Pluck below a Pass on Tuple writes nothing",
-    valid: false,
-    error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
+    name: "a check returns the slots it received",
+    valid: true,
     flat: [
       { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.WithinRatio, compValue: "0x001201060000000000002710" },
-      { parent: 1, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.Static, operator: O.Pluck, compValue: "0x00" },
-      { parent: 3, paramType: E.Static, operator: O.Pluck, compValue: "0x01" },
-    ],
-  },
-  {
-    rule: "P5",
-    name: "a read below a Pass on Array is not checked",
-    valid: true,
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
-      { parent: 1, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 2, paramType: E.None, operator: O.And, compValue: "0x" },
-      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.None, operator: O.WithinRatio, compValue: "0x001201060000000000002710" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Static, operator: O.GreaterThan, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x01" },
     ],
   },
 ];
