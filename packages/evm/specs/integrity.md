@@ -26,23 +26,6 @@ of one of them. Which one is not specified.
   ArrayTailMatches, Slice, ZipSome, ZipEvery. These evaluate their children.
   Every other operator never evaluates its children.
 
-## Order of checks (informative)
-
-This section describes the contract as it is. It is not a rule: another
-implementation may check in any order.
-
-1. Layout (section 1). L1 first. Then L2 and L3 node by node, by increasing
-   index, the encoding before the operator. Then L4 by increasing index, the
-   `compValue` before the child count. Then L5 by decreasing index.
-2. For every Pluck, by increasing index: O8's encoding, O8's `compValue`, P1.
-3. The other operator rules (section 2), node by node, by increasing index.
-   O18 comes last on each node.
-4. The types of each node, by decreasing index (children before parents). On
-   the root, T6 comes first. Then T2 and T3 for a container, P2 for a Zip, T4
-   for a logical node.
-5. T7, by increasing index.
-6. P3 to P6, walking from the root, children in order.
-
 ## 1. Layout
 
 - **L1. Node count.** The array has 1 to 65,535 nodes.
@@ -158,11 +141,13 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - _Bytes_: the encoding is Dynamic.
   - _Tuple_, _array_ or _call_: a container (T2).
   - A logical node takes its kind from its children (T4).
+
+  The encoding decides first: a logical node or a Zip whose encoding is
+  Static, Dynamic, Tuple, Array or AbiEncoded has the kind of that encoding.
 - **T2. Containers.**
   - A container has at least one child, and every child has a type: none
     has kind _no type_ or _Zip_ (`UnsuitableChildCount(i)`).
-  - A Tuple or Array whose operator does not navigate, and an AbiEncoded
-    whose operator is not Matches, has only _exact_ children
+  - A container whose operator does not navigate has only _exact_ children
     (`UnsuitableChildTypeTree(i)`). A node is exact if its encoding is
     AbiEncoded, or its operator is Slice, or its operator does not navigate
     and all its children are exact.
@@ -233,8 +218,7 @@ one.
   - ArraySome: returns what its child returns.
   - ArrayEvery: its child is checked from `A`. The node returns `A`.
   - Zip: its fields (the children of its Tuple child) are checked in
-    sequence from `A`. ZipSome returns what the last field returned,
-    ZipEvery returns `A`.
+    sequence from `A`. The node returns `A`.
   - Slice: returns what its child returns.
 - **P6. Everything else.** Any other node returns `A`, and its children are
   not visited. A Pluck below such a node writes nothing, and a read below it
