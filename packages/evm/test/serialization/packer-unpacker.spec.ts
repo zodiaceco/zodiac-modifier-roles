@@ -86,10 +86,17 @@ const flatten = (root: N): ConditionFlat[] =>
 // The format, restated
 // ---------------------------------------------------------------------------
 
-/** A node is inlined (encoded in place) unless something in it is dynamic. */
+/** A Zip is evaluated at the arrays in its slots, not where it sits. */
+const isZip = (n: N) => n.operator === O.ZipSome || n.operator === O.ZipEvery;
+
+/**
+ * A node is inlined (encoded in place) unless something in it is dynamic.
+ * A Zip is not inlined, and its parent does not count it.
+ */
 const isInlined = (n: N): boolean =>
+  !isZip(n) &&
   ![E.Dynamic, E.Array, E.AbiEncoded].includes(n.paramType) &&
-  n.children.every(isInlined);
+  n.children.every((child) => isZip(child) || isInlined(child));
 
 /**
  * The size stored for a node: its encoded size if inlined, else 0. A word

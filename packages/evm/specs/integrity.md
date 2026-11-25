@@ -44,8 +44,8 @@ of one of them. Which one is not specified.
   (`UnsuitableCompValue(i)`). A node has at most 1,023 children
   (`ConditionChildCountExceedsMax(i)`).
 - **L5. Inlined size.** A node is _inlined_ unless its encoding is Dynamic,
-  Array or AbiEncoded, or one of its children is not inlined. The size of an
-  inlined node is:
+  Array or AbiEncoded, or one of its children is not inlined. A Zip is not
+  inlined and is ignored by its parent. The size of an inlined node is:
   - Static: 32
   - None: the size of its first child that has a size above 0, or 0
   - Tuple, EtherValue: the sum of its children's sizes
@@ -134,19 +134,18 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
 ## 3. Types
 
 - **T1. Kind.** Every node has one kind:
-  - _No type_: the encoding is None or EtherValue, and the node is neither
-    logical nor a Zip. Such a node reads no calldata.
-  - _Zip_.
+  - _No type_: the encoding is None or EtherValue, and the node is not
+    logical (including a Zip). Such a node reads no calldata where it sits.
   - _Word_: the encoding is Static.
   - _Bytes_: the encoding is Dynamic.
   - _Tuple_, _array_ or _call_: a container (T2).
   - A logical node takes its kind from its children (T4).
 
-  The encoding decides first: a logical node or a Zip whose encoding is
-  Static, Dynamic, Tuple, Array or AbiEncoded has the kind of that encoding.
+  The encoding decides first: a logical node whose encoding is Static,
+  Dynamic, Tuple, Array or AbiEncoded has the kind of that encoding.
 - **T2. Containers.**
   - A container has at least one child, and every child has a type: none
-    has kind _no type_ or _Zip_ (`UnsuitableChildCount(i)`).
+    has kind _no type_ (`UnsuitableChildCount(i)`).
   - A container whose operator does not navigate has only _exact_ children
     (`UnsuitableChildTypeTree(i)`). A node is exact if its encoding is
     AbiEncoded, or its operator is Slice, or its operator does not navigate
@@ -158,14 +157,10 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   child. It fits (T5) the type of every other child
   (`UnsuitableChildTypeTree(i)`).
 - **T4. Logical nodes.**
-  - If no child has a type and none is a Zip, the node has _no type_.
-  - If no child has a type and one is a Zip: `UnsuitableChildTypeTree(i)`.
-  - Otherwise no Zip comes before the first child that has a type
-    (`UnsuitableChildTypeTree(i)`). The node's type is the first child type
-    that fits (T5) the type of every other typed child. If there is none:
+  - If no child has a type, the node has _no type_.
+  - Otherwise the node's type is the first child type that fits (T5) the
+    type of every other typed child. If there is none:
     `UnsuitableChildTypeTree(i)`.
-  - If the node has a Zip child, its type is not static
-    (`UnsuitableChildTypeTree(i)`).
 - **T5. Fit.** Type A fits type B in these cases only:
   - Both are words.
   - Each is bytes or a call.
@@ -186,7 +181,7 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - an AbiEncoded node
   - a node with _no type_
   - a logical node whose children are each a valid logical root by this
-    rule, an AbiEncoded node, a node with _no type_, or a Zip
+    rule, an AbiEncoded node, or a node with _no type_
 - **T7. Zip fields.** For each slot of a Zip, in order: the type of the first
   child of the Pluck that writes the slot fits (T5) the type of the Zip
   field at that position (`UnsuitableChildTypeTree(i)`).

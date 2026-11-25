@@ -177,7 +177,8 @@ const subPre = (s: boolean, ts1: readonly Ty[], ts2: readonly Ty[]): boolean =>
 const le = (s: boolean, t1: Ty, t2: Ty): boolean =>
   tyEq(t1, t2) || sub(s, t1, t2)
 
-type K = { k: "ty"; t: Ty } | { k: "ns" } | { k: "zip" }
+/** A type, or no type (`ns`): the node reads no calldata where it sits. */
+type K = { k: "ty"; t: Ty } | { k: "ns" }
 
 const kEq = (a: K, b: K) =>
   a.k === b.k && (a.k !== "ty" || tyEq(a.t, (b as { t: Ty }).t))
@@ -245,12 +246,16 @@ export const childBounds = (
   return [start, count]
 }
 
+const isZipOp = (op: number) => op === Op.ZipSome || op === Op.ZipEvery
+
 /** `isInlined`. */
 export const isInlinedFlat = (
   fs: readonly FlatNode[],
   index: number
 ): boolean => {
-  const encoding = at(fs, index).paramType
+  const { paramType: encoding, operator } = at(fs, index)
+  // a Zip is not a value where it sits
+  if (isZipOp(operator)) return false
   if (
     encoding === Enc.Dynamic ||
     encoding === Enc.Array ||
@@ -259,7 +264,10 @@ export const isInlinedFlat = (
     return false
   }
   const [start, count] = childBounds(fs, index)
-  return range(count).every((i) => isInlinedFlat(fs, start + i))
+  // a Zip child is evaluated at the arrays in its slots: not counted
+  return range(count).every(
+    (i) => isZipOp(at(fs, start + i).operator) || isInlinedFlat(fs, start + i)
+  )
 }
 
 /** `inlinedSize` (`sizeLoop`). */
@@ -267,7 +275,8 @@ export const inlinedSizeFlat = (
   fs: readonly FlatNode[],
   index: number
 ): number => {
-  const encoding = at(fs, index).paramType
+  const { paramType: encoding, operator } = at(fs, index)
+  if (isZipOp(operator)) return 0
   if (encoding === Enc.Static) return 32
   const [start, count] = childBounds(fs, index)
   const sizes = range(count).map((i) => inlinedSizeFlat(fs, start + i))
@@ -639,14 +648,6 @@ const sliceOk = (
 const allTy = (ks: readonly K[]): Ty[] | undefined =>
   ks.every((k) => k.k === "ty") ? ks.map((k) => (k as { t: Ty }).t) : undefined
 
-const firstTy = (ks: readonly K[]): Ty | undefined => {
-  for (const k of ks) {
-    if (k.k === "ty") return k.t
-    if (k.k === "zip") return undefined
-  }
-  return undefined
-}
-
 const fits = (s: boolean, t: Ty, k: K) => k.k !== "ty" || le(s, t, k.t)
 const bytesLikeOk = (k: K) => k.k !== "ty" || isBytesLike(k.t)
 const bytesLikeTy = (k: K) => k.k === "ty" && isBytesLike(k.t)
@@ -659,7 +660,6 @@ const meetOf = (s: boolean, ks: readonly K[]): Ty | undefined => {
 }
 
 const logicalTy = (s: boolean, ks: readonly K[]): Ty | undefined => {
-  if (firstTy(ks) === undefined) return undefined
   const t = meetOf(s, ks)
   if (t !== undefined) return t
   if (s && ks.every(bytesLikeOk)) return DYNAMIC
@@ -682,7 +682,6 @@ const logicalKind = (s: boolean, ks: readonly K[]): K | undefined => {
   if (ks.every((k) => k.k === "ns")) return { k: "ns" }
   const t = logicalTy(s, ks)
   if (t === undefined) return undefined
-  if (ks.some((k) => k.k === "zip") && isStatic(t)) return undefined
   return { k: "ty", t }
 }
 
@@ -739,9 +738,10 @@ const classifyNode = (
       return ts && { k: "ty", t: { k: "call", lb, ts, o: op === Op.Matches } }
     }
     case Enc.None:
-      if (op === Op.ZipSome || op === Op.ZipEvery) {
+      // a Zip reads the arrays in its slots, nothing where it sits
+      if (isZipOp(op)) {
         return ks.length === 1 && ks[0].k === "ty" && ks[0].t.k === "tuple"
-          ? { k: "zip" }
+          ? { k: "ns" }
           : undefined
       }
       if (leafOk(cs, op)) return { k: "ns" }
@@ -843,7 +843,7 @@ class Checker {
         (c.operator === Op.And || c.operator === Op.Or) &&
         c.children.every((ch) => {
           const k = this.classify(ch)
-          return this.rootOk(ch) || k?.k === "ns" || k?.k === "zip"
+          return this.rootOk(ch) || k?.k === "ns"
         }))
     )
   }

@@ -26,6 +26,12 @@ const setupThreeDefaultArrayParams = setupFn(
 const setupTwoTupleArrayParams = setupFn(
   "function fn((uint256, uint256)[], (uint256, uint256)[])",
 );
+const setupTwoArraysTwoWords = setupFn(
+  "function fn(uint256[], uint256[], uint256, uint256)",
+);
+const setupTwoBytesArraysTwoWords = setupFn(
+  "function fn(bytes[], bytes[], uint256, uint256)",
+);
 
 function pluckArray(index: number) {
   return {
@@ -835,6 +841,159 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       );
 
       await invoke([], []);
+    });
+  });
+
+  describe("next to other checks", () => {
+    const word = (value: bigint) =>
+      encodeAbiParameters(parseAbiParameters("uint256"), [value]);
+    const eq = (value: bigint) => ({
+      paramType: Encoding.Static,
+      operator: Operator.EqualTo,
+      compValue: word(value),
+    });
+    const fields = (...children: object[]) => ({
+      paramType: Encoding.Tuple,
+      operator: Operator.Matches,
+      children,
+    });
+
+    it("sits before the word it is next to, without shifting later parameters", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoArraysTwoWords,
+      );
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            pluckArray(0),
+            pluckArray(1),
+            {
+              paramType: Encoding.None,
+              operator: Operator.And,
+              children: [
+                {
+                  paramType: Encoding.None,
+                  operator: Operator.ZipEvery,
+                  compValue: encodeCompValue(0, 1),
+                  children: [
+                    fields(
+                      { paramType: Encoding.Static, operator: Operator.Pass },
+                      { paramType: Encoding.Static, operator: Operator.Pass },
+                    ),
+                  ],
+                },
+                eq(1n),
+              ],
+            },
+            eq(2n),
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([1], [1], 1, 2);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1], [1], 1, 3),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
+    });
+
+    it("zips bytes arrays next to a word, without shifting later parameters", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoBytesArraysTwoWords,
+      );
+
+      const pluckBytesArray = (index: number) => ({
+        ...pluckArray(index),
+        children: [{ paramType: Encoding.Dynamic, operator: Operator.Pass }],
+      });
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            pluckBytesArray(0),
+            pluckBytesArray(1),
+            {
+              paramType: Encoding.None,
+              operator: Operator.And,
+              children: [
+                eq(1n),
+                {
+                  paramType: Encoding.None,
+                  operator: Operator.ZipEvery,
+                  compValue: encodeCompValue(0, 1),
+                  children: [
+                    fields(
+                      { paramType: Encoding.Dynamic, operator: Operator.Pass },
+                      { paramType: Encoding.Dynamic, operator: Operator.Pass },
+                    ),
+                  ],
+                },
+              ],
+            },
+            eq(2n),
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke(["0x01"], ["0x02"], 1, 2);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(["0x01"], ["0x02"], 1, 3),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
+    });
+
+    it("branches between two Zips in an Or", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupTwoArrayParams);
+
+      const zipSome = (value: bigint) => ({
+        paramType: Encoding.None,
+        operator: Operator.ZipSome,
+        compValue: encodeCompValue(0, 1),
+        children: [fields(eq(value), eq(value))],
+      });
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.And,
+          children: [
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.Or,
+              children: [zipSome(1n), zipSome(2n)],
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([9, 2], [9, 2]);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([9, 2], [9, 3]),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
     });
   });
 });
