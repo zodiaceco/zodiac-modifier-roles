@@ -326,7 +326,8 @@ export const packableB = (fs: readonly FlatNode[]): boolean => {
     const f = at(fs, j)
     const inl = isInlinedFlat(fs, j)
     return (
-      (!(0 < j) || f.parent < j) &&
+      // L2: the root has parent 0, every other parent comes first
+      (0 < j ? f.parent < j : f.parent === 0) &&
       (!(0 < j && j + 1 < n) || f.parent <= at(fs, j + 1).parent) &&
       f.compValue.length <= 65535 &&
       childBounds(fs, j)[1] <= 1023 &&
@@ -435,6 +436,8 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         len >= 2 &&
         cc === 1 &&
         at(fs, ch0).paramType === Enc.Tuple &&
+        // O7: the child is a Matches
+        at(fs, ch0).operator === Op.Matches &&
         childBounds(fs, ch0)[1] === len &&
         range(len).every((a) =>
           range(len).every((b) => a === b || cvByte(cv, a) !== cvByte(cv, b))

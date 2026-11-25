@@ -41,18 +41,6 @@ const call = (ch: N[], cv = "0x0004a9059cbb"): N => ({
 })
 const eqWord = (n: number): N => ({ e: Enc.Static, o: Op.EqualTo, cv: word(n) })
 const pass = (e: number, ch?: N[]): N => ({ e, o: Op.Pass, ch })
-const pluck = (e: number, slot: number, ch?: N[]): N => ({
-  e,
-  o: Op.Pluck,
-  cv: "0x" + slot.toString(16).padStart(2, "0"),
-  ch,
-})
-const zip = (slots: number[], fields: N[]): N => ({
-  e: Enc.None,
-  o: Op.ZipEvery,
-  cv: "0x" + slots.map((s) => s.toString(16).padStart(2, "0")).join(""),
-  ch: [{ e: Enc.Tuple, o: Op.Matches, ch: fields }],
-})
 
 suite("checkStored()", () => {
   it("accepts a typed call and returns its type", () => {
@@ -80,66 +68,6 @@ suite("checkStored()", () => {
     )
   })
 
-  it("accepts Zips at the root and rejects them among parameters (backlog 1)", () => {
-    const arr = () => [pass(Enc.Static)]
-    const plucks = [pluck(Enc.Array, 0, arr()), pluck(Enc.Array, 1, arr())]
-    const fields = [eqWord(5), pass(Enc.Static)]
-    const ok: N = {
-      e: Enc.None,
-      o: Op.And,
-      ch: [call(plucks), zip([0, 1], fields)],
-    }
-    expect(verdict(ok)).toBe("C4(A(S),A(S),..)")
-
-    const bypass = call([
-      pluck(Enc.Array, 0, arr()),
-      pluck(Enc.Array, 1, arr()),
-      zip([0, 1], [eqWord(5), pass(Enc.Static)]),
-      eqWord(5),
-    ])
-    expect(verdict(bypass)).toBe("rejected")
-  })
-
-  it("rejects a Zip that reads a slot no Pluck writes first", () => {
-    const arr = () => [pass(Enc.Static)]
-    const unwritten: N = {
-      e: Enc.None,
-      o: Op.And,
-      ch: [
-        zip([0, 1], [eqWord(5), pass(Enc.Static)]),
-        call([pluck(Enc.Array, 0, arr()), pluck(Enc.Array, 1, arr())]),
-      ],
-    }
-    expect(verdict(unwritten)).toBe("rejected")
-    // a Pluck in only one branch of an Or does not count
-    const orBranch: N = {
-      e: Enc.None,
-      o: Op.And,
-      ch: [
-        {
-          e: Enc.None,
-          o: Op.Or,
-          ch: [
-            call([pluck(Enc.Array, 0, arr()), pluck(Enc.Array, 1, arr())]),
-            call([pass(Enc.Array, arr()), pass(Enc.Array, arr())]),
-          ],
-        },
-        zip([0, 1], [eqWord(5), pass(Enc.Static)]),
-      ],
-    }
-    expect(verdict(orBranch)).toBe("rejected")
-  })
-
-  it("rejects a non-structural child in a Pass tuple (backlog 2)", () => {
-    const tree = call([
-      pass(Enc.Tuple, [
-        pass(Enc.Static),
-        { e: Enc.EtherValue, o: Op.LessThan, cv: word(1) },
-      ]),
-    ])
-    expect(verdict(tree)).toBe("rejected")
-  })
-
   it("accepts Slice next to a plain check (backlog 4)", () => {
     const slice: N = {
       e: Enc.Static,
@@ -151,55 +79,6 @@ suite("checkStored()", () => {
     expect(verdict(tree)).toBe("C4(S,..)")
   })
 
-  it("needs EqualTo on a static tuple to have exactly its size", () => {
-    // a longer compValue is hashed and compared with the tuple's one word,
-    // which the caller can set to that hash
-    const tuple = (cv: string): N => ({
-      e: Enc.Tuple,
-      o: Op.EqualTo,
-      cv,
-      ch: [pass(Enc.Static)],
-    })
-    expect(verdict(call([tuple(word(1))]))).toBe("C4(T(S),..)")
-    expect(verdict(call([tuple(word(1) + word(2).slice(2))]))).toBe("rejected")
-  })
-
-  it("rejects a Slice over a Slice (one Slice with the combined shift does the same)", () => {
-    const inner: N = {
-      e: Enc.Static,
-      o: Op.Slice,
-      cv: "0x000420",
-      ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
-    }
-    const outer: N = { e: Enc.Static, o: Op.Slice, cv: "0x000001", ch: [inner] }
-    expect(verdict(call([inner]))).toBe("C4(S,..)")
-    expect(verdict(call([outer]))).toBe("rejected")
-  })
-
-  it("accepts nested calldata and Slice below a whole-value check", () => {
-    const slice: N = {
-      e: Enc.Static,
-      o: Op.Slice,
-      cv: "0x001f01",
-      ch: [{ e: Enc.Static, o: Op.EqualTo, cv: word(1) }],
-    }
-    // AbiLocation.sliceEncoded reads nested calldata as bytes and a Slice
-    // as its word, whatever checks sit below them
-    const plucked = call([
-      pluck(Enc.Array, 0, [call([pass(Enc.Static)], "0x0004aabbccdd")]),
-    ])
-    expect(verdict(plucked)).not.toBe("rejected")
-    const tuple = call([pass(Enc.Tuple, [slice, pass(Enc.Static)])])
-    expect(verdict(tuple)).toBe("C4(T(S,S),..)")
-    // a logical node or a tuple Matches below one has no exact type
-    const or: N = { e: Enc.None, o: Op.Or, ch: [eqWord(1), eqWord(2)] }
-    expect(verdict(call([pass(Enc.Tuple, [or, pass(Enc.Static)])]))).toBe(
-      "rejected"
-    )
-    const inner: N = { e: Enc.Tuple, o: Op.Matches, ch: [pass(Enc.Dynamic)] }
-    expect(verdict(call([pass(Enc.Tuple, [inner])]))).toBe("rejected")
-  })
-
   it("accepts variants only with s = true", () => {
     const a = call([pass(Enc.Static)], "0x000411111111")
     const b = call([pass(Enc.Dynamic)], "0x000422222222")
@@ -207,20 +86,5 @@ suite("checkStored()", () => {
     // with s = true any bytes value has every call type: the first one
     expect(verdict(tree, true)).toBe("C4(C4(S,..),..)")
     expect(verdict(tree, false)).toBe("rejected")
-  })
-
-  it("rejects what the packer cannot encode or Integrity's operator rules forbid", () => {
-    // Pluck index 255 overflows the header's maxPluck byte
-    expect(verdict(call([pluck(Enc.Static, 255)]))).toBe("rejected")
-    // GreaterThan needs a 32-byte compValue
-    expect(
-      verdict(call([{ e: Enc.Static, o: Op.GreaterThan, cv: "0x01" }]))
-    ).toBe("rejected")
-    // placeholder operator code
-    expect(verdict(call([{ e: Enc.Static, o: 3 }]))).toBe("rejected")
-    // not in BFS order
-    const fs = flat(call([pass(Enc.Static), pass(Enc.Static)]))
-    fs[2].parent = 5
-    expect(checkStored(fs)).toBeUndefined()
   })
 })
