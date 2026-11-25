@@ -8,6 +8,11 @@
  * slot, and is read by `evaluate` at the ABI spec location of every
  * parameter. integrityCases.test.ts runs the cases of that spec against it.
  *
+ * Comments cite the rules of that spec by id, in its four sections: layout
+ * (L1-L5, `packableB`), operators (O1-O19, `opsOk`), types (T1-T7,
+ * `classifyNode` and `Checker`) and Pluck slots (P1-P5, `opsOk` and
+ * `assigned`).
+ *
  * Operators and encodings are taken as their numeric codes (`Operator.sol`,
  * `Encoding` in `Condition.sol`), including the v3 ones (`Pluck`, `ZipSome`,
  * `ZipEvery`, `EtherValue`, `CallWithinAllowance`).
@@ -100,9 +105,9 @@ export const toFlatNodes = (flat: readonly ConditionFlatInput[]): FlatNode[] =>
 // ---------------------------------------------------------------------------
 
 /**
- * The ABI type a structural node describes. An open tuple or call type
- * (`o`, a `Matches` node) types the first fields only: the value may have
- * more (only if the fields typed are not all static).
+ * The ABI type a node describes (T1). An open tuple (`o`: a `Matches` whose
+ * fields are not all static, T2) types the first fields only: the value may
+ * have more. A call type is always open.
  */
 export type Ty =
   | { k: "static" }
@@ -137,42 +142,22 @@ const isStatic = (t: Ty): boolean =>
 
 const isBytesLike = (t: Ty): boolean => t.k === "dynamic" || t.k === "call"
 
-/**
- * `Ty.sub`: every value of type `t1` has type `t2`. Equal
- * types aside: a bytes-like type and `dynamic`; with `s` any two bytes-like
- * types; and the prefix order of open tuple and call types.
- */
-const sub = (s: boolean, t1: Ty, t2: Ty): boolean => {
-  if (t1.k === "static" && t2.k === "static") return true
-  if (t1.k === "dynamic" && t2.k === "dynamic") return true
-  if (t1.k === "tuple" && t2.k === "tuple") {
-    // a static tuple is read in place with exactly its fields, open or not
-    if (isStatic(t2))
-      return t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
-    if (t2.o)
-      return t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
-    return !t1.o && t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
+/** T5: type `a` fits type `b`. */
+const fits = (a: Ty, b: Ty): boolean => {
+  if (a.k === "static" && b.k === "static") return true
+  // a call type is interchangeable with bytes (T2)
+  if (isBytesLike(a) && isBytesLike(b)) return true
+  if (a.k === "array" && b.k === "array") return fits(a.t, b.t)
+  if (a.k === "tuple" && b.k === "tuple") {
+    const prefix = b.ts.every((t, i) => i < a.ts.length && fits(a.ts[i], t))
+    return b.o
+      ? b.ts.length <= a.ts.length && prefix
+      : !a.o && a.ts.length === b.ts.length && prefix
   }
-  if (t1.k === "array" && t2.k === "array") return le(s, t1.t, t2.t)
-  if (t1.k === "call" && t2.k === "call") {
-    // a call type is always open: only a Matches gives one
-    const prefix = t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
-    return (t1.lb === t2.lb && prefix) || s
-  }
-  if (t1.k === "call" && t2.k === "dynamic") return true
-  if (t1.k === "dynamic" && t2.k === "call") return s
   return false
 }
 
-/** `Ty.subPre`: `le` on the first `ts2.length` types. */
-const subPre = (s: boolean, ts1: readonly Ty[], ts2: readonly Ty[]): boolean =>
-  ts2.every((t2, i) => i < ts1.length && le(s, ts1[i], t2))
-
-/** `Ty.le`: equal, or a subtype. */
-const le = (s: boolean, t1: Ty, t2: Ty): boolean =>
-  tyEq(t1, t2) || sub(s, t1, t2)
-
-/** A type, or no type (`ns`): the node reads no calldata where it sits. */
+/** T1: a type, or no type (`ns`): the node reads no calldata where it sits. */
 type K = { k: "ty"; t: Ty } | { k: "ns" }
 
 const kEq = (a: K, b: K) =>
@@ -242,7 +227,7 @@ export const childBounds = (
 
 const isZipOp = (op: number) => op === Op.ZipSome || op === Op.ZipEvery
 
-/** `isInlined`. */
+/** L5: the node is inlined. */
 export const isInlinedFlat = (
   fs: readonly FlatNode[],
   index: number
@@ -264,7 +249,7 @@ export const isInlinedFlat = (
   )
 }
 
-/** `inlinedSize` (`sizeLoop`). */
+/** L5: the size of an inlined node. */
 export const inlinedSizeFlat = (
   fs: readonly FlatNode[],
   index: number
@@ -319,22 +304,28 @@ const rawTree = (fs: readonly FlatNode[], i: number): Node => {
 }
 
 // ---------------------------------------------------------------------------
-// `packableB`: the array fits the packed format
+// 1. Layout (L1-L5). `packableB`: the array fits the packed format
 // ---------------------------------------------------------------------------
 
 export const packableB = (fs: readonly FlatNode[]): boolean => {
   const n = fs.length
+  // L1
   if (!(0 < n && n <= 65535)) return false
   return range(n).every((j) => {
     const f = at(fs, j)
     const inl = isInlinedFlat(fs, j)
     return (
-      // L2: the root has parent 0, every other parent comes first
+      // L2: the root has parent 0, every other parent comes first, and
+      // parents do not decrease
       (0 < j ? f.parent < j : f.parent === 0) &&
       (!(0 < j && j + 1 < n) || f.parent <= at(fs, j + 1).parent) &&
+      // L4
       f.compValue.length <= 65535 &&
       childBounds(fs, j)[1] <= 1023 &&
+      // L5
       (!inl || inlinedSizeFlat(fs, j) <= 8191) &&
+      // What the packer reads of a compValue. Implied by O8, O11 and O4;
+      // here because `packConditions` runs `packableB` alone
       (f.operator !== Op.Pluck ||
         (f.compValue.length > 0 && cvByte(f.compValue, 0) <= 254)) &&
       (!(f.operator === Op.EqualTo && !inl) || 32 <= f.compValue.length) &&
@@ -345,7 +336,7 @@ export const packableB = (fs: readonly FlatNode[]): boolean => {
 }
 
 // ---------------------------------------------------------------------------
-// `opsOk`: Integrity's per-operator rules
+// 2. Operators (O1-O19). `opsOk`: the rules of each operator, and P1
 // ---------------------------------------------------------------------------
 
 const findPluck = (fs: readonly FlatNode[], k: number): number | undefined =>
@@ -361,6 +352,7 @@ const adapterBlob = (cv: Uint8Array, off: number): number | undefined => {
   return off + 1 + len
 }
 
+/** O15: the compValue of a WithinRatio. */
 const withinRatioCvOk = (cv: Uint8Array): boolean => {
   const len = cv.length
   const first = len > 12 ? adapterBlob(cv, 12) : 12
@@ -386,7 +378,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
   const len = cv.length
   const cc = childBounds(fs, j)[1]
   const ch0 = kids(fs, j)[0] ?? 0
-  // O18: nested calldata passed as a whole is read as bytes
+  // O18 (a Pass or Custom on None: the cases below and `classifyNode`)
   const leafRule =
     !(
       ((e === Enc.Static || e === Enc.Dynamic || e === Enc.EtherValue) &&
@@ -400,14 +392,15 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
   const wordLike = (e: number) => e === Enc.Static || e === Enc.EtherValue
   if (!leafRule) return false
   switch (f.operator) {
-    case Op.Pass:
+    case Op.Pass: // O1
       return len === 0
     case Op.And:
-    case Op.Or:
+    case Op.Or: // O2
       return e === Enc.None && len === 0 && cc >= 1
-    case Op.Empty:
+    case Op.Empty: // O3
       return e === Enc.None && len === 0 && cc === 0
     case Op.Matches: {
+      // O4
       if (!(e === Enc.Tuple || e === Enc.Array || e === Enc.AbiEncoded))
         return false
       if (e !== Enc.AbiEncoded) return len === 0
@@ -415,18 +408,17 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
       return len === 0 || len === 2 || (len === 2 + lb && lb <= 32)
     }
     case Op.ArraySome:
-    case Op.ArrayEvery:
+    case Op.ArrayEvery: // O5
       return e === Enc.Array && len === 0 && cc === 1
-    case Op.ArrayTailMatches:
+    case Op.ArrayTailMatches: // O6
       return e === Enc.Array && len === 0
     case Op.ZipSome:
-    case Op.ZipEvery:
+    case Op.ZipEvery: // O7
       return (
         e === Enc.None &&
         len >= 1 &&
         cc === 1 &&
         at(fs, ch0).paramType === Enc.Tuple &&
-        // O7: the child is a Matches
         at(fs, ch0).operator === Op.Matches &&
         childBounds(fs, ch0)[1] === len &&
         // a slot may repeat: its array is zipped with itself
@@ -435,7 +427,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
           return i !== undefined && at(fs, i).paramType === Enc.Array
         })
       )
-    case Op.Slice:
+    case Op.Slice: // O9 (that the child is a leaf: `sliceOk`)
       return (
         (e === Enc.Static || e === Enc.Dynamic) &&
         len === 3 &&
@@ -444,15 +436,15 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         cc === 1 &&
         at(fs, ch0).paramType === Enc.Static
       )
-    case Op.Pluck:
+    case Op.Pluck: // O8
       return (
         (e === Enc.Static || e === Enc.EtherValue || e === Enc.Array) &&
         len === 1 &&
         cvByte(cv, 0) !== 255
       )
-    case Op.EqualToAvatar:
+    case Op.EqualToAvatar: // O10
       return e === Enc.Static && len === 0
-    case Op.EqualTo:
+    case Op.EqualTo: // O11
       switch (e) {
         case Enc.Static:
         case Enc.EtherValue:
@@ -473,18 +465,19 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
     case Op.GreaterThan:
     case Op.LessThan:
     case Op.SignedIntGreaterThan:
-    case Op.SignedIntLessThan:
+    case Op.SignedIntLessThan: // O12
       return wordLike(e) && len === 32
-    case Op.Bitmask:
+    case Op.Bitmask: // O13
       return (
         (e === Enc.Static || e === Enc.Dynamic) &&
         4 <= len &&
         len <= 65535 &&
         len % 2 === 0
       )
-    case Op.Custom:
+    case Op.Custom: // O14
       return (
         // on None the adapter is given no operand, and the node no children
+        // (O18)
         ((e === Enc.None && cc === 0) ||
           e === Enc.Static ||
           e === Enc.Dynamic ||
@@ -494,7 +487,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         20 <= len &&
         len <= 65535
       )
-    case Op.WithinRatio:
+    case Op.WithinRatio: // O15
       return (
         e === Enc.None &&
         withinRatioCvOk(cv) &&
@@ -502,22 +495,24 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         pluckEnc(cvByte(cv, 0), wordLike) &&
         pluckEnc(cvByte(cv, 2), wordLike)
       )
-    case Op.WithinAllowance:
+    case Op.WithinAllowance: // O16
       return (
         wordLike(e) &&
         len <= 65535 &&
         (len === 32 || len === 34 || 54 <= len) &&
         (len <= 32 || (cvByte(cv, 32) <= 27 && cvByte(cv, 33) <= 27))
       )
-    case Op.CallWithinAllowance:
+    case Op.CallWithinAllowance: // O17
       return e === Enc.None && len === 32 && cc === 0
     default:
+      // O19
       return false
   }
 }
 
 export const opsOk = (fs: readonly FlatNode[]): boolean =>
   range(fs.length).every((j) => opOk(fs, j)) &&
+  // P1: no two Plucks name the same slot
   range(fs.length).every((i) =>
     range(fs.length).every(
       (i2) =>
@@ -529,21 +524,26 @@ export const opsOk = (fs: readonly FlatNode[]): boolean =>
   )
 
 // ---------------------------------------------------------------------------
-// `assigned`: Pluck slots written before they are read
+// 4. Pluck slots (P2-P5). `assigned`: slots are written before they are read
 // ---------------------------------------------------------------------------
 
 type Slots = ReadonlySet<number>
 
+/** The set a node returns given the set `A` it receives, or `undefined`. */
 const assigned = (c: Node, A: Slots): Slots | undefined => {
   const op = c.operator
   const cv = c.compValue
   const cs = c.children
+  // P2
   if (op === Op.Pluck) return new Set([...A, cvByte(cv, 0)])
+  // P3
   if (op === Op.WithinRatio) {
     return A.has(cvByte(cv, 0)) && A.has(cvByte(cv, 2)) ? A : undefined
   }
   if (op === Op.ZipSome || op === Op.ZipEvery) {
+    // P3
     if (!range(cv.length).every((i) => A.has(cvByte(cv, i)))) return undefined
+    // P4, as are the cases that follow
     const fields = (cs[0] ?? DEFAULT_NODE).children
     const r = assignedSeq(fields, A)
     return r === undefined ? undefined : op === Op.ZipSome ? r : A
@@ -557,6 +557,7 @@ const assigned = (c: Node, A: Slots): Slots | undefined => {
     return assignedSeq(cs, A)
   }
   if (op === Op.Slice) return cs.length === 0 ? A : assigned(cs[0], A)
+  // P5
   return A
 }
 
@@ -581,9 +582,10 @@ const assignedOr = (cs: readonly Node[], A: Slots): Slots | undefined => {
 }
 
 // ---------------------------------------------------------------------------
-// `classify`, `checkCondition`: the type of every node
+// 3. Types (T1-T7). `classify`, `checkCondition`: the type of every node
 // ---------------------------------------------------------------------------
 
+/** The navigating operators (see the spec's terms). */
 const NAV_OPS = new Set<number>([
   Op.And,
   Op.Or,
@@ -607,7 +609,7 @@ const leafOk = (cs: readonly Node[], op: number) =>
 
 const sliceSize = (cv: Uint8Array) => cvByte(cv, 2)
 
-/** A `Slice` over one `Static` leaf (a slice of a slice is one slice). */
+/** O9: a `Slice` over one `Static` leaf whose operator does not navigate. */
 const sliceOk = (
   op: number,
   cs: readonly Node[],
@@ -626,38 +628,30 @@ const sliceOk = (
 const allTy = (ks: readonly K[]): Ty[] | undefined =>
   ks.every((k) => k.k === "ty") ? ks.map((k) => (k as { t: Ty }).t) : undefined
 
-const fits = (s: boolean, t: Ty, k: K) => k.k !== "ty" || le(s, t, k.t)
-const bytesLikeOk = (k: K) => k.k !== "ty" || isBytesLike(k.t)
-const bytesLikeTy = (k: K) => k.k === "ty" && isBytesLike(k.t)
+const fitsKind = (t: Ty, k: K) => k.k !== "ty" || fits(t, k.t)
 
-/** `meetOf`: the first structural type that all children contain. */
-const meetOf = (s: boolean, ks: readonly K[]): Ty | undefined => {
+/** T3, T4: the first child type that fits the type of every typed child. */
+const meetOf = (ks: readonly K[]): Ty | undefined => {
   for (const k of ks)
-    if (k.k === "ty" && ks.every((k2) => fits(s, k.t, k2))) return k.t
+    if (k.k === "ty" && ks.every((k2) => fitsKind(k.t, k2))) return k.t
   return undefined
 }
 
-const logicalTy = (s: boolean, ks: readonly K[]): Ty | undefined => {
-  const t = meetOf(s, ks)
-  if (t !== undefined) return t
-  if (s && ks.every(bytesLikeOk)) return DYNAMIC
-  return undefined
-}
-
-/** Pure type description (Pass nodes only), required below non-navigating containers. */
+/** T2: an exact node, a Pass whose children are all exact. */
 const exactTy = (c: Node): boolean =>
   c.operator === Op.Pass && c.children.every(exactTy)
 
-const logicalKind = (s: boolean, ks: readonly K[]): K | undefined => {
+/** T4: the kind of a logical node. */
+const logicalKind = (ks: readonly K[]): K | undefined => {
   if (ks.length === 0) return undefined
   if (ks.every((k) => k.k === "ns")) return { k: "ns" }
-  const t = logicalTy(s, ks)
+  const t = meetOf(ks)
   if (t === undefined) return undefined
   return { k: "ty", t }
 }
 
+/** T1: the kind of a node, given the kinds `ks` of its children. */
 const classifyNode = (
-  s: boolean,
   e: number,
   op: number,
   cs: readonly Node[],
@@ -675,6 +669,8 @@ const classifyNode = (
         ? { k: "ty", t: DYNAMIC }
         : undefined
     case Enc.Tuple: {
+      // T2: at least one child; below an operator that does not navigate,
+      // exact children only
       if (
         !(
           cs.length > 0 &&
@@ -682,11 +678,14 @@ const classifyNode = (
         )
       )
         return undefined
+      // T2: no child without a type
       const ts = allTy(ks)
-      return ts && { k: "ty", t: { k: "tuple", ts, o: op === Op.Matches } }
+      // T2: open if a Matches that is not static
+      const o = op === Op.Matches && !(ts ?? []).every(isStatic)
+      return ts && { k: "ty", t: { k: "tuple", ts, o } }
     }
     case Enc.Array: {
-      // read as a whole: one child, the element type (T2)
+      // T2: below an operator that does not navigate, one exact child
       if (
         !(
           (!isNavOp(op) && cs.length === 1 && cs.every(exactTy)) ||
@@ -694,33 +693,32 @@ const classifyNode = (
         )
       )
         return undefined
+      // T2: at least one child, none without a type
       if (ks.length === 0 || !ks.every((k) => k.k === "ty")) return undefined
-      // the element type: the first child type that fits every child (T3)
-      const t = meetOf(s, ks)
-      if (t !== undefined) return { k: "ty", t: { k: "array", t } }
-      if (s && ks.every(bytesLikeTy))
-        return { k: "ty", t: { k: "array", t: DYNAMIC } }
-      return undefined
+      // T3
+      const t = meetOf(ks)
+      return t && { k: "ty", t: { k: "array", t } }
     }
     case Enc.AbiEncoded: {
-      // a Pass has no children (O18): nested calldata read as bytes
+      // O18: a Pass has no children. T2: a call is interchangeable with bytes
       if (op === Op.Pass) {
         return cs.length === 0 ? { k: "ty", t: DYNAMIC } : undefined
       }
-      // a Matches may list no parameters
+      // T2: a Matches may list no parameters, none without a type
       if (op !== Op.Matches) return undefined
       const ts = allTy(ks)
       return ts && { k: "ty", t: { k: "call", lb, ts, o: true } }
     }
     case Enc.None:
-      // a Zip reads the arrays in its slots, nothing where it sits
+      // T1: a Zip reads the arrays in its slots, nothing where it sits
       if (isZipOp(op)) {
         return ks.length === 1 && ks[0].k === "ty" && ks[0].t.k === "tuple"
           ? { k: "ns" }
           : undefined
       }
+      // T1, O18
       if (leafOk(cs, op)) return { k: "ns" }
-      if (op === Op.And || op === Op.Or) return logicalKind(s, ks)
+      if (op === Op.And || op === Op.Or) return logicalKind(ks)
       return undefined
     case Enc.EtherValue:
       return leafOk(cs, op) ? { k: "ns" } : undefined
@@ -764,7 +762,7 @@ export const siblingsSameType = (cs: readonly ConditionInput[]): boolean => {
     OP_CODES.has(c.operator) &&
     (c.children ?? []).every(known)
   if (!cs.every(known)) return false
-  const checker = new Checker(true)
+  const checker = new Checker()
   const ts: Ty[] = []
   for (const c of cs) {
     let k: K | undefined
@@ -781,7 +779,6 @@ export const siblingsSameType = (cs: readonly ConditionInput[]): boolean => {
 
 class Checker {
   private memo = new Map<Node, K | undefined>()
-  constructor(readonly s: boolean) {}
 
   classify(c: Node): K | undefined {
     if (this.memo.has(c)) return this.memo.get(c)
@@ -798,7 +795,6 @@ class Checker {
     }
     if (ok) {
       r = classifyNode(
-        this.s,
         c.encoding,
         c.operator,
         c.children,
@@ -811,6 +807,7 @@ class Checker {
     return r
   }
 
+  /** T6 */
   rootOk(c: Node): boolean {
     return (
       c.encoding === Enc.AbiEncoded ||
@@ -823,10 +820,7 @@ class Checker {
     )
   }
 
-  tyCompat(t1: Ty, t2: Ty): boolean {
-    return le(this.s, t1, t2)
-  }
-
+  /** T7 */
   zipCheck(root: Node): boolean {
     const all = nodes(root)
     return all.every((z) => {
@@ -846,7 +840,7 @@ class Checker {
           if (pk.encoding !== Enc.Array) return false
           const k1 = this.classify(pk.children[0] ?? DEFAULT_NODE)
           const k2 = this.classify(fields[f] ?? DEFAULT_NODE)
-          return k1?.k === "ty" && k2?.k === "ty" && this.tyCompat(k1.t, k2.t)
+          return k1?.k === "ty" && k2?.k === "ty" && fits(k1.t, k2.t)
         })
       )
     })
@@ -873,16 +867,11 @@ export type Verdict =
 
 /**
  * Returns the verdict if `fs` may be stored with a `...Packed` setter, or
- * `undefined`. `s` allows variants (`And`/`Or` or arrays whose children are
- * different nested-calldata interpretations of one `bytes` value); with
- * `s = false` the stronger guarantee (every interpretation holds) applies.
+ * `undefined`.
  */
-export const checkStored = (
-  fs: readonly FlatNode[],
-  s = true
-): Verdict | undefined => {
-  // a fractional or negative parent would attach the node nowhere, and the
-  // check would skip it
+export const checkStored = (fs: readonly FlatNode[]): Verdict | undefined => {
+  // L3, O19: known codes. A fractional or negative parent would attach the
+  // node nowhere, and the check would skip it
   const nat = (x: number) => Number.isInteger(x) && x >= 0
   if (
     !fs.every(
@@ -898,7 +887,7 @@ export const checkStored = (
   if (!packableB(fs) || !opsOk(fs)) return undefined
   const tree = rawTree(fs, 0)
   if (assigned(tree, new Set()) === undefined) return undefined
-  const checker = new Checker(s)
+  const checker = new Checker()
   const t = checker.checkCondition(tree)
   if (t !== undefined) return { kind: "typed", type: t }
   return checker.classify(tree)?.k === "ns" ? { kind: "noCalldata" } : undefined
@@ -906,6 +895,5 @@ export const checkStored = (
 
 /** `checkStored` on `ConditionFlat` entries with hex compValues. */
 export const checkStoredConditions = (
-  flat: readonly ConditionFlatInput[],
-  s = true
-): Verdict | undefined => checkStored(toFlatNodes(flat), s)
+  flat: readonly ConditionFlatInput[]
+): Verdict | undefined => checkStored(toFlatNodes(flat))

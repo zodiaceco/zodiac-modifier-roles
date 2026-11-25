@@ -88,11 +88,10 @@ const toHex = (b: Uint8Array): `0x${string}` =>
  * pass to a `...Packed` setter, or throws if the array is rejected.
  */
 export const checkAndPack = (
-  flat: readonly ConditionFlatInput[],
-  s = true
+  flat: readonly ConditionFlatInput[]
 ): { verdict: Verdict; packed: `0x${string}` } => {
   const fs = toFlatNodes(flat)
-  const verdict = checkStored(fs, s)
+  const verdict = checkStored(fs)
   if (verdict === undefined) {
     throw new Error("condition rejected by checkStored")
   }
@@ -109,11 +108,10 @@ export const checkAndPack = (
  * Throws if either check rejects.
  */
 export const checkAndPackCondition = (
-  condition: Condition,
-  s = true
+  condition: Condition
 ): { verdict: Verdict; packed: `0x${string}` } => {
-  if (checkStored(toFlatNodes(flattenCondition(condition)), s) === undefined) {
+  if (checkStored(toFlatNodes(flattenCondition(condition))) === undefined) {
     throw new Error("condition rejected by checkStored (as written)")
   }
-  return checkAndPack(flattenCondition(normalizeCondition(condition)), s)
+  return checkAndPack(flattenCondition(normalizeCondition(condition)))
 }
