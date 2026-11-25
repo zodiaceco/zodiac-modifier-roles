@@ -2,10 +2,8 @@ import { BigNumberish, isHexString, ParamType } from "ethers"
 import { Condition, Operator, Encoding } from "../../../types"
 
 import { coercePermission } from "../../../permission/coercePermission"
-import {
-  checkRootConditionIntegrity,
-  scopedType,
-} from "../../../condition/conditionIntegrity"
+import { checkStoredConditions } from "../../../condition/checkStored"
+import { flattenCondition } from "../../../condition/flattenCondition"
 import { describeStructure } from "./helpers/describeStructure"
 import { isFixedArray, parameterType } from "./helpers/parameterType"
 
@@ -236,7 +234,14 @@ const calldataMatchesFunctionPermission =
     const { selector, condition } = coercePermission(functionPermission)
     // any condition valid for a function's calldata: a Matches on the
     // parameters, or one with a call allowance next to it, or alone
-    if (condition) checkRootConditionIntegrity(condition)
+    if (
+      condition &&
+      checkStoredConditions(flattenCondition(condition)) === undefined
+    ) {
+      throw new Error(
+        "`calldataMatches`: the function permission's condition is rejected by checkStored"
+      )
+    }
 
     const selectorCondition = bitmask({
       mask: "0xffffffff",
@@ -472,6 +477,26 @@ const assertCompatibleParamTypes = (
       `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scoped]}\` (expected: \`${Encoding[expectedType]}\`)`
     )
   })
+}
+
+/**
+ * The encoding a condition reads: its own, or for a logical node that of its
+ * first child reading a parameter. EtherValue checks and Zips read none.
+ */
+const scopedType = (condition: Condition): Encoding => {
+  if (condition.paramType === Encoding.EtherValue) return Encoding.None
+  if (
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+  ) {
+    return Encoding.None
+  }
+  if (condition.paramType !== Encoding.None) return condition.paramType
+  for (const child of condition.children ?? []) {
+    const t = scopedType(child)
+    if (t !== Encoding.None) return t
+  }
+  return Encoding.None
 }
 
 const arrayDiff = (a: string[], b: string[]) => {
