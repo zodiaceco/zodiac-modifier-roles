@@ -1533,9 +1533,8 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "O7",
-    name: "a single slot",
-    valid: false,
-    error: { name: "UnsuitableCompValue", args: [7] },
+    name: "one slot",
+    valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
@@ -1667,8 +1666,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   {
     rule: "O7",
     name: "a slot zipped with itself",
-    valid: false,
-    error: { name: "UnsuitableCompValue", args: [7] },
+    valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },

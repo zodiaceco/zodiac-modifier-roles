@@ -29,6 +29,8 @@ const setupTwoTupleArrayParams = setupFn(
 const setupTwoNestedArrayParams = setupFn(
   "function fn(uint256[][], uint256[][])",
 );
+const setupOneArray = setupFn("function fn(uint256[])");
+const setupOneArrayOneWord = setupFn("function fn(uint256[], uint256)");
 const setupTwoArraysOneWord = setupFn(
   "function fn(uint256[], uint256[], uint256)",
 );
@@ -1300,6 +1302,97 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
         roles,
         "ConditionViolation",
         [ConditionViolationStatus.RatioAboveMax, anyValue, anyValue],
+      );
+    });
+  });
+
+  describe("slots", () => {
+    const compare = (operator: Operator, value: bigint) => ({
+      ...eq(value),
+      operator,
+    });
+
+    it("zips a single array, against a word that comes after it", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupOneArrayOneWord,
+      );
+
+      // every element is at most half of the second parameter, which is
+      // plucked after the array: an ArrayEvery would run before it
+      await allowFunction(
+        flattenCondition(
+          and(
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckWord(1)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.ZipEvery,
+              compValue: encodeCompValue(0),
+              children: [fields(and(pluckWord(2), ratio(1, 2, 0, 5000)))],
+            },
+          ),
+        ),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([10, 50], 100);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 60], 100),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+    });
+
+    it("zips an array with itself", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupOneArray);
+
+      // both fields see the same element: every element is above 1 and
+      // below 10
+      await allowFunction(
+        flattenCondition(
+          and(
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.ZipEvery,
+              compValue: encodeCompValue(0, 0),
+              children: [
+                fields(
+                  compare(Operator.GreaterThan, 1n),
+                  compare(Operator.LessThan, 10n),
+                ),
+              ],
+            },
+          ),
+        ),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([2, 3]);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([2, 30]),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
       );
     });
   });

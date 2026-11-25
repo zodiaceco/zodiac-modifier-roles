@@ -423,15 +423,13 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
     case Op.ZipEvery:
       return (
         e === Enc.None &&
-        len >= 2 &&
+        len >= 1 &&
         cc === 1 &&
         at(fs, ch0).paramType === Enc.Tuple &&
         // O7: the child is a Matches
         at(fs, ch0).operator === Op.Matches &&
         childBounds(fs, ch0)[1] === len &&
-        range(len).every((a) =>
-          range(len).every((b) => a === b || cvByte(cv, a) !== cvByte(cv, b))
-        ) &&
+        // a slot may repeat: its array is zipped with itself
         range(len).every((k) => {
           const i = findPluck(fs, cvByte(cv, k))
           return i !== undefined && at(fs, i).paramType === Enc.Array

@@ -89,14 +89,14 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - 2 bytes, a count `N` of any value
   - 2 bytes holding `N`, then exactly `N` bytes, with `N` from 1 to 32
 - **O7. Zip.**
-  - The `compValue` has at least 2 bytes, one slot per byte.
+  - The `compValue` has at least 1 byte, one slot per byte.
   - It has exactly one child (`UnsuitableChildCount(i)`).
   - The child has encoding Tuple (`UnsuitableChildTypeTree(i)`).
   - The child has as many children as the `compValue` has bytes
     (`UnsuitableCompValue(i)`).
   - The child's operator is Matches (`UnsupportedOperator(child)`).
-  - The slots are distinct, and each is written by a Pluck with encoding
-    Array (`UnsuitableCompValue(i)`).
+  - Each slot is written by a Pluck with encoding Array
+    (`UnsuitableCompValue(i)`). A slot may appear more than once.
 - **O9. Slice.**
   - The `compValue` has 3 bytes: 2 of shift, 1 of size. The size is 1 to 32.
   - It has exactly one child (`UnsuitableChildCount(i)`).

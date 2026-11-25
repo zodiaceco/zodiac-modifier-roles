@@ -386,8 +386,8 @@ library Integrity {
         Node memory node = nodes[index];
         _requireEncoding(node.encoding == Encoding.None, index);
 
-        // One slot per zipped array, at least two
-        _requireCompValue(compValue.length >= 2, index);
+        // One slot per zipped array, at least one
+        _requireCompValue(compValue.length >= 1, index);
 
         // One child: a Tuple with one field per zipped array
         if (node.childCount != 1) {
@@ -405,19 +405,14 @@ library Integrity {
             revert IEvaluatorError.UnsupportedOperator(node.childStart);
         }
 
-        // Distinct slots, each written by an Array Pluck
-        uint256 seen;
+        // Each slot written by an Array Pluck. A slot may repeat: its array
+        // is then zipped with itself
         for (uint256 i; i < compValue.length; ++i) {
-            uint8 slot = uint8(compValue[i]);
-            uint256 mask = 1 << slot;
-            uint256 pluck = plucks[slot];
+            uint256 pluck = plucks[uint8(compValue[i])];
             _requireCompValue(
-                (seen & mask) == 0 &&
-                    pluck != 0 &&
-                    nodes[pluck - 1].encoding == Encoding.Array,
+                pluck != 0 && nodes[pluck - 1].encoding == Encoding.Array,
                 index
             );
-            seen |= mask;
         }
     }
 
