@@ -848,7 +848,7 @@ describe("Calldata slicing and traversal safety", () => {
         matches([
           eq(Encoding.Tuple, enc(["(uint256,bytes)"], [[1, inner]]), [
             pass(Encoding.Static),
-            pass(Encoding.AbiEncoded, [pass(Encoding.Static)]),
+            pass(Encoding.AbiEncoded),
           ]),
         ]),
       );

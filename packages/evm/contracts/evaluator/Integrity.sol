@@ -331,9 +331,10 @@ library Integrity {
         /*
          * Leaves: a word, bytes or the ether value has no children (a Slice
          * has one, the check of the bytes it extracts), and neither has a
-         * Pass that reads no calldata.
+         * Pass on None or AbiEncoded.
          */
-        bool isLeaf = encoding == Encoding.None
+        bool isLeaf = encoding == Encoding.None ||
+            encoding == Encoding.AbiEncoded
             ? op == Operator.Pass
             : (encoding == Encoding.Static ||
                 encoding == Encoding.Dynamic ||
@@ -617,9 +618,13 @@ library Integrity {
         } else if (isContainer) {
             /*
              * A container describes one parameter per child, so a child
-             * that reads no calldata has no place in it.
+             * that reads no calldata has no place in it. A Tuple or Array
+             * has at least one; AbiEncoded may have no parameters.
              */
-            if (node.childCount == 0 || !children.allTypes) {
+            if (
+                (node.childCount == 0 && encoding != Encoding.AbiEncoded) ||
+                !children.allTypes
+            ) {
                 revert IEvaluatorError.UnsuitableChildCount(index);
             }
 

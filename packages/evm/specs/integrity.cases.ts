@@ -398,7 +398,6 @@ export const integrityCases: readonly IntegrityCase[] = [
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
   {
@@ -4201,6 +4200,26 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 1, paramType: E.Static, operator: O.EqualTo, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
     ],
   },
+  {
+    rule: "O18",
+    name: "Pass on AbiEncoded without children",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "O18",
+    name: "Pass on AbiEncoded with a child",
+    valid: false,
+    error: { name: "LeafNodeCannotHaveChildren", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
 
   // O19. Unassigned codes
   {
@@ -4374,11 +4393,19 @@ export const integrityCases: readonly IntegrityCase[] = [
   // T2. Containers
   {
     rule: "T2",
-    name: "the root call without children",
-    valid: false,
-    error: { name: "UnsuitableChildCount", args: [0] },
+    name: "the root call without parameters",
+    valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "a nested call without parameters",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x0004deadbeef" },
     ],
   },
   {
@@ -4429,16 +4456,6 @@ export const integrityCases: readonly IntegrityCase[] = [
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
-    ],
-  },
-  {
-    rule: "T2",
-    name: "Pass on AbiEncoded without children",
-    valid: false,
-    error: { name: "UnsuitableChildCount", args: [1] },
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
     ],
   },
   {
@@ -4554,17 +4571,6 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
       { parent: 1, paramType: E.None, operator: O.Pass, compValue: "0x" },
-    ],
-  },
-  {
-    rule: "T2",
-    name: "Pass on AbiEncoded with an ether check",
-    valid: false,
-    error: { name: "UnsuitableChildCount", args: [0] },
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
-      { parent: 0, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 0, paramType: E.EtherValue, operator: O.LessThan, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
     ],
   },
   {
@@ -4690,7 +4696,6 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
-      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
   {
@@ -4751,18 +4756,6 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
       { parent: 1, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
       { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-    ],
-  },
-  {
-    rule: "T2",
-    name: "Pass on AbiEncoded over Or",
-    valid: false,
-    error: { name: "UnsuitableChildTypeTree", args: [0] },
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
-      { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
   {
@@ -5338,8 +5331,6 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Pass, compValue: "0x" },
-      { parent: 0, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
     ],
   },
   {

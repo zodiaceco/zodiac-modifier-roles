@@ -127,7 +127,7 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
 - **O18. Leaves.** These nodes have no children
   (`LeafNodeCannotHaveChildren(i)`):
   - encoding Static, Dynamic or EtherValue, with any operator but Slice
-  - encoding None with operator Pass
+  - encoding None or AbiEncoded, with operator Pass
 - **O19. Unassigned codes.** Operators 3, 9, 12, 24 to 27, 29 and 31 are
   rejected (`UnsupportedOperator(i)`).
 
@@ -144,9 +144,11 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   The encoding decides first: a logical node whose encoding is Static,
   Dynamic, Tuple, Array or AbiEncoded has the kind of that encoding.
 - **T2. Containers.**
-  - A container has at least one child, and every child has a type: none
-    has kind _no type_. An Array whose operator does not navigate has
-    exactly one child (`UnsuitableChildCount(i)`).
+  - A Tuple or Array has at least one child (`UnsuitableChildCount(i)`). An
+    AbiEncoded node may have none.
+  - An Array whose operator does not navigate has exactly one child
+    (`UnsuitableChildCount(i)`).
+  - No child of a container has kind _no type_ (`UnsuitableChildCount(i)`).
   - A container whose operator does not navigate has only _exact_ children
     (`UnsuitableChildTypeTree(i)`). A node is exact if its operator is Pass
     and all its children are exact.
@@ -203,7 +205,8 @@ one.
   - A Zip reads every slot in its `compValue`.
 - **P4. Flow.**
   - And, Matches, ArrayTailMatches: each child receives what the previous
-    child returned. The node returns what the last child returned.
+    child returned. The node returns what the last child returned, or `A` if
+    it has none.
   - Or: every child receives `A`. The node returns the slots that every
     child returned.
   - ArraySome: returns what its child returns.

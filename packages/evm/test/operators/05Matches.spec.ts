@@ -30,6 +30,7 @@ const { setupTestContract, setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 const setupTwoParams = setupFn("function fn(uint256, uint256)");
 const setupDynamicParam = setupFn("function fn(bytes)");
+const setupTupleWithBytes = setupFn("function fn((bytes, uint256))");
 
 describe("Operator - Matches", () => {
   after(async () => {
@@ -1366,6 +1367,72 @@ describe("Operator - Matches", () => {
       ]);
       await viem.assertions.revertWithCustomErrorWithArgs(
         invoke(wrongValuePayload),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
+    });
+
+    it("matches a nested call without parameters by its selector", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupDynamicParam);
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x0004deadbeef",
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke("0xdeadbeef");
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcafebabe"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.LeadingBytesNotAMatch, anyValue, anyValue],
+      );
+    });
+
+    it("compares a tuple holding nested calldata, described without children", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTupleWithBytes,
+      );
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.Tuple,
+              operator: Operator.EqualTo,
+              compValue: encodeAbiParameters(
+                parseAbiParameters("(bytes, uint256)"),
+                [["0xdeadbeef", 5n]],
+              ),
+              children: [
+                { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
+                { paramType: Encoding.Static, operator: Operator.Pass },
+              ],
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke(["0xdeadbeef", 5n]);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(["0xdeadbeef", 6n]),
         roles,
         "ConditionViolation",
         [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],

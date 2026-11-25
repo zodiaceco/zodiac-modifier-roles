@@ -156,9 +156,8 @@ const sub = (s: boolean, t1: Ty, t2: Ty): boolean => {
   }
   if (t1.k === "array" && t2.k === "array") return le(s, t1.t, t2.t)
   if (t1.k === "call" && t2.k === "call") {
-    const prefix = t2.o
-      ? t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
-      : !t1.o && t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
+    // a call type is always open: only a Matches gives one
+    const prefix = t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
     return (t1.lb === t2.lb && prefix) || s
   }
   if (t1.k === "call" && t2.k === "dynamic") return true
@@ -388,10 +387,12 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
   const len = cv.length
   const cc = childBounds(fs, j)[1]
   const ch0 = kids(fs, j)[0] ?? 0
+  // O18: nested calldata passed as a whole is read as bytes
   const leafRule =
     !(
-      (e === Enc.Static || e === Enc.Dynamic || e === Enc.EtherValue) &&
-      f.operator !== Op.Slice
+      ((e === Enc.Static || e === Enc.Dynamic || e === Enc.EtherValue) &&
+        f.operator !== Op.Slice) ||
+      (e === Enc.AbiEncoded && f.operator === Op.Pass)
     ) || cc === 0
   const pluckEnc = (k: number, ok: (e: number) => boolean) => {
     const i = findPluck(fs, k)
@@ -702,15 +703,14 @@ const classifyNode = (
       return undefined
     }
     case Enc.AbiEncoded: {
-      if (
-        !(
-          cs.length > 0 &&
-          (op === Op.Matches || (op === Op.Pass && cs.every(exactTy)))
-        )
-      )
-        return undefined
+      // a Pass has no children (O18): nested calldata read as bytes
+      if (op === Op.Pass) {
+        return cs.length === 0 ? { k: "ty", t: DYNAMIC } : undefined
+      }
+      // a Matches may list no parameters
+      if (op !== Op.Matches) return undefined
       const ts = allTy(ks)
-      return ts && { k: "ty", t: { k: "call", lb, ts, o: op === Op.Matches } }
+      return ts && { k: "ty", t: { k: "call", lb, ts, o: true } }
     }
     case Enc.None:
       // a Zip reads the arrays in its slots, nothing where it sits
