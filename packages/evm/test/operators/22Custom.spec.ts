@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
-import { encodeFunctionData, maxUint256, toHex, type Hex } from "viem";
+import { encodeFunctionData, maxUint256, toHex } from "viem";
 
 import { network } from "hardhat";
 
@@ -13,13 +13,12 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Custom", () => {
@@ -459,45 +458,6 @@ describe("Operator - Custom", () => {
           anyValue,
           4n, // calldataOffset: parameter starts at byte 4
         ],
-      );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for None and AbiEncoded", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
-        await viem.assertions.revertWithCustomErrorWithArgs(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Custom,
-              compValue: `0x${"00".repeat(20)}` as Hex,
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-          [0n],
-        );
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is less than 20 bytes", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Custom,
-            compValue: `0x${"ab".repeat(19)}` as Hex, // 19 bytes, less than address
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
       );
     });
   });

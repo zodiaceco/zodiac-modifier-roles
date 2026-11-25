@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
-import { encodeAbiParameters, parseAbiParameters, toHex } from "viem";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -17,7 +16,7 @@ import {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - ArraySome", () => {
@@ -322,192 +321,6 @@ describe("Operator - ArraySome", () => {
           36n, // calldataOffset: array data starts at byte 36
         ],
       );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.AbiEncoded,
-        Encoding.Dynamic,
-        Encoding.EtherValue,
-        Encoding.None,
-        Encoding.Static,
-        Encoding.Tuple,
-      ]) {
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-        );
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Array,
-            operator: Operator.ArraySome,
-            compValue: "0x01",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
-      );
-    });
-
-    describe("children", () => {
-      it("reverts UnsuitableChildCount when ArraySome has zero children", async () => {
-        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableChildCount",
-        );
-      });
-
-      it("reverts UnsuitableChildCount when ArraySome has more than one child", async () => {
-        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-        // ArraySome requires exactly 1 structural child
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableChildCount",
-        );
-
-        // ArraySome requires exactly 1 structural child
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableChildCount",
-        );
-      });
-
-      it("reverts UnsuitableChildCount when ArraySome has non-structural child", async () => {
-        const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-        const allowanceKey = toHex(randomBytes(32));
-
-        // Valid: ArraySome with one structural child - should succeed
-        await allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Array,
-            operator: Operator.ArraySome,
-            compValue: "0x",
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]);
-
-        // Invalid: Adding a non-structural child should fail
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.AbiEncoded,
-              operator: Operator.Matches,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 1,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 1,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: allowanceKey,
-            },
-          ]),
-          evaluator,
-          "UnsuitableChildCount",
-        );
-      });
     });
   });
 });

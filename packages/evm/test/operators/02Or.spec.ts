@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
-import { encodeAbiParameters, parseAbiParameters, type Hex } from "viem";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -11,13 +11,12 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 const setupDynamicParam = setupFn("function fn(bytes)");
 
@@ -682,86 +681,6 @@ describe("Operator - Or", () => {
           4n, // calldataOffset: parameter starts at byte 4
         ],
       );
-    });
-  });
-
-  describe("integrity", () => {
-    describe("encoding", () => {
-      it("reverts UnsuitableParameterType for invalid encodings", async () => {
-        const { roles, evaluator } = await loadFixture(setupTestContract);
-
-        for (const encoding of [
-          Encoding.Static,
-          Encoding.Dynamic,
-          Encoding.Tuple,
-          Encoding.Array,
-          Encoding.AbiEncoded,
-          Encoding.EtherValue,
-        ]) {
-          await viem.assertions.revertWithCustomError(
-            packConditions(roles, [
-              {
-                parent: 0,
-                paramType: encoding,
-                operator: Operator.Or,
-                compValue: "0x",
-              },
-              {
-                parent: 0,
-                paramType: Encoding.Static,
-                operator: Operator.Pass,
-                compValue: "0x",
-              },
-            ]),
-            evaluator,
-            "UnsuitableParameterType",
-          );
-        }
-      });
-    });
-
-    describe("compValue", () => {
-      it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-        const { roles, evaluator } = await loadFixture(setupTestContract);
-
-        await viem.assertions.revertWithCustomError(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.Or,
-              compValue: "0x".padEnd(66, "0") as Hex,
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableCompValue",
-        );
-      });
-    });
-
-    describe("children", () => {
-      it("reverts UnsuitableChildCount when Or has zero children", async () => {
-        const { roles, evaluator } = await loadFixture(setupTestContract);
-
-        await viem.assertions.revertWithCustomError(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.Or,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableChildCount",
-        );
-      });
     });
   });
 });

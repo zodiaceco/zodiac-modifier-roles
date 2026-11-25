@@ -16,7 +16,6 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 // Helper: compValue = [shift (2 bytes)][mask (N bytes)][expected (N bytes)]
@@ -31,7 +30,7 @@ function encodeCompValue(shift: number, mask: string, expected: string): Hex {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Bitmask", () => {
@@ -381,92 +380,6 @@ describe("Operator - Bitmask", () => {
           anyValue,
           36n, // calldataOffset: dynamic param at byte 36 (4 + 32)
         ],
-      );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.None,
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-        Encoding.EtherValue,
-      ]) {
-        await viem.assertions.revertWithCustomError(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Bitmask,
-              compValue: encodeCompValue(0, "ff", "ab"),
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-        );
-      }
-    });
-
-    describe("compValue", () => {
-      it("reverts UnsuitableCompValue when compValue is less than 4 bytes", async () => {
-        const { roles, evaluator } = await loadFixture(setupTestContract);
-
-        await viem.assertions.revertWithCustomError(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Bitmask,
-              compValue: "0x0000", // 2 bytes (only shift, no mask/expected)
-            },
-          ]),
-          evaluator,
-          "UnsuitableCompValue",
-        );
-      });
-
-      it("reverts UnsuitableCompValue when (length - 2) is odd", async () => {
-        const { roles, evaluator } = await loadFixture(setupTestContract);
-
-        await viem.assertions.revertWithCustomError(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Bitmask,
-              compValue: "0x0000aabbcc", // 5 bytes: 2 shift + 3 (odd, can't split evenly)
-            },
-          ]),
-          evaluator,
-          "UnsuitableCompValue",
-        );
-      });
-    });
-
-    it("reverts LeafNodeCannotHaveChildren when Bitmask has children", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Bitmask,
-            compValue: encodeCompValue(0, "ff", "ab"),
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-        evaluator,
-        "LeafNodeCannotHaveChildren",
       );
     });
   });

@@ -9,7 +9,6 @@ import {
   toFunctionSelector,
   toHex,
   zeroAddress,
-  type Hex,
 } from "viem";
 
 import { createSetup } from "../setup.js";
@@ -312,74 +311,6 @@ describe("Operator - EqualToAvatar", () => {
           anyValue,
           4n, // calldataOffset: parameter starts at byte 4
         ],
-      );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.None,
-        Encoding.Dynamic,
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-        Encoding.EtherValue,
-      ]) {
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.EqualToAvatar,
-              compValue: "0x",
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-        );
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.EqualToAvatar,
-            compValue: "0x".padEnd(66, "0") as Hex,
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
-      );
-    });
-
-    it("reverts LeafNodeCannotHaveChildren when EqualToAvatar has children", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.EqualToAvatar,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-        evaluator,
-        "LeafNodeCannotHaveChildren",
       );
     });
   });

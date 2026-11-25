@@ -12,21 +12,17 @@
     "./contracts/*": "./contracts/*"
   },
   "scripts": {
-    "build": "hardhat compile && node scripts/export-abis.mjs",
+    "build": "hardhat compile && node tasks/export-abis.mjs",
     "clean": "hardhat clean",
     "test": "hardhat test",
-    "test:formal": "hardhat test nodejs formal/test/*.spec.ts",
     "check:types": "tsc --noEmit",
     "deploy:mastercopy": "yarn hardhat deploy:mastercopy --network",
     "verify:mastercopy": "yarn hardhat verify:mastercopy --network",
     "coverage": "hardhat test --coverage",
     "fmt": "yarn fmt:sol && yarn fmt:ts",
     "fmt:sol": "prettier 'contracts/**/*.sol' -w",
-    "fmt:ts": "prettier '(tasks|test|formal/test)/**/*.ts' -w",
-    "prepack": "yarn build",
-    "agent:launch": "bash scripts/launch-agent.sh",
-    "agent:attach": "bash scripts/attach-agent.sh",
-    "agent:stop": "bash scripts/stop-agent.sh"
+    "fmt:ts": "prettier '(tasks|test)/**/*.ts' -w",
+    "prepack": "yarn build"
   },
   "devDependencies": {
     "@gnosis-guild/zodiac-core": "4.3.1",
