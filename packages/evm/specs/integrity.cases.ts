@@ -58,6 +58,10 @@ const O = {
   CallWithinAllowance: 30,
 } as const;
 
+/** `n` bytes shaped like `abi.encode(value)`: the offset word, then zeros. */
+const encoded = (n: number): Hex =>
+  `0x${"00".repeat(31)}20${"00".repeat(n - 32)}`;
+
 // One node per line.
 // prettier-ignore
 export const integrityCases: readonly IntegrityCase[] = [
@@ -194,7 +198,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(65_535)}` },
+      { parent: 0, paramType: E.Static, operator: O.Custom, compValue: `0x${"00".repeat(65_535)}` },
     ],
   },
   {
@@ -204,7 +208,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     error: { name: "UnsuitableCompValue", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(65_536)}` },
+      { parent: 0, paramType: E.Static, operator: O.Custom, compValue: `0x${"00".repeat(65_536)}` },
     ],
   },
   {
@@ -722,6 +726,44 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.None, operator: O.Empty, compValue: "0x" },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+
+  {
+    rule: "O3",
+    name: "Empty below a nested Or at the root",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.None, operator: O.Empty, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "O3",
+    name: "Empty next to a check of bytes, below a call",
+    valid: false,
+    error: { name: "UnsupportedOperator", args: [2] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
+      { parent: 1, paramType: E.None, operator: O.Empty, compValue: "0x" },
+      { parent: 1, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "O3",
+    name: "Empty next to a nested call",
+    valid: false,
+    error: { name: "UnsupportedOperator", args: [2] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
+      { parent: 1, paramType: E.None, operator: O.Empty, compValue: "0x" },
+      { parent: 1, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
 
@@ -2318,7 +2360,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: encoded(64) },
     ],
   },
   {
@@ -2337,7 +2379,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: encoded(64) },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -2581,16 +2623,17 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: encoded(64) },
     ],
   },
   {
     rule: "O11",
     name: "EqualTo on bytes: 65 bytes",
-    valid: true,
+    valid: false,
+    error: { name: "UnsuitableCompValue", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(65)}` },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `${encoded(64)}00` },
     ],
   },
   {
@@ -2619,7 +2662,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: encoded(64) },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -2629,7 +2672,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(96)}` },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: encoded(96) },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -2661,7 +2704,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Tuple, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Tuple, operator: O.EqualTo, compValue: encoded(64) },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
     ],
@@ -2672,7 +2715,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Tuple, operator: O.EqualTo, compValue: `0x${"00".repeat(96)}` },
+      { parent: 0, paramType: E.Tuple, operator: O.EqualTo, compValue: encoded(96) },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
     ],
@@ -2699,6 +2742,47 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.Tuple, operator: O.EqualTo, compValue: `0x${"00".repeat(63)}` },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+
+  {
+    rule: "O11",
+    name: "EqualTo on bytes: the offset word is zero",
+    valid: false,
+    error: { name: "UnsuitableCompValue", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+    ],
+  },
+  {
+    rule: "O11",
+    name: "EqualTo on bytes: the offset word is 64",
+    valid: false,
+    error: { name: "UnsuitableCompValue", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(31)}40${"00".repeat(32)}` },
+    ],
+  },
+  {
+    rule: "O11",
+    name: "EqualTo on bytes: 96 bytes",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Dynamic, operator: O.EqualTo, compValue: encoded(96) },
+    ],
+  },
+  {
+    rule: "O11",
+    name: "EqualTo on an array: the offset word is zero",
+    valid: false,
+    error: { name: "UnsuitableCompValue", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
 
@@ -4581,7 +4665,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     error: { name: "UnsuitableChildCount", args: [1] },
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: encoded(64) },
       { parent: 1, paramType: E.None, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -4933,7 +5017,7 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
       { parent: 1, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
-      { parent: 1, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 1, paramType: E.Dynamic, operator: O.EqualTo, compValue: encoded(64) },
     ],
   },
   {
@@ -5071,7 +5155,7 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 1, paramType: E.Array, operator: O.ArrayEvery, compValue: "0x" },
       { parent: 1, paramType: E.Array, operator: O.ArraySome, compValue: "0x" },
       { parent: 2, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 3, paramType: E.Dynamic, operator: O.EqualTo, compValue: `0x${"00".repeat(96)}` },
+      { parent: 3, paramType: E.Dynamic, operator: O.EqualTo, compValue: encoded(96) },
       { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 4, paramType: E.Static, operator: O.GreaterThan, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
     ],
@@ -5084,7 +5168,7 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
       { parent: 1, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
-      { parent: 1, paramType: E.Tuple, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
+      { parent: 1, paramType: E.Tuple, operator: O.EqualTo, compValue: encoded(64) },
       { parent: 2, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
       { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },

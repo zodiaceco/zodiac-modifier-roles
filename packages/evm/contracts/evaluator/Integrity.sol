@@ -52,6 +52,8 @@ library Integrity {
         Encoding encoding;
         Operator operator;
         /* layout pass */
+        /// Every ancestor is an And / Or
+        bool topLevel;
         uint256 childStart;
         uint256 childCount;
         bool inlined;
@@ -107,6 +109,7 @@ library Integrity {
         nodes = new Node[](count);
         nodes[0].encoding = _decodeEncoding(conditions[0].paramType, 0);
         nodes[0].operator = _decodeOperator(conditions[0].operator, 0);
+        nodes[0].topLevel = true;
 
         for (uint256 i = 1; i < count; ++i) {
             uint256 parent = conditions[i].parent;
@@ -124,6 +127,10 @@ library Integrity {
             Node memory parentNode = nodes[parent];
             if (parentNode.childCount == 0) parentNode.childStart = i;
             ++parentNode.childCount;
+            nodes[i].topLevel =
+                parentNode.topLevel &&
+                (parentNode.operator == Operator.And ||
+                    parentNode.operator == Operator.Or);
         }
 
         for (uint256 i; i < count; ++i) {
@@ -262,6 +269,10 @@ library Integrity {
             _requireEncoding(encoding == Encoding.None, index);
             _requireNoCompValue(compValue, index);
             _requireNoChildren(node, index);
+            // Empty checks the calldata of the transaction, not a parameter
+            if (!node.topLevel) {
+                revert IEvaluatorError.UnsupportedOperator(index);
+            }
         } else if (op == Operator.Matches) {
             _checkMatches(compValue, encoding, index);
         } else if (op == Operator.ArraySome || op == Operator.ArrayEvery) {
@@ -473,9 +484,15 @@ library Integrity {
              */
             _requireCompValue(length == node.inlinedSize, index);
         } else {
-            // Dynamic, or a dynamic Tuple or Array: ABI encoded, at least
-            // an offset and one word
-            _requireCompValue(length >= 64, index);
+            // Dynamic, or a dynamic Tuple or Array: abi.encode(value), whole
+            // words starting with the offset word (32), which the packer
+            // drops
+            _requireCompValue(
+                length >= 64 &&
+                    length % 32 == 0 &&
+                    uint256(bytes32(compValue)) == 32,
+                index
+            );
         }
     }
 

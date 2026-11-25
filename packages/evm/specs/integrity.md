@@ -83,6 +83,9 @@ unsigned and big-endian. Unless a row says otherwise, a wrong encoding is
 Wrong child count in O2 and O5: `UnsuitableChildCount(i)`. A child where a row
 says "none": `LeafNodeCannotHaveChildren(i)`.
 
+- **O3. Empty.** Every ancestor of the node is a logical node
+  (`UnsupportedOperator(i)`). Empty checks the calldata of the whole
+  transaction, not the value of a parameter.
 - **O4. Matches.** On Tuple and Array the `compValue` is empty. On AbiEncoded
   it is one of:
   - empty
@@ -106,8 +109,8 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - Word encoding: 32 bytes.
   - An inlined node (a Tuple, by L5): exactly its inlined size.
   - Otherwise (Dynamic, Array, a Tuple that is not inlined): at least 64
-    bytes. The first 32 are the offset word of `abi.encode(value)`. The
-    packer drops them, and their content is not checked.
+    bytes, a multiple of 32. The first 32 are the offset word of
+    `abi.encode(value)`, the number 32. The packer drops them.
 - **O15. WithinRatio.**
   - At least 12 bytes: reference slot, reference decimals, relative slot,
     relative decimals (1 byte each), minimum ratio, maximum ratio (4 bytes

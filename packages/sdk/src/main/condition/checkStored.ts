@@ -361,6 +361,24 @@ const withinRatioCvOk = (cv: Uint8Array): boolean => {
   )
 }
 
+/** O3: every ancestor is an And or an Or. */
+const topLevel = (fs: readonly FlatNode[], j: number): boolean => {
+  while (j > 0) {
+    j = at(fs, j).parent
+    if (at(fs, j).operator !== Op.And && at(fs, j).operator !== Op.Or)
+      return false
+  }
+  return true
+}
+
+/** O11: `abi.encode(value)` of a value that is not inlined. */
+const encodedCvOk = (cv: Uint8Array): boolean =>
+  64 <= cv.length &&
+  cv.length <= 65535 &&
+  cv.length % 32 === 0 &&
+  cv.slice(0, 31).every((b) => b === 0) &&
+  cv[31] === 32
+
 const opOk = (fs: readonly FlatNode[], j: number): boolean => {
   const f = at(fs, j)
   const e = f.paramType
@@ -388,7 +406,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
     case Op.Or: // O2
       return e === Enc.None && len === 0 && cc >= 1
     case Op.Empty: // O3
-      return e === Enc.None && len === 0 && cc === 0
+      return e === Enc.None && len === 0 && cc === 0 && topLevel(fs, j)
     case Op.Matches: {
       // O4
       if (!(e === Enc.Tuple || e === Enc.Array || e === Enc.AbiEncoded))
@@ -440,7 +458,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         case Enc.EtherValue:
           return len === 32
         case Enc.Dynamic:
-          return 64 <= len && len <= 65535
+          return encodedCvOk(cv)
         case Enc.Tuple:
         case Enc.Array:
           // a static tuple's encoding has exactly its size: a longer
@@ -448,7 +466,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
           // chooses
           return isInlinedFlat(fs, j)
             ? len === inlinedSizeFlat(fs, j)
-            : 64 <= len && len <= 65535
+            : encodedCvOk(cv)
         default:
           return false
       }
