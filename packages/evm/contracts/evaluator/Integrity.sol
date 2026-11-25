@@ -664,10 +664,13 @@ library Integrity {
 
             node.kind = TYPE_OF + index;
             if (encoding == Encoding.Array) {
-                node.element = _elementType(nodes, index);
+                // Every child of an Array has a type, and there is one
+                node.element = _sharedType(nodes, index);
             }
         } else {
-            node.kind = _logicalKind(nodes, index);
+            // And / Or: no type if no child has one
+            uint256 shared = _sharedType(nodes, index);
+            node.kind = shared == 0 ? NON_STRUCTURAL : shared;
         }
     }
 
@@ -701,60 +704,26 @@ library Integrity {
         }
     }
 
-    /// @dev Returns the most specific child type of an Array (a subtype of all
-    ///      children), or reverts if the children have incompatible types.
-    function _elementType(
+    /// @dev The type the typed children of a node share: that of the first,
+    ///      which every other must have too. 0 if no child has a type.
+    function _sharedType(
         Node[] memory nodes,
         uint256 index
-    ) private pure returns (uint256 element) {
-        // Every child of an Array has a type
-        element = _meet(nodes, index);
-        if (element == 0) {
-            revert IEvaluatorError.UnsuitableChildTypeTree(index);
-        }
-    }
-
-    /// @dev NON_STRUCTURAL if no child reads calldata; otherwise the first typed
-    ///      child that fits every typed child.
-    function _logicalKind(
-        Node[] memory nodes,
-        uint256 index
-    ) private pure returns (uint256) {
-        uint256 result = _meet(nodes, index);
-        if (result != 0) return result;
-
-        // No child reads calldata
-        Node memory node = nodes[index];
-        for (uint256 i; i < node.childCount; ++i) {
-            if (nodes[node.childStart + i].kind >= STATIC) {
-                revert IEvaluatorError.UnsuitableChildTypeTree(index);
-            }
-        }
-        return NON_STRUCTURAL;
-    }
-
-    /// @dev The first typed child's kind that fits every typed child of the
-    ///      node, or 0 if there is none.
-    function _meet(
-        Node[] memory nodes,
-        uint256 index
-    ) private pure returns (uint256) {
+    ) private pure returns (uint256 result) {
         Node memory node = nodes[index];
         uint256 start = node.childStart;
         uint256 end = start + node.childCount;
 
         for (uint256 i = start; i < end; ++i) {
-            uint256 candidate = nodes[i].kind;
-            if (candidate < STATIC) continue;
+            uint256 kind = nodes[i].kind;
+            if (kind < STATIC) continue;
 
-            bool fits = true;
-            for (uint256 j = start; j < end && fits; ++j) {
-                uint256 other = nodes[j].kind;
-                fits = other < STATIC || _isSubtype(nodes, candidate, other);
+            if (result == 0) {
+                result = kind;
+            } else if (!_isSubtype(nodes, result, kind)) {
+                revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
-            if (fits) return candidate;
         }
-        return 0;
     }
 
     /**

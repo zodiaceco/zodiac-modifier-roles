@@ -636,13 +636,13 @@ const sliceOk = (
 const allTy = (ks: readonly K[]): Ty[] | undefined =>
   ks.every((k) => k.k === "ty") ? ks.map((k) => (k as { t: Ty }).t) : undefined
 
-const fitsKind = (t: Ty, k: K) => k.k !== "ty" || fits(t, k.t)
-
-/** T3, T4: the first child type that fits the type of every typed child. */
+/** T3, T4: the first child type, if it fits the type of every typed child. */
 const meetOf = (ks: readonly K[]): Ty | undefined => {
-  for (const k of ks)
-    if (k.k === "ty" && ks.every((k2) => fitsKind(k.t, k2))) return k.t
-  return undefined
+  const first = ks.find((k) => k.k === "ty")
+  if (first?.k !== "ty") return undefined
+  return ks.every((k) => k.k !== "ty" || fits(first.t, k.t))
+    ? first.t
+    : undefined
 }
 
 /** T2: an exact node, a Pass whose children are all exact. */

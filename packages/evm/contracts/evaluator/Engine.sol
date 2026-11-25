@@ -227,7 +227,8 @@ library Engine {
      *      - `Tuple`:      fields
      *      - `Array`:      elements, length must equal `condition.children.length`
      *
-     *      Trailing parameters (`AbiEncoded`) and fields (`Tuple`) may be omitted.
+     *      Trailing parameters (`AbiEncoded`) may be omitted. A `Tuple` lists
+     *      every field.
      */
     function _matches(
         bytes calldata dataSlice,
