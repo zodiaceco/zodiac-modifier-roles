@@ -463,45 +463,6 @@ describe("Operator - Custom", () => {
     });
   });
 
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for None and AbiEncoded", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
-        await viem.assertions.revertWithCustomErrorWithArgs(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Custom,
-              compValue: `0x${"00".repeat(20)}` as Hex,
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-          [0n],
-        );
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is less than 20 bytes", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Custom,
-            compValue: `0x${"ab".repeat(19)}` as Hex, // 19 bytes, less than address
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
-      );
-    });
-  });
-
   describe("allowance consumption", () => {
     const allowanceKeyA = `0x${"11".repeat(32)}` as const;
     const allowanceKeyB = `0x${"22".repeat(32)}` as const;

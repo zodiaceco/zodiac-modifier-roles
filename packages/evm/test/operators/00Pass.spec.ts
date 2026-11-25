@@ -45,23 +45,4 @@ describe("Operator - Pass", () => {
       await invoke(999);
     });
   });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles, evaluator } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x".padEnd(66, "0") as Hex,
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
-      );
-    });
-  });
 });

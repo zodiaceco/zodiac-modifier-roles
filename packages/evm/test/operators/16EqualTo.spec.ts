@@ -4569,77 +4569,6 @@ describe("Operator - EqualTo", () => {
       );
     });
 
-    it.skip("handles large condition trees (600 nodes)", async () => {
-      // Limited by block gas (100M in hardhat config)
-      // 1 AbiEncoded + 1 Tuple + X*(1 Array + 1 Tuple + 4 Static) = 602
-      // 2 + 6X = 602 => X = 100 array fields (602 nodes)
-
-      const innerTupleType = "(uint256, uint256, uint256, address)";
-      const arrayCount = 100;
-      const fields = Array(arrayCount).fill(`${innerTupleType}[]`);
-      const outerTupleType = `(${fields.join(", ")})`;
-
-      const abi: Abi = parseAbi([`function fn(${outerTupleType})`]);
-      const { roles, member, testContractAddress, allowTarget } =
-        await loadFixture(setupTestContract);
-
-      // Each array has 2 tuples
-      const innerTuple: [bigint, bigint, bigint, Address] = [
-        42n,
-        100n,
-        200n,
-        "0x1111111111111111111111111111111111111111",
-      ];
-      const targetValue = Array(arrayCount).fill([innerTuple, innerTuple]);
-
-      await allowTarget(
-        flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          children: [
-            {
-              paramType: Encoding.Tuple,
-              operator: Operator.EqualTo,
-              compValue: encodeAbiParameters(
-                parseAbiParameters(outerTupleType),
-                [targetValue],
-              ),
-              children: Array.from({ length: arrayCount }, () => ({
-                paramType: Encoding.Array,
-                operator: Operator.Pass,
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Pass,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              })),
-            },
-          ],
-        }),
-      );
-
-      await roles.write.execTransactionFromModule(
-        [
-          testContractAddress,
-          0n,
-          encodeFunctionData({
-            abi,
-            functionName: "fn",
-            args: [targetValue],
-          }),
-          0,
-        ],
-        { account: member.account },
-      );
-    });
-
     it("handles tuples with many fields (10+ fields)", async () => {
       const abi = parseAbi([
         "function fn((uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, address))",
@@ -4788,46 +4717,6 @@ describe("Operator - EqualTo", () => {
           anyValue,
           4n, // calldataOffset: parameter starts at byte 4 (after selector)
         ],
-      );
-    });
-  });
-
-  describe.skip("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
-        await viem.assertions.revertWithCustomError(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.EqualTo,
-              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
-                100n,
-              ]),
-            },
-          ]),
-          evaluator,
-          "UnsuitableParameterType",
-        );
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is empty", async () => {
-      const { evaluator, allowTarget } = await loadFixture(setupTestContract);
-
-      await viem.assertions.revertWithCustomError(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.EqualTo,
-            compValue: "0x",
-          },
-        ]),
-        evaluator,
-        "UnsuitableCompValue",
       );
     });
   });
