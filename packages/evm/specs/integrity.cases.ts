@@ -4553,7 +4553,6 @@ export const integrityCases: readonly IntegrityCase[] = [
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: `0x${"00".repeat(64)}` },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.None, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -4576,8 +4575,66 @@ export const integrityCases: readonly IntegrityCase[] = [
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 1, paramType: E.None, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pass on Array with two children",
+    valid: false,
+    error: { name: "UnsuitableChildCount", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "EqualTo on Array with two children",
+    valid: false,
+    error: { name: "UnsuitableChildCount", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.EqualTo, compValue: "0x000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Custom on Array with two children",
+    valid: false,
+    error: { name: "UnsuitableChildCount", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Custom, compValue: "0x000000000000000000000000000000000000dead" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Pluck on Array with two children",
+    valid: false,
+    error: { name: "UnsuitableChildCount", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T2",
+    name: "Matches on Array with two children",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
   {

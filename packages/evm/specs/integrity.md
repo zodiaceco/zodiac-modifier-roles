@@ -145,7 +145,8 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   Dynamic, Tuple, Array or AbiEncoded has the kind of that encoding.
 - **T2. Containers.**
   - A container has at least one child, and every child has a type: none
-    has kind _no type_ (`UnsuitableChildCount(i)`).
+    has kind _no type_. An Array whose operator does not navigate has
+    exactly one child (`UnsuitableChildCount(i)`).
   - A container whose operator does not navigate has only _exact_ children
     (`UnsuitableChildTypeTree(i)`). A node is exact if its operator is Pass
     and all its children are exact.
@@ -181,9 +182,9 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - a node with _no type_
   - a logical node whose children are each a valid logical root by this
     rule, an AbiEncoded node, or a node with _no type_
-- **T7. Zip fields.** For each slot of a Zip, in order: the type of the first
-  child of the Pluck that writes the slot fits (T5) the type of the Zip
-  field at that position (`UnsuitableChildTypeTree(i)`).
+- **T7. Zip fields.** For each slot of a Zip, in order: the type of the child
+  of the Pluck that writes the slot fits (T5) the type of the Zip field at
+  that position (`UnsuitableChildTypeTree(i)`).
 
 ## 4. Pluck slots
 

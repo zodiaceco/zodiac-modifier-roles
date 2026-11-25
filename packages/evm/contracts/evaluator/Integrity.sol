@@ -623,6 +623,16 @@ library Integrity {
                 revert IEvaluatorError.UnsuitableChildCount(index);
             }
 
+            // An Array read as a whole is described by its element type
+            // alone: its first child. Any other child would never be read
+            if (
+                encoding == Encoding.Array &&
+                !navigates &&
+                node.childCount != 1
+            ) {
+                revert IEvaluatorError.UnsuitableChildCount(index);
+            }
+
             // Non-navigating containers never evaluate their children; they
             // only describe the ABI type, so the subtree must be Pass nodes.
             if (!navigates && !children.allExact) {

@@ -684,7 +684,13 @@ const classifyNode = (
       return ts && { k: "ty", t: { k: "tuple", ts, o: op === Op.Matches } }
     }
     case Enc.Array: {
-      if (!((!isNavOp(op) && cs.every(exactTy)) || isArrayOp(op)))
+      // read as a whole: one child, the element type (T2)
+      if (
+        !(
+          (!isNavOp(op) && cs.length === 1 && cs.every(exactTy)) ||
+          isArrayOp(op)
+        )
+      )
         return undefined
       const k0 = ks[0]
       if (k0 === undefined || k0.k !== "ty") return undefined
