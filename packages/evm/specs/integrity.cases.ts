@@ -5646,69 +5646,9 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
 
-  // P2. No Pluck below a Zip
+  // P2. Writes
   {
     rule: "P2",
-    name: "a Zip whose fields hold no Pluck",
-    valid: true,
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
-      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
-      { parent: 7, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
-      { parent: 8, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 8, paramType: E.Static, operator: O.EqualTo, compValue: "0x0000000000000000000000000000000000000000000000000000000000000001" },
-    ],
-  },
-  {
-    rule: "P2",
-    name: "a Pluck as a Zip field",
-    valid: false,
-    error: { name: "UnsupportedOperator", args: [10] },
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
-      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
-      { parent: 7, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
-      { parent: 8, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 8, paramType: E.Static, operator: O.Pluck, compValue: "0x05" },
-    ],
-  },
-  {
-    rule: "P2",
-    name: "a Pluck inside a tuple that is a Zip field",
-    valid: false,
-    error: { name: "UnsupportedOperator", args: [12] },
-    flat: [
-      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
-      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
-      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
-      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 2, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
-      { parent: 3, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
-      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 7, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
-      { parent: 9, paramType: E.Static, operator: O.Pass, compValue: "0x" },
-      { parent: 9, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
-      { parent: 11, paramType: E.Static, operator: O.Pluck, compValue: "0x05" },
-    ],
-  },
-
-  // P3. Writes
-  {
-    rule: "P3",
     name: "a Pluck on the ether value and one on a word",
     valid: true,
     flat: [
@@ -5720,7 +5660,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P3",
+    rule: "P2",
     name: "a Pluck among the children of an array Pluck is not visited",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
@@ -5734,9 +5674,9 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
 
-  // P4. Reads
+  // P3. Reads
   {
-    rule: "P4",
+    rule: "P3",
     name: "WithinRatio after both slots are written",
     valid: true,
     flat: [
@@ -5748,7 +5688,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P4",
+    rule: "P3",
     name: "a Zip after both arrays are written",
     valid: true,
     flat: [
@@ -5766,7 +5706,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P4",
+    rule: "P3",
     name: "WithinRatio before the call that writes",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [1, 0] },
@@ -5779,7 +5719,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P4",
+    rule: "P3",
     name: "WithinRatio on a slot no Pluck writes",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [2, 1] },
@@ -5791,7 +5731,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P4",
+    rule: "P3",
     name: "a Zip before one of its arrays",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [6, 1] },
@@ -5810,9 +5750,9 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
 
-  // P5. Flow
+  // P4. Flow
   {
-    rule: "P5",
+    rule: "P4",
     name: "Matches: a read in a later parameter",
     valid: true,
     flat: [
@@ -5825,7 +5765,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Matches: a read in an earlier parameter",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [5, 1] },
@@ -5839,7 +5779,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "ArrayTailMatches: a write in each of the last elements",
     valid: true,
     flat: [
@@ -5852,7 +5792,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Or: a read in the branch that writes",
     valid: true,
     flat: [
@@ -5867,7 +5807,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Or: a write in one branch only",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
@@ -5884,7 +5824,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "ArraySome: a write in the element",
     valid: true,
     flat: [
@@ -5897,7 +5837,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "ArrayEvery: a read in the element that writes",
     valid: true,
     flat: [
@@ -5911,7 +5851,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "ArrayEvery: a write in the element, read after",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
@@ -5925,7 +5865,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Zip: a read in a field of slots written before the Zip",
     valid: true,
     flat: [
@@ -5947,7 +5887,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Zip: a read in a field of a slot no Pluck writes",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [13, 3] },
@@ -5969,7 +5909,167 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
+    name: "Zip: a Pluck as a field",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 7, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 8, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 8, paramType: E.Static, operator: O.Pluck, compValue: "0x05" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "Zip: a Pluck inside a tuple that is a field",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 0, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 9, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 9, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 11, paramType: E.Static, operator: O.Pluck, compValue: "0x05" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "Zip: an array Pluck in a field, zipped by a Zip in a later field",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 3, paramType: E.Array, operator: O.Pass, compValue: "0x" },
+      { parent: 4, paramType: E.Array, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Array, operator: O.Pluck, compValue: "0x02" },
+      { parent: 5, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 6, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 8, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 9, paramType: E.Array, operator: O.Pluck, compValue: "0x03" },
+      { parent: 9, paramType: E.None, operator: O.ZipEvery, compValue: "0x0203" },
+      { parent: 13, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 14, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 16, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 16, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "ZipSome: a read after it of a slot written in a field",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipSome, compValue: "0x0001" },
+      { parent: 0, paramType: E.None, operator: O.WithinRatio, compValue: "0x021203060000000000002710" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x02" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Static, operator: O.Pluck, compValue: "0x03" },
+      { parent: 7, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "ZipEvery: a read after it of a slot written in a field",
+    valid: false,
+    error: { name: "PluckNotVisitedBeforeRef", args: [3, 3] },
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 0, paramType: E.None, operator: O.WithinRatio, compValue: "0x021203060000000000002710" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 1, paramType: E.Static, operator: O.Pluck, compValue: "0x02" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 7, paramType: E.Static, operator: O.Pluck, compValue: "0x03" },
+      { parent: 7, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "Zip: a read in a field of a slot written in an earlier field",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pluck, compValue: "0x02" },
+      { parent: 5, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 9, paramType: E.Static, operator: O.Pluck, compValue: "0x03" },
+      { parent: 9, paramType: E.None, operator: O.WithinRatio, compValue: "0x021203060000000000002710" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "Zip: a read in a field of a slot written in a later field",
+    valid: false,
+    error: { name: "PluckNotVisitedBeforeRef", args: [11, 2] },
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pluck, compValue: "0x02" },
+      { parent: 8, paramType: E.Static, operator: O.Pluck, compValue: "0x03" },
+      { parent: 8, paramType: E.None, operator: O.WithinRatio, compValue: "0x021203060000000000002710" },
+    ],
+  },
+  {
+    rule: "P4",
+    name: "Zip: one of its arrays plucked in its own field",
+    valid: false,
+    error: { name: "PluckNotVisitedBeforeRef", args: [2, 1] },
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.ZipEvery, compValue: "0x0001" },
+      { parent: 1, paramType: E.Array, operator: O.Pluck, compValue: "0x00" },
+      { parent: 2, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 3, paramType: E.Array, operator: O.Pass, compValue: "0x" },
+      { parent: 4, paramType: E.Array, operator: O.Pluck, compValue: "0x01" },
+      { parent: 4, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 5, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 6, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "P4",
     name: "Slice: a write below it",
     valid: true,
     flat: [
@@ -5982,7 +6082,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Or: slots written before it stay written",
     valid: true,
     flat: [
@@ -5997,7 +6097,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P5",
+    rule: "P4",
     name: "Or: a branch does not see the writes of an earlier branch",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [6, 0] },
@@ -6013,9 +6113,9 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
 
-  // P6. Everything else
+  // P5. Everything else
   {
-    rule: "P6",
+    rule: "P5",
     name: "a Pluck below a Pass on Tuple writes nothing",
     valid: false,
     error: { name: "PluckNotVisitedBeforeRef", args: [2, 0] },
@@ -6029,7 +6129,7 @@ export const integrityCases: readonly IntegrityCase[] = [
     ],
   },
   {
-    rule: "P6",
+    rule: "P5",
     name: "a read below a Pass on Array is not checked",
     valid: true,
     flat: [

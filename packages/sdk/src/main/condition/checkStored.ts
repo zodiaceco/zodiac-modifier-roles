@@ -3,13 +3,10 @@
  * the `...Packed` setters (`allowTargetPacked`, `allowFunctionPacked`,
  * `allowFunctionGloballyPacked`), which skip `Integrity` on-chain.
  *
- * This is a transcription of `ConditionCheck.checkStored` in
- * packages/evm/formal/ConditionCheck (Lean), where it is proven that every
- * accepted array is packed and unpacked unchanged, never reads an unwritten
- * Pluck slot, and is read by `evaluate` at the ABI spec location of every
- * parameter (`checkStored_sound`). Each function below mirrors the Lean
- * definition of the same name; the differential test
- * packages/evm/formal/test/sdk-check.spec.ts compares the two.
+ * It applies the rules of packages/evm/specs/integrity.md: an accepted
+ * array is packed and unpacked unchanged, never reads an unwritten Pluck
+ * slot, and is read by `evaluate` at the ABI spec location of every
+ * parameter. integrityCases.test.ts runs the cases of that spec against it.
  *
  * Operators and encodings are taken as their numeric codes (`Operator.sol`,
  * `Encoding` in `Condition.sol`), including the v3 ones (`Pluck`, `ZipSome`,
@@ -141,7 +138,7 @@ const isStatic = (t: Ty): boolean =>
 const isBytesLike = (t: Ty): boolean => t.k === "dynamic" || t.k === "call"
 
 /**
- * `Ty.sub` (Check.lean): every value of type `t1` has type `t2`. Equal
+ * `Ty.sub`: every value of type `t1` has type `t2`. Equal
  * types aside: a bytes-like type and `dynamic`; with `s` any two bytes-like
  * types; and the prefix order of open tuple and call types.
  */
@@ -184,7 +181,7 @@ const kEq = (a: K, b: K) =>
   a.k === b.k && (a.k !== "ty" || tyEq(a.t, (b as { t: Ty }).t))
 
 // ---------------------------------------------------------------------------
-// The tree (`Roles.Condition`, before `annotate`)
+// The tree
 // ---------------------------------------------------------------------------
 
 interface Node {
@@ -223,7 +220,6 @@ const range = (n: number) => Array.from({ length: n }, (_, i) => i)
 
 // ---------------------------------------------------------------------------
 // Children, inlined and inlined size on the flat array
-// (`ConditionPacking/Model.lean`)
 // ---------------------------------------------------------------------------
 
 export const at = (fs: readonly FlatNode[], i: number): FlatNode =>
@@ -325,7 +321,7 @@ const rawTree = (fs: readonly FlatNode[], i: number): Node => {
 }
 
 // ---------------------------------------------------------------------------
-// `packableB` (`Flat.lean`)
+// `packableB`: the array fits the packed format
 // ---------------------------------------------------------------------------
 
 export const packableB = (fs: readonly FlatNode[]): boolean => {
@@ -351,7 +347,7 @@ export const packableB = (fs: readonly FlatNode[]): boolean => {
 }
 
 // ---------------------------------------------------------------------------
-// `opsOk` (`Ops.lean`): Integrity's per-operator rules
+// `opsOk`: Integrity's per-operator rules
 // ---------------------------------------------------------------------------
 
 const findPluck = (fs: readonly FlatNode[], k: number): number | undefined =>
@@ -359,21 +355,6 @@ const findPluck = (fs: readonly FlatNode[], k: number): number | undefined =>
     (i) =>
       at(fs, i).operator === Op.Pluck && cvByte(at(fs, i).compValue, 0) === k
   )
-
-const isUnder = (
-  fs: readonly FlatNode[],
-  a: number,
-  fuel: number,
-  j: number
-): boolean => {
-  for (;;) {
-    if (fuel === 0) return j === a
-    if (j === a) return true
-    if (j === 0) return false
-    fuel--
-    j = at(fs, j).parent
-  }
-}
 
 const adapterBlob = (cv: Uint8Array, off: number): number | undefined => {
   const len = cvByte(cv, off)
@@ -454,10 +435,7 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
         range(len).every((k) => {
           const i = findPluck(fs, cvByte(cv, k))
           return i !== undefined && at(fs, i).paramType === Enc.Array
-        }) &&
-        range(fs.length).every(
-          (i) => at(fs, i).operator !== Op.Pluck || !isUnder(fs, ch0, i, i)
-        )
+        })
       )
     case Op.Slice:
       return (
@@ -551,7 +529,7 @@ export const opsOk = (fs: readonly FlatNode[]): boolean =>
   )
 
 // ---------------------------------------------------------------------------
-// `assigned` (`Slots.lean`): Pluck slots written before they are read
+// `assigned`: Pluck slots written before they are read
 // ---------------------------------------------------------------------------
 
 type Slots = ReadonlySet<number>
@@ -603,7 +581,7 @@ const assignedOr = (cs: readonly Node[], A: Slots): Slots | undefined => {
 }
 
 // ---------------------------------------------------------------------------
-// `classify`, `checkCondition` (`Check.lean`)
+// `classify`, `checkCondition`: the type of every node
 // ---------------------------------------------------------------------------
 
 const NAV_OPS = new Set<number>([
@@ -762,7 +740,7 @@ export interface ConditionInput {
   children?: readonly ConditionInput[]
 }
 
-/** The raw tree of an SDK condition (`Normalize.toCheck` in Lean). */
+/** The raw tree of an SDK condition. */
 const nodeOf = (c: ConditionInput): Node => {
   const cv = hexToBytes(c.compValue)
   const abi = c.paramType === Enc.AbiEncoded
@@ -778,10 +756,10 @@ const nodeOf = (c: ConditionInput): Node => {
 /**
  * The children of a merged `Or` (`normalizeCondition`'s push-down): every
  * one describes a parameter of exactly the same type, so the merged node
- * reads the value as each branch did (`sameType` in Lean).
+ * reads the value as each branch did.
  */
 export const siblingsSameType = (cs: readonly ConditionInput[]): boolean => {
-  // unknown codes have no raw tree (`toCheck` is `none`)
+  // unknown codes have no raw tree
   const known = (c: ConditionInput): boolean =>
     Number.isInteger(c.paramType) &&
     0 <= c.paramType &&
@@ -887,7 +865,7 @@ class Checker {
 const nodes = (c: Node): Node[] => [c, ...c.children.flatMap(nodes)]
 
 // ---------------------------------------------------------------------------
-// `checkStored` (`Stored.lean`)
+// `checkStored`
 // ---------------------------------------------------------------------------
 
 export type Verdict =
@@ -906,8 +884,8 @@ export const checkStored = (
   fs: readonly FlatNode[],
   s = true
 ): Verdict | undefined => {
-  // the Lean model has natural numbers here: a fractional or negative parent
-  // would attach the node nowhere, and the check would skip it
+  // a fractional or negative parent would attach the node nowhere, and the
+  // check would skip it
   const nat = (x: number) => Number.isInteger(x) && x >= 0
   if (
     !fs.every(

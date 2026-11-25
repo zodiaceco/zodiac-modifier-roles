@@ -67,8 +67,6 @@ library Integrity {
         bool exact;
         /// The node may be the root: calldata, or And / Or over such nodes
         bool rootOk;
-        /// Index + 1 of the first Pluck at or below the node
-        uint256 pluck;
     }
 
     /// @notice Reverts unless `conditions` is a well-formed condition tree.
@@ -592,7 +590,6 @@ library Integrity {
 
         bool navigates = _navigates(op);
         bool isLogical = op == Operator.And || op == Operator.Or;
-        bool isZip = _isZip(op);
         bool isContainer = encoding == Encoding.Tuple ||
             encoding == Encoding.Array ||
             encoding == Encoding.AbiEncoded;
@@ -601,19 +598,7 @@ library Integrity {
         bool readsNothing = (encoding == Encoding.None ||
             encoding == Encoding.EtherValue) && !isLogical;
 
-        /*
-         * A Zip is evaluated at the arrays its slots hold, not where it
-         * sits. A Pluck below it would write a slot once per element.
-         */
-        if (isZip) {
-            uint256 below = nodes[node.childStart].pluck;
-            if (below != 0) {
-                revert IEvaluatorError.UnsupportedOperator(below - 1);
-            }
-        }
-
         Children memory children = _children(nodes, index);
-        node.pluck = op == Operator.Pluck ? index + 1 : children.pluck;
         node.exact =
             encoding == Encoding.AbiEncoded ||
             op == Operator.Slice ||
@@ -680,8 +665,6 @@ library Integrity {
         bool allTypes;
         /// All may sit below a root And / Or
         bool allRoots;
-        /// Index + 1 of the first Pluck at or below them
-        uint256 pluck;
     }
 
     function _children(
@@ -703,7 +686,6 @@ library Integrity {
             if (!child.rootOk && child.kind >= STATIC) {
                 children.allRoots = false;
             }
-            if (children.pluck == 0) children.pluck = child.pluck;
         }
     }
 
@@ -920,6 +902,10 @@ library Integrity {
      *        evaluated, so its child's assignments count.
      *      - Every passes trivially on an empty collection — its child may
      *        never run, so nothing it assigns can be counted on.
+     *      - Zip runs its fields in order at every step, so a field sees the
+     *        slots filled by the fields before it. What outlives the Zip
+     *        follows Some and Every: the fields of the passing step for
+     *        ZipSome, nothing for ZipEvery.
      *      Children of Pass, Pluck, comparisons, and Custom only describe
      *      types and are never evaluated, so they are skipped.
      */

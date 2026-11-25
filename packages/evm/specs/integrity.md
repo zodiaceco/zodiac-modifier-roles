@@ -190,22 +190,19 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
 
 - **P1. One writer.** At most one Pluck in the tree names a given slot
   (`DuplicatePluckIndex(i, slot)`, at the later Pluck).
-- **P2. No Pluck below a Zip.** No Pluck sits anywhere below a Zip
-  (`UnsupportedOperator(p)`, where `p` is the index of a Pluck below the
-  Zip).
 
 The remaining rules walk the tree from the root with a set `A` of slots that
 are known to be written, starting empty. Each node receives a set and returns
 one.
 
-- **P3. Writes.** A Pluck returns `A` plus its slot. Its children are not
+- **P2. Writes.** A Pluck returns `A` plus its slot. Its children are not
   visited.
-- **P4. Reads.** A read of a slot that is not in the set received is
+- **P3. Reads.** A read of a slot that is not in the set received is
   rejected (`PluckNotVisitedBeforeRef(i, slot)`).
   - WithinRatio reads its reference slot and its relative slot, and returns
     `A`.
   - A Zip reads every slot in its `compValue`.
-- **P5. Flow.**
+- **P4. Flow.**
   - And, Matches, ArrayTailMatches: each child receives what the previous
     child returned. The node returns what the last child returned.
   - Or: every child receives `A`. The node returns the slots that every
@@ -213,8 +210,9 @@ one.
   - ArraySome: returns what its child returns.
   - ArrayEvery: its child is checked from `A`. The node returns `A`.
   - Zip: its fields (the children of its Tuple child) are checked in
-    sequence from `A`. The node returns `A`.
+    sequence from `A`. ZipSome returns what its last field returns. ZipEvery
+    returns `A`.
   - Slice: returns what its child returns.
-- **P6. Everything else.** Any other node returns `A`, and its children are
+- **P5. Everything else.** Any other node returns `A`, and its children are
   not visited. A Pluck below such a node writes nothing, and a read below it
   is not checked.
