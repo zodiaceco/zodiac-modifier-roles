@@ -60,25 +60,25 @@ unsigned and big-endian. Unless a row says otherwise, a wrong encoding is
 `UnsuitableParameterType(i)` and a wrong `compValue` is
 `UnsuitableCompValue(i)`.
 
-| Rule    | Operator (code)                                                                    | Encoding                                     | compValue                                    | Children       |
-| ------- | ---------------------------------------------------------------------------------- | -------------------------------------------- | -------------------------------------------- | -------------- |
-| **O1**  | Pass (0)                                                                           | any                                          | empty                                        | see O18 and T2 |
-| **O2**  | And (1), Or (2)                                                                    | None                                         | empty                                        | at least one   |
-| **O3**  | Empty (4)                                                                          | None                                         | empty                                        | none           |
-| **O4**  | Matches (5)                                                                        | Tuple, Array, AbiEncoded                     | see below                                    | see T2         |
-| **O5**  | ArraySome (6), ArrayEvery (7)                                                      | Array                                        | empty                                        | exactly one    |
-| **O6**  | ArrayTailMatches (8)                                                               | Array                                        | empty                                        | see T2         |
-| **O7**  | ZipSome (10), ZipEvery (11)                                                        | None                                         | see below                                    | see below      |
-| **O8**  | Pluck (14)                                                                         | Static, EtherValue, Array                    | 1 byte, the slot, 0 to 254                   | see O18 and T2 |
-| **O9**  | Slice (13)                                                                         | Static, Dynamic                              | see below                                    | see below      |
-| **O10** | EqualToAvatar (15)                                                                 | Static                                       | empty                                        | none (O18)     |
-| **O11** | EqualTo (16)                                                                       | Static, Dynamic, Tuple, Array, EtherValue    | see below                                    | see O18 and T2 |
-| **O12** | GreaterThan (17), LessThan (18), SignedIntGreaterThan (19), SignedIntLessThan (20) | Static, EtherValue                           | 32 bytes                                     | none (O18)     |
-| **O13** | Bitmask (21)                                                                       | Static, Dynamic                              | at least 4 bytes, even length                | none (O18)     |
-| **O14** | Custom (22)                                                                        | Static, Dynamic, Tuple, Array, EtherValue    | at least 20 bytes                            | see O18 and T2 |
-| **O15** | WithinRatio (23)                                                                   | None                                         | see below                                    | none           |
-| **O16** | WithinAllowance (28)                                                               | Static, EtherValue                           | see below                                    | none (O18)     |
-| **O17** | CallWithinAllowance (30)                                                           | None                                         | 32 bytes                                     | none           |
+| Rule    | Operator (code)                                                                    | Encoding                                        | compValue                                    | Children       |
+| ------- | ---------------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------- | -------------- |
+| **O1**  | Pass (0)                                                                           | any                                             | empty                                        | see O18 and T2 |
+| **O2**  | And (1), Or (2)                                                                    | None                                            | empty                                        | at least one   |
+| **O3**  | Empty (4)                                                                          | None                                            | empty                                        | none           |
+| **O4**  | Matches (5)                                                                        | Tuple, Array, AbiEncoded                        | see below                                    | see T2         |
+| **O5**  | ArraySome (6), ArrayEvery (7)                                                      | Array                                           | empty                                        | exactly one    |
+| **O6**  | ArrayTailMatches (8)                                                               | Array                                           | empty                                        | see T2         |
+| **O7**  | ZipSome (10), ZipEvery (11)                                                        | None                                            | see below                                    | see below      |
+| **O8**  | Pluck (14)                                                                         | Static, EtherValue, Array                       | 1 byte, the slot, 0 to 254                   | see O18 and T2 |
+| **O9**  | Slice (13)                                                                         | Static, Dynamic                                 | see below                                    | see below      |
+| **O10** | EqualToAvatar (15)                                                                 | Static                                          | empty                                        | none (O18)     |
+| **O11** | EqualTo (16)                                                                       | Static, Dynamic, Tuple, Array, EtherValue       | see below                                    | see O18 and T2 |
+| **O12** | GreaterThan (17), LessThan (18), SignedIntGreaterThan (19), SignedIntLessThan (20) | Static, EtherValue                              | 32 bytes                                     | none (O18)     |
+| **O13** | Bitmask (21)                                                                       | Static, Dynamic                                 | at least 4 bytes, even length                | none (O18)     |
+| **O14** | Custom (22)                                                                        | None, Static, Dynamic, Tuple, Array, EtherValue | at least 20 bytes                            | see O18 and T2 |
+| **O15** | WithinRatio (23)                                                                   | None                                            | see below                                    | none           |
+| **O16** | WithinAllowance (28)                                                               | Static, EtherValue                              | see below                                    | none (O18)     |
+| **O17** | CallWithinAllowance (30)                                                           | None                                            | 32 bytes                                     | none           |
 
 Wrong child count in O2 and O5: `UnsuitableChildCount(i)`. A child where a row
 says "none": `LeafNodeCannotHaveChildren(i)`.
@@ -128,6 +128,7 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   (`LeafNodeCannotHaveChildren(i)`):
   - encoding Static, Dynamic or EtherValue, with any operator but Slice
   - encoding None or AbiEncoded, with operator Pass
+  - encoding None with operator Custom
 - **O19. Unassigned codes.** Operators 3, 9, 12, 24 to 27, 29 and 31 are
   rejected (`UnsupportedOperator(i)`).
 

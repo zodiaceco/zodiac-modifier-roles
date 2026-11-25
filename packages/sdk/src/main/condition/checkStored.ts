@@ -484,7 +484,9 @@ const opOk = (fs: readonly FlatNode[], j: number): boolean => {
       )
     case Op.Custom:
       return (
-        (e === Enc.Static ||
+        // on None the adapter is given no operand, and the node no children
+        ((e === Enc.None && cc === 0) ||
+          e === Enc.Static ||
           e === Enc.Dynamic ||
           e === Enc.Tuple ||
           e === Enc.Array ||

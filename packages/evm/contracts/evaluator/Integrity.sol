@@ -306,8 +306,11 @@ library Integrity {
                 index
             );
         } else if (op == Operator.Custom) {
+            // On None, the adapter is given no operand: it checks the
+            // transaction, the plucked values or external state
             _requireEncoding(
-                encoding == Encoding.Static ||
+                encoding == Encoding.None ||
+                    encoding == Encoding.Static ||
                     encoding == Encoding.Dynamic ||
                     encoding == Encoding.Tuple ||
                     encoding == Encoding.Array ||
@@ -316,6 +319,7 @@ library Integrity {
             );
             // The adapter address, then any extra bytes
             _requireCompValue(compValue.length >= 20, index);
+            if (encoding == Encoding.None) _requireNoChildren(node, index);
         } else if (op == Operator.WithinRatio) {
             _checkWithinRatio(compValue, nodes, plucks, index);
         } else if (op == Operator.WithinAllowance) {

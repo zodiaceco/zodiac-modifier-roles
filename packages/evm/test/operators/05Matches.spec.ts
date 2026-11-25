@@ -1441,6 +1441,41 @@ describe("Operator - Matches", () => {
   });
 
   describe("Or branches", () => {
+    it("allows functions without parameters by selector, on a target", async () => {
+      const { roles, member, testContractAddress, allowTarget } =
+        await loadFixture(setupTestContract);
+
+      const bySelector = (signature: string) => ({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        compValue: concat(["0x0004", toFunctionSelector(signature)]),
+      });
+      await allowTarget(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [bySelector("pause()"), bySelector("unpause()")],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      const exec = (signature: string) =>
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, toFunctionSelector(signature), 0],
+          { account: member.account },
+        );
+
+      await exec("pause()");
+      await exec("unpause()");
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec("kill()"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
+    });
+
     it("passes when one branch succeeds", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);

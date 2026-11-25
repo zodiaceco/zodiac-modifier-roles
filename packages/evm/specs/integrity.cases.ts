@@ -3299,8 +3299,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   {
     rule: "O14",
     name: "Custom on None",
-    valid: false,
-    error: { name: "UnsuitableParameterType", args: [2] },
+    valid: true,
     flat: [
       { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -4186,6 +4185,19 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.Pass, compValue: "0x" },
+      { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "O18",
+    name: "a child below Custom on None",
+    valid: false,
+    error: { name: "LeafNodeCannotHaveChildren", args: [2] },
+    flat: [
+      { parent: 0, paramType: E.None, operator: O.And, compValue: "0x" },
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.None, operator: O.Custom, compValue: `0x${"00".repeat(20)}` },
       { parent: 1, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],

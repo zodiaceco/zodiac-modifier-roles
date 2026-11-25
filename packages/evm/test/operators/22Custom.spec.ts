@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
-import { encodeFunctionData, maxUint256, toHex } from "viem";
+import {
+  encodeFunctionData,
+  maxUint256,
+  toFunctionSelector,
+  toHex,
+} from "viem";
 
 import { network } from "hardhat";
 
@@ -18,7 +23,7 @@ import {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupFn } = createSetup(connection);
+const { setupFn, setupTestContract } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Custom", () => {
@@ -225,6 +230,85 @@ describe("Operator - Custom", () => {
           1n, // Custom node
           anyValue,
         ],
+      );
+    });
+
+    it("runs on None, with no operand to read", async () => {
+      const { roles, allowFunction, invoke, customCheckerAddress } =
+        await loadFixture(setupWithChecker);
+      const passing = await viem.deployContract("TestCustomCheckerConsuming");
+
+      const allowWith = (adapter: string) =>
+        allowFunction(
+          flattenCondition({
+            paramType: Encoding.None,
+            operator: Operator.And,
+            children: [
+              {
+                paramType: Encoding.AbiEncoded,
+                operator: Operator.Matches,
+                children: [{ paramType: Encoding.Static }],
+              },
+              {
+                paramType: Encoding.None,
+                operator: Operator.Custom,
+                compValue: adapter,
+              },
+            ],
+          }),
+          ExecutionOptions.Both,
+        );
+
+      // an adapter that passes without reading the operand
+      await allowWith(passing.address);
+      await invoke(101n);
+
+      // an adapter that reads the operand sees none (size 0), whatever the
+      // calldata holds, and fails
+      await allowWith(customCheckerAddress);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CustomConditionViolation, 2n, anyValue],
+      );
+    });
+
+    it("is the whole condition of a target, on None", async () => {
+      const { roles, member, testContractAddress, allowTarget } =
+        await loadFixture(setupTestContract);
+      const passing = await viem.deployContract("TestCustomCheckerConsuming");
+      const failing = await viem.deployContract("TestCustomChecker");
+
+      const exec = () =>
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, toFunctionSelector("pause()"), 0],
+          { account: member.account },
+        );
+
+      await allowTarget(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.Custom,
+          compValue: passing.address,
+        }),
+        ExecutionOptions.Both,
+      );
+      await exec();
+
+      await allowTarget(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.Custom,
+          compValue: failing.address,
+        }),
+        ExecutionOptions.Both,
+      );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec(),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CustomConditionViolation, 0n, anyValue],
       );
     });
   });
