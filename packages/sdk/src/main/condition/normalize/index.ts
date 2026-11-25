@@ -125,15 +125,6 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
         ? canReorderAnd(condition.children)
         : canReorderOr(condition.children)
     if (!canReorder) return condition
-    // a Zip must stay after the child that describes the value (the
-    // logical node's size is its first child's that fits)
-    if (
-      condition.children.some(
-        (c) =>
-          c.operator === Operator.ZipSome || c.operator === Operator.ZipEvery
-      )
-    )
-      return condition
 
     const sorted = condition.children
       .map((c) => ({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { Operator, Encoding } from "../../../types"
 
-import { abiEncodedMatches, calldataMatches } from "./matches"
+import { abiEncodedMatches, calldataMatches, matches } from "./matches"
 import { encodeKey } from "../../../keys"
 import { AbiCoder, ParamType } from "ethers"
 import { checkStoredConditions } from "../../../condition/checkStored"
@@ -29,7 +29,11 @@ describe("calldataMatches", () => {
       paramType: Encoding.None,
       operator: Operator.And,
       children: [
-        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+        {
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [],
+        },
         {
           paramType: Encoding.None,
           operator: Operator.CallWithinAllowance,
@@ -142,7 +146,11 @@ describe("calldataMatches scopings", () => {
       paramType: Encoding.None,
       operator: Operator.And,
       children: [
-        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+        {
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [],
+        },
         {
           paramType: Encoding.Dynamic,
           operator: Operator.Bitmask,
@@ -162,5 +170,36 @@ describe("calldataMatches scopings", () => {
       operator: Operator.Bitmask,
       compValue: "0x0000ffffffff12345678",
     })
+  })
+})
+
+describe("matches", () => {
+  it("pads a tuple scoped by array with the fields left out", () => {
+    const result = matches([32])(ParamType.from("tuple(uint256,bytes)"))
+    expect(result).toEqual({
+      paramType: Encoding.Tuple,
+      operator: Operator.Matches,
+      children: [
+        {
+          paramType: Encoding.Static,
+          operator: Operator.EqualTo,
+          compValue: AbiCoder.defaultAbiCoder().encode(["uint256"], [32]),
+        },
+        { paramType: Encoding.Dynamic, operator: Operator.Pass },
+      ],
+    })
+  })
+})
+
+describe("abiEncodedMatches", () => {
+  it("skips no leading bytes", () => {
+    const result = abiEncodedMatches([undefined], ["uint256"])()
+    expect(result).toEqual({
+      paramType: Encoding.AbiEncoded,
+      operator: Operator.Matches,
+      compValue: "0x0000",
+      children: [{ paramType: Encoding.Static, operator: Operator.Pass }],
+    })
+    expect(checkStoredConditions(flattenCondition(result))).toBeDefined()
   })
 })

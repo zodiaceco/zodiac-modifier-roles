@@ -84,14 +84,16 @@ export const matches =
     assertValidConditionsKeys(scoping, abiType)
     assertCompatibleParamTypes(conditions, abiType)
 
-    // A fixed-size array is a tuple: every element needs a child, also the
-    // ones the scoping leaves out.
-    if (isFixedArray(abiType)) {
-      conditions = Array.from(
-        { length: abiType.arrayLength! },
-        (_, i) => conditions[i]
-      )
-    }
+    // A tuple and a fixed-size array need a child for every field, also the
+    // ones the scoping leaves out: without them the node's layout (inlined or
+    // not, and its size) would not be the parameter's.
+    const fieldCount =
+      abiType.baseType === "tuple"
+        ? abiType.components!.length
+        : isFixedArray(abiType)
+          ? abiType.arrayLength!
+          : conditions.length
+    conditions = Array.from({ length: fieldCount }, (_, i) => conditions[i])
 
     return {
       paramType: parameterType(abiType),
@@ -179,25 +181,19 @@ const calldataMatchesScopings =
           compValue: encodeKey(callWithinAllowance),
         }
       : undefined
-    // Without parameters there is no Matches (it needs children). At the top
-    // level, the allowance alone; with neither allowance nor selector there
-    // is nothing to check (use a permission without a condition). On a
-    // `bytes` parameter, a Pass describing the bytes keeps the parameter's
-    // type next to the allowance or selector check.
+    // Without parameters, at the top level: the allowance alone; without an
+    // allowance there is nothing to check (use a permission without a
+    // condition). On a `bytes` parameter the Matches stays, without children:
+    // it keeps the parameter's type next to the allowance or selector check.
     if (paramTypes.length === 0 && !abiType && !allowance) {
       throw new Error(
         "`calldataMatches` without parameters or allowance checks nothing: use a function permission without a condition"
       )
     }
     const parts: Condition[] =
-      paramTypes.length > 0
+      paramTypes.length > 0 || abiType
         ? [matchesCondition, ...(allowance ? [allowance] : [])]
-        : abiType
-          ? [
-              { paramType: Encoding.Dynamic, operator: Operator.Pass },
-              ...(allowance ? [allowance] : []),
-            ]
-          : [allowance!]
+        : [allowance!]
 
     if (selector) {
       if (selector.length !== 10) {
@@ -340,6 +336,9 @@ export const abiEncodedMatches =
     return {
       paramType: Encoding.AbiEncoded,
       operator: Operator.Matches,
+      // no leading bytes: without a compValue the packer would default to
+      // skipping 4 (a selector)
+      compValue: "0x0000" as const,
       children: conditions.map(
         (condition, index) => condition || describeStructure(paramTypes[index])
       ),

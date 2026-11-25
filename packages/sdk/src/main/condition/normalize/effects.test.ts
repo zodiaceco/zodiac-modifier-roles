@@ -217,16 +217,11 @@ suite(
       expect(result.children).toContainEqual(zip)
     })
 
-    it("keeps a Zip after the check that describes the value when sorting", () => {
-      // And[EqualTo(bytes), Zip]: the And's size is its first child's that
-      // fits, and the SDK check requires the Zip after the described child
+    it("sorts a Zip like any other child (it has no size where it sits)", () => {
       const zip = zipEvery(pass(Encoding.Dynamic), pass(Encoding.Static))
-      const input = calldata(pluckArray(1), and(bytesEq("0x1234"), zip))
-      const inner = normalizeCondition(input).children!.find(
-        (c) => c.operator === Operator.And
-      )!
-      expect(inner.children![0].paramType).toBe(Encoding.Dynamic)
-      expect(inner.children![1]).toEqual(zip)
+      const a = calldata(pluckArray(1), and(bytesEq("0x1234"), zip))
+      const b = calldata(pluckArray(1), and(zip, bytesEq("0x1234")))
+      expect(normalizeCondition(a)).toEqual(normalizeCondition(b))
     })
 
     it("does not merge Or branches whose differing parameters have different types", () => {
