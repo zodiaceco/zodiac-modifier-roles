@@ -15,7 +15,7 @@ import {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupTwoArrayParams = setupFn("function fn(uint256[], uint256[])");
 const setupThreeBytesArrayParams = setupFn(
   "function fn(bytes[], bytes[], bytes[])",

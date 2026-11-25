@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
-import { encodeAbiParameters, parseAbiParameters, type Hex } from "viem";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -11,13 +11,12 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 const setupDynamicParam = setupFn("function fn(bytes)");
 

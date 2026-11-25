@@ -1,6 +1,5 @@
 import { after, describe, it } from "node:test";
 import { network } from "hardhat";
-import type { Hex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -8,13 +7,12 @@ import {
   Encoding,
   ExecutionOptions,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
-const { viem, networkHelpers } = connection;
+const { networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Pass", () => {

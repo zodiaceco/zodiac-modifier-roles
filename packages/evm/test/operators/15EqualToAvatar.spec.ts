@@ -9,7 +9,6 @@ import {
   toFunctionSelector,
   toHex,
   zeroAddress,
-  type Hex,
 } from "viem";
 
 import { createSetup } from "../setup.js";

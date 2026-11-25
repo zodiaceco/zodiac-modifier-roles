@@ -38,7 +38,7 @@ function replaceBytes(data: Hex, byteOffset: number, replacement: Hex): Hex {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 const setupDynamicParam = setupFn("function fn(bytes)");
 

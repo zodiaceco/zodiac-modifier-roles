@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
-import { encodeAbiParameters, parseAbiParameters, toHex } from "viem";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -17,7 +16,7 @@ import {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - ArraySome", () => {

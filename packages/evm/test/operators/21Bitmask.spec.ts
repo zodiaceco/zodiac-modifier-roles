@@ -16,7 +16,6 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 // Helper: compValue = [shift (2 bytes)][mask (N bytes)][expected (N bytes)]
@@ -31,7 +30,7 @@ function encodeCompValue(shift: number, mask: string, expected: string): Hex {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Bitmask", () => {

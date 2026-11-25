@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, describe, it } from "node:test";
 import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
-import { encodeFunctionData, maxUint256, toHex, type Hex } from "viem";
+import { encodeFunctionData, maxUint256, toHex } from "viem";
 
 import { network } from "hardhat";
 
@@ -13,13 +13,12 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Custom", () => {

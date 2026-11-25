@@ -17,7 +17,7 @@ import {
 const connection = await network.create();
 const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupFn } = createSetup(connection);
+const { setupFn } = createSetup(connection);
 const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - ArrayTailMatches", () => {

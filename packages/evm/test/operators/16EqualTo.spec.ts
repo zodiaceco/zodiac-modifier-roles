@@ -9,7 +9,6 @@ import {
   toFunctionSelector,
   toHex,
   zeroHash,
-  type Abi,
   type Address,
   type Hex,
 } from "viem";
