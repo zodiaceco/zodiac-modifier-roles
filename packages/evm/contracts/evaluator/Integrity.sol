@@ -689,36 +689,41 @@ library Integrity {
         }
     }
 
-    /**
-     * @dev The element type of an Array node. Its first child is the
-     *      template the evaluator decodes every element with, so it must be
-     *      the most specific: every element it types, the others type too.
-     */
+    /// @dev Returns the most specific child type of an Array (a subtype of all
+    ///      children), or reverts if the children have incompatible types.
     function _elementType(
         Node[] memory nodes,
         uint256 index
     ) private pure returns (uint256 element) {
-        Node memory node = nodes[index];
-        element = nodes[node.childStart].kind;
-
-        for (uint256 i = 1; i < node.childCount; ++i) {
-            uint256 other = nodes[node.childStart + i].kind;
-            if (!_isSubtype(nodes, element, other)) {
-                revert IEvaluatorError.UnsuitableChildTypeTree(index);
-            }
+        // Every child of an Array has a type
+        element = _meet(nodes, index);
+        if (element == 0) {
+            revert IEvaluatorError.UnsuitableChildTypeTree(index);
         }
     }
 
-    /**
-     * @dev What an And / Or is. Its children are all evaluated at the value
-     *      it sits at.
-     *
-     *      - If none reads calldata, neither does the node.
-     *      - Otherwise its type is that of the most specific child: one
-     *        whose every value the other children type too (checks of
-     *        different prefixes of one tuple).
-     */
+    /// @dev NON_STRUCTURAL if no child reads calldata; otherwise the first typed
+    ///      child that fits every typed child.
     function _logicalKind(
+        Node[] memory nodes,
+        uint256 index
+    ) private pure returns (uint256) {
+        uint256 result = _meet(nodes, index);
+        if (result != 0) return result;
+
+        // No child reads calldata
+        Node memory node = nodes[index];
+        for (uint256 i; i < node.childCount; ++i) {
+            if (nodes[node.childStart + i].kind >= STATIC) {
+                revert IEvaluatorError.UnsuitableChildTypeTree(index);
+            }
+        }
+        return NON_STRUCTURAL;
+    }
+
+    /// @dev The first typed child's kind that fits every typed child of the
+    ///      node, or 0 if there is none.
+    function _meet(
         Node[] memory nodes,
         uint256 index
     ) private pure returns (uint256) {
@@ -726,8 +731,7 @@ library Integrity {
         uint256 start = node.childStart;
         uint256 end = start + node.childCount;
 
-        uint256 result;
-        for (uint256 i = start; i < end && result == 0; ++i) {
+        for (uint256 i = start; i < end; ++i) {
             uint256 candidate = nodes[i].kind;
             if (candidate < STATIC) continue;
 
@@ -736,17 +740,9 @@ library Integrity {
                 uint256 other = nodes[j].kind;
                 fits = other < STATIC || _isSubtype(nodes, candidate, other);
             }
-            if (fits) result = candidate;
+            if (fits) return candidate;
         }
-        if (result != 0) return result;
-
-        // No child reads calldata
-        for (uint256 i = start; i < end; ++i) {
-            if (nodes[i].kind >= STATIC) {
-                revert IEvaluatorError.UnsuitableChildTypeTree(index);
-            }
-        }
-        return NON_STRUCTURAL;
+        return 0;
     }
 
     /**
@@ -801,23 +797,15 @@ library Integrity {
             return _isSubtype(nodes, x.element, y.element);
         }
 
-        /*
-         * A static tuple is read in place, with exactly the fields listed,
-         * whether it is open or not: `a` has as many fields, each fitting.
-         */
-        if (y.staticType) {
-            return x.childCount == y.childCount && _isPrefix(nodes, x, y);
-        }
-
-        if (y.operator != Operator.Matches) {
-            // A full description: the same fields, none left out
+        // Static tuples are always closed (inlined with exact field count).
+        bool openX = x.operator == Operator.Matches && !x.staticType;
+        bool openY = y.operator == Operator.Matches && !y.staticType;
+        if (!openY) {
             return
-                x.operator != Operator.Matches &&
+                !openX &&
                 x.childCount == y.childCount &&
                 _isPrefix(nodes, x, y);
         }
-
-        // Otherwise it types its first fields only, and `a` may have more
         return x.childCount >= y.childCount && _isPrefix(nodes, x, y);
     }
 

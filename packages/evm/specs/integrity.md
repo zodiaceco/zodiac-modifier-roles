@@ -157,9 +157,9 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
     _open_ if its operator is Matches and it is not static, and _closed_
     otherwise.
   - A call type (AbiEncoded) is interchangeable with bytes.
-- **T3. Arrays.** The element type of an Array is the type of its first
-  child. It fits (T5) the type of every other child
-  (`UnsuitableChildTypeTree(i)`).
+- **T3. Arrays.** The element type of an Array is the first child type that
+  fits (T5) the type of every child. If there is none:
+  `UnsuitableChildTypeTree(i)`.
 - **T4. Logical nodes.**
   - If no child has a type, the node has _no type_.
   - Otherwise the node's type is the first child type that fits (T5) the

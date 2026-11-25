@@ -692,11 +692,10 @@ const classifyNode = (
         )
       )
         return undefined
-      const k0 = ks[0]
-      if (k0 === undefined || k0.k !== "ty") return undefined
-      // the template `children[0]` reads every element: the most specific
-      if (ks.slice(1).every((k) => k.k === "ty" && fits(s, k0.t, k)))
-        return { k: "ty", t: { k: "array", t: k0.t } }
+      if (ks.length === 0 || !ks.every((k) => k.k === "ty")) return undefined
+      // the element type: the first child type that fits every child (T3)
+      const t = meetOf(s, ks)
+      if (t !== undefined) return { k: "ty", t: { k: "array", t } }
       if (s && ks.every(bytesLikeTy))
         return { k: "ty", t: { k: "array", t: DYNAMIC } }
       return undefined
