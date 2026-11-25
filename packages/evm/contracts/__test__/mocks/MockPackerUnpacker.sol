@@ -32,18 +32,19 @@ contract MockPackerUnpacker is IEvaluatorError {
     )
         public
         view
-        returns (ConditionForTest[] memory result, uint256 maxPluckValueCount)
+        returns (ConditionForTest[] memory result, uint256 maxPluckCount)
     {
         Integrity.enforce(conditions);
         bytes memory buffer = Packer.pack(conditions);
 
+        _dirtyMemory();
         (Condition memory condition, uint256 maxCount) = Unpacker.unpack(
             buffer,
             address(this)
         );
 
         result = _flatten(condition);
-        maxPluckValueCount = maxCount;
+        maxPluckCount = maxCount;
     }
 
     /// @dev Integrity + pack, as `packConditions` does. Used by the Lean
@@ -68,15 +69,40 @@ contract MockPackerUnpacker is IEvaluatorError {
     )
         public
         view
-        returns (ConditionForTest[] memory result, uint256 maxPluckValueCount)
+        returns (ConditionForTest[] memory result, uint256 maxPluckCount)
     {
+        _dirtyMemory();
         (Condition memory condition, uint256 maxCount) = Unpacker.unpack(
             buffer,
             address(this)
         );
 
         result = _flatten(condition);
-        maxPluckValueCount = maxCount;
+        maxPluckCount = maxCount;
+    }
+
+    function unpackGas(bytes memory buffer) public view returns (uint256) {
+        uint256 beforeGas = gasleft();
+        Unpacker.unpack(buffer, address(this));
+        return beforeGas - gasleft();
+    }
+
+    /// @dev Fills 512 KB of free memory with ones, without allocating it.
+    ///      Memory past the free pointer is not guaranteed to be zero, and
+    ///      the unpacker reserves its nodes without clearing them.
+    function _dirtyMemory() private pure {
+        assembly {
+            let start := mload(0x40)
+            mstore(start, not(0))
+            // each copy doubles the filled region
+            for {
+                let size := 0x20
+            } lt(size, 0x80000) {
+                size := mul(size, 2)
+            } {
+                mcopy(add(start, size), start, size)
+            }
+        }
     }
 
     function _flatten(

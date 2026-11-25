@@ -20,7 +20,7 @@ import {Encoding, Operator} from "../types/EvaluatorTypes.sol";
  * ║ │ HEADER (3 bytes = 24 bits)                                          │ ║
  * ║ ├─────────────────────────────────────────────────────────────────────┤ ║
  * ║ │ • conditionNodeCount     16 bits (bytes 0-1)                        │ ║
- * ║ │ • maxPluckValue           8 bits (byte 2)                           │ ║
+ * ║ │ • maxPluckCount           8 bits (byte 2)                           │ ║
  * ║ └─────────────────────────────────────────────────────────────────────┘ ║
  * ║ ┌─────────────────────────────────────────────────────────────────────┐ ║
  * ║ │ NODES (nodeCount × 4 bytes each)                                    │ ║
