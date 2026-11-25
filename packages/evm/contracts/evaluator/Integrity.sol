@@ -801,66 +801,39 @@ library Integrity {
             return _isSubtype(nodes, x.element, y.element);
         }
 
-        bool openX = x.operator == Operator.Matches;
-        bool openY = y.operator == Operator.Matches;
-        if (!openY) {
-            // A full description: the same fields, none left out
-            return
-                !openX &&
-                x.childCount == y.childCount &&
-                _isPrefix(nodes, x, y, false);
-        }
-
         /*
-         * An open tuple of static fields is read in place, with exactly the
-         * fields listed, so `a` has that many fields too. If `a` is open as
-         * well, its fields must be the very same types: a field left open
-         * on either side could differ in size.
+         * A static tuple is read in place, with exactly the fields listed,
+         * whether it is open or not: `a` has as many fields, each fitting.
          */
         if (y.staticType) {
+            return x.childCount == y.childCount && _isPrefix(nodes, x, y);
+        }
+
+        if (y.operator != Operator.Matches) {
+            // A full description: the same fields, none left out
             return
-                x.childCount == y.childCount && _isPrefix(nodes, x, y, openX);
+                x.operator != Operator.Matches &&
+                x.childCount == y.childCount &&
+                _isPrefix(nodes, x, y);
         }
 
         // Otherwise it types its first fields only, and `a` may have more
-        return x.childCount >= y.childCount && _isPrefix(nodes, x, y, false);
+        return x.childCount >= y.childCount && _isPrefix(nodes, x, y);
     }
 
-    /// @dev Whether the first fields of tuple `x` are subtypes of (or, if
-    ///      `same`, the same types as) the fields of tuple `y`.
+    /// @dev Whether the first fields of tuple `x` are subtypes of the fields
+    ///      of tuple `y`.
     function _isPrefix(
         Node[] memory nodes,
         Node memory x,
-        Node memory y,
-        bool same
+        Node memory y
     ) private pure returns (bool) {
         for (uint256 i; i < y.childCount; ++i) {
             uint256 a = nodes[x.childStart + i].kind;
             uint256 b = nodes[y.childStart + i].kind;
-            if (!(same ? _isSame(nodes, a, b) : _isSubtype(nodes, a, b))) {
-                return false;
-            }
+            if (!_isSubtype(nodes, a, b)) return false;
         }
         return true;
-    }
-
-    /// @dev Whether `a` is the static type `b`.
-    function _isSame(
-        Node[] memory nodes,
-        uint256 a,
-        uint256 b
-    ) private pure returns (bool) {
-        if (a == STATIC || b == STATIC) return a == b;
-        if (a < TYPE_OF) return false;
-
-        Node memory x = nodes[a - TYPE_OF];
-        Node memory y = nodes[b - TYPE_OF];
-        return
-            x.encoding == Encoding.Tuple &&
-            (x.operator == Operator.Matches) ==
-            (y.operator == Operator.Matches) &&
-            x.childCount == y.childCount &&
-            _isPrefix(nodes, x, y, true);
     }
 
     function _isStatic(

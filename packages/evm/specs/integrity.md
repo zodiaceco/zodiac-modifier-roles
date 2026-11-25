@@ -152,8 +152,10 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - A container whose operator does not navigate has only _exact_ children
     (`UnsuitableChildTypeTree(i)`). A node is exact if its operator is Pass
     and all its children are exact.
-  - A tuple type lists the types of its children in order. It is _open_ if
-    the operator is Matches and _closed_ otherwise.
+  - A tuple type lists the types of its children in order. A type is _static_
+    if it is a word or a tuple whose fields are all static. A tuple type is
+    _open_ if its operator is Matches and it is not static, and _closed_
+    otherwise.
   - A call type (AbiEncoded) is interchangeable with bytes.
 - **T3. Arrays.** The element type of an Array is the type of its first
   child. It fits (T5) the type of every other child
@@ -167,18 +169,10 @@ says "none": `LeafNodeCannotHaveChildren(i)`.
   - Both are words.
   - Each is bytes or a call.
   - Both are arrays and A's element type fits B's.
-  - Both are tuples, B is closed, A is closed, they have the same number of
-    fields, and each field of A fits the field of B at its position.
-  - Both are tuples, B is open and static, they have the same number of
-    fields, and: if A is closed, each field of A fits B's; if A is open,
-    each field of A is the same as B's.
-  - Both are tuples, B is open and not static, A has at least as many fields
-    as B, and each of A's first fields fits the field of B at its position.
-
-  A type is _static_ if it is a word or a tuple whose fields are all static.
-  Two types are _the same_ if both are words, or both are tuples that are
-  both open or both closed, with the same number of fields, each the same as
-  its counterpart.
+  - Both are tuples, both are closed, they have the same number of fields,
+    and each field of A fits the field of B at its position.
+  - Both are tuples, B is open, A has at least as many fields as B, and each
+    of A's first fields fits the field of B at its position.
 - **T6. Root.** The root is one of (`UnsuitableRootNode`):
   - an AbiEncoded node
   - a node with _no type_

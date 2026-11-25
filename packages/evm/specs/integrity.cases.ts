@@ -5065,7 +5065,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "a closed tuple and an open static one of the same length",
+    name: "a Pass tuple and a static Matches one of the same length",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5080,7 +5080,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open static tuples with the same fields",
+    name: "static Matches tuples with the same fields",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5095,7 +5095,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open static tuples with the same nested tuple",
+    name: "static Matches tuples with the same nested tuple",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5112,7 +5112,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open tuples that are not static, of different lengths",
+    name: "open tuples of different lengths",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5128,7 +5128,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "an open tuple that is not static and a longer closed one",
+    name: "an open tuple and a longer closed one",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5200,7 +5200,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open static tuples of different lengths",
+    name: "static Matches tuples of different lengths",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
@@ -5215,7 +5215,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open static tuples whose nested tuples differ",
+    name: "static Matches tuples whose nested tuples differ in length",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
@@ -5234,7 +5234,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "an open static tuple and one with bytes in place of a field",
+    name: "a static Matches tuple and one with bytes in place of a field",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
@@ -5251,7 +5251,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open tuples that are not static and disagree on a field",
+    name: "open tuples that disagree on a field",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [1] },
     flat: [
@@ -5267,9 +5267,8 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T5",
-    name: "open static tuples whose nested tuples are one closed, one open",
-    valid: false,
-    error: { name: "UnsuitableChildTypeTree", args: [1] },
+    name: "static Matches tuples whose nested tuples are Pass and Matches",
+    valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
       { parent: 0, paramType: E.None, operator: O.Or, compValue: "0x" },
@@ -5295,6 +5294,36 @@ export const integrityCases: readonly IntegrityCase[] = [
       { parent: 2, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
       { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 3, paramType: E.Dynamic, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T5",
+    name: "in an array: a static Matches tuple first fits a Pass one",
+    valid: true,
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+    ],
+  },
+  {
+    rule: "T5",
+    name: "in an array: a static Matches tuple does not fit a shorter Pass one",
+    valid: false,
+    error: { name: "UnsuitableChildTypeTree", args: [1] },
+    flat: [
+      { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
+      { parent: 0, paramType: E.Array, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Matches, compValue: "0x" },
+      { parent: 1, paramType: E.Tuple, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
+      { parent: 2, paramType: E.Static, operator: O.Pass, compValue: "0x" },
       { parent: 3, paramType: E.Static, operator: O.Pass, compValue: "0x" },
     ],
   },
@@ -5538,7 +5567,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T7",
-    name: "an open tuple on tuples",
+    name: "a static Matches tuple on tuples",
     valid: true,
     flat: [
       { parent: 0, paramType: E.AbiEncoded, operator: O.Matches, compValue: "0x" },
@@ -5619,7 +5648,7 @@ export const integrityCases: readonly IntegrityCase[] = [
   },
   {
     rule: "T7",
-    name: "a shorter open tuple on static tuples",
+    name: "a shorter static Matches tuple on tuples",
     valid: false,
     error: { name: "UnsuitableChildTypeTree", args: [7] },
     flat: [

@@ -146,12 +146,11 @@ const sub = (s: boolean, t1: Ty, t2: Ty): boolean => {
   if (t1.k === "static" && t2.k === "static") return true
   if (t1.k === "dynamic" && t2.k === "dynamic") return true
   if (t1.k === "tuple" && t2.k === "tuple") {
+    // a static tuple is read in place with exactly its fields, open or not
+    if (isStatic(t2))
+      return t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
     if (t2.o)
-      return (
-        t2.ts.length <= t1.ts.length &&
-        subPre(s, t1.ts, t2.ts) &&
-        (!(t2.ts.length < t1.ts.length || t1.o) || !t2.ts.every(isStatic))
-      )
+      return t2.ts.length <= t1.ts.length && subPre(s, t1.ts, t2.ts)
     return !t1.o && t1.ts.length === t2.ts.length && subPre(s, t1.ts, t2.ts)
   }
   if (t1.k === "array" && t2.k === "array") return le(s, t1.t, t2.t)
