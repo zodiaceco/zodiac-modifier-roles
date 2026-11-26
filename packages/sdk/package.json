@@ -107,7 +107,8 @@
     "tsdown": "^0.14.1",
     "typechain": "^8.3.2",
     "typescript": "^5.7.3",
-    "vitest": "3.0.4"
+    "vitest": "3.0.4",
+    "zodiac-roles-sdk-v2": "npm:zodiac-roles-sdk@4.2.0"
   },
   "resolutions": {
     "typechain": "^8.3.2"
