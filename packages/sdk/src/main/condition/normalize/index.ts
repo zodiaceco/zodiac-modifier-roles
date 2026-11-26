@@ -14,9 +14,8 @@ import { canReorderAnd, canReorderOr, charges, writesSlots } from "./effects"
  * at addresses derived from hashing the condition data — so structurally consistent
  * representations help avoid redundant storage.
  *
- * That the rewrites keep the meaning is proven in Lean, against a
- * transcription of this code (packages/evm/formal/Normalize); effects.ts
- * holds the rules for reordering and removing children.
+ * The rewrites keep the meaning of the condition; effects.ts holds the rules
+ * for reordering and removing children.
  *
  * Children of a `Matches` are never removed, trailing `Pass` nodes included:
  * the contract computes every child's location before evaluating any, so
@@ -125,15 +124,6 @@ const sortBranchesCanonical = (condition: Condition): Condition => {
         ? canReorderAnd(condition.children)
         : canReorderOr(condition.children)
     if (!canReorder) return condition
-    // a Zip must stay after the child that describes the value (the
-    // logical node's size is its first child's that fits)
-    if (
-      condition.children.some(
-        (c) =>
-          c.operator === Operator.ZipSome || c.operator === Operator.ZipEvery
-      )
-    )
-      return condition
 
     const sorted = condition.children
       .map((c) => ({

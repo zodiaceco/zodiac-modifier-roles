@@ -35,17 +35,15 @@ library Integrity {
     /*
      * What a node is to its parent, as computed by the types pass.
      *
-     * A node either reads no calldata (NON_STRUCTURAL), is a Zip, or
-     * describes a value of some ABI type. A type is a word, bytes, or the
-     * type of a Tuple, Array or AbiEncoded node, written as TYPE_OF + that
-     * node's index:
-     * - Tuple:      the types of its children; open if the node is a
-     *               Matches, which may list only the first fields
+     * A node either reads no calldata where it sits (NON_STRUCTURAL: the
+     * ether value, an allowance, a Zip), or describes a value of some ABI
+     * type. A type is a word, bytes, or the type of a Tuple, Array or
+     * AbiEncoded node, written as TYPE_OF + that node's index:
+     * - Tuple:      the types of its children, one per field
      * - Array:      its element type (`Node.element`)
      * - AbiEncoded: nested calldata, interchangeable with bytes
      */
     uint256 private constant NON_STRUCTURAL = 1;
-    uint256 private constant ZIP = 2;
     uint256 private constant STATIC = 3;
     uint256 private constant DYNAMIC = 4;
     uint256 private constant TYPE_OF = 5;
@@ -54,6 +52,8 @@ library Integrity {
         Encoding encoding;
         Operator operator;
         /* layout pass */
+        /// Every ancestor is an And / Or
+        bool topLevel;
         uint256 childStart;
         uint256 childCount;
         bool inlined;
@@ -62,14 +62,10 @@ library Integrity {
         uint256 kind;
         /// Arrays: the element type
         uint256 element;
-        /// The node's type has a fixed size
-        bool staticType;
-        /// The subtree is a plain type description: nothing in it navigates
+        /// The subtree is a plain type description: Pass nodes only
         bool exact;
         /// The node may be the root: calldata, or And / Or over such nodes
         bool rootOk;
-        /// Index + 1 of the first Pluck at or below the node
-        uint256 pluck;
     }
 
     /// @notice Reverts unless `conditions` is a well-formed condition tree.
@@ -113,6 +109,7 @@ library Integrity {
         nodes = new Node[](count);
         nodes[0].encoding = _decodeEncoding(conditions[0].paramType, 0);
         nodes[0].operator = _decodeOperator(conditions[0].operator, 0);
+        nodes[0].topLevel = true;
 
         for (uint256 i = 1; i < count; ++i) {
             uint256 parent = conditions[i].parent;
@@ -130,6 +127,10 @@ library Integrity {
             Node memory parentNode = nodes[parent];
             if (parentNode.childCount == 0) parentNode.childStart = i;
             ++parentNode.childCount;
+            nodes[i].topLevel =
+                parentNode.topLevel &&
+                (parentNode.operator == Operator.And ||
+                    parentNode.operator == Operator.Or);
         }
 
         for (uint256 i; i < count; ++i) {
@@ -144,11 +145,14 @@ library Integrity {
         /*
          * Inlined nodes, bottom-up: a node is inlined (encoded in place,
          * with a fixed size) unless it or a descendant is Dynamic, Array or
-         * AbiEncoded. Children have higher indices than their parent.
+         * AbiEncoded. A Zip is not inlined and is ignored by its parent.
+         * Children have higher indices than their parent.
          */
         for (uint256 next = count; next > 0; --next) {
             uint256 i = next - 1;
             Node memory node = nodes[i];
+            if (_isZip(node.operator)) continue;
+
             Encoding encoding = node.encoding;
             if (
                 encoding == Encoding.Dynamic ||
@@ -162,6 +166,8 @@ library Integrity {
             uint256 size;
             for (uint256 j; j < node.childCount; ++j) {
                 Node memory child = nodes[node.childStart + j];
+                // A Zip is ignored by its parent
+                if (_isZip(child.operator)) continue;
                 if (!child.inlined) {
                     inlined = false;
                     break;
@@ -263,6 +269,10 @@ library Integrity {
             _requireEncoding(encoding == Encoding.None, index);
             _requireNoCompValue(compValue, index);
             _requireNoChildren(node, index);
+            // Empty checks the calldata of the transaction, not a parameter
+            if (!node.topLevel) {
+                revert IEvaluatorError.UnsupportedOperator(index);
+            }
         } else if (op == Operator.Matches) {
             _checkMatches(compValue, encoding, index);
         } else if (op == Operator.ArraySome || op == Operator.ArrayEvery) {
@@ -304,8 +314,11 @@ library Integrity {
                 index
             );
         } else if (op == Operator.Custom) {
+            // On None, the adapter is given no operand: it checks the
+            // transaction, the plucked values or external state
             _requireEncoding(
-                encoding == Encoding.Static ||
+                encoding == Encoding.None ||
+                    encoding == Encoding.Static ||
                     encoding == Encoding.Dynamic ||
                     encoding == Encoding.Tuple ||
                     encoding == Encoding.Array ||
@@ -314,6 +327,7 @@ library Integrity {
             );
             // The adapter address, then any extra bytes
             _requireCompValue(compValue.length >= 20, index);
+            if (encoding == Encoding.None) _requireNoChildren(node, index);
         } else if (op == Operator.WithinRatio) {
             _checkWithinRatio(compValue, nodes, plucks, index);
         } else if (op == Operator.WithinAllowance) {
@@ -329,9 +343,10 @@ library Integrity {
         /*
          * Leaves: a word, bytes or the ether value has no children (a Slice
          * has one, the check of the bytes it extracts), and neither has a
-         * Pass that reads no calldata.
+         * Pass on None or AbiEncoded.
          */
-        bool isLeaf = encoding == Encoding.None
+        bool isLeaf = encoding == Encoding.None ||
+            encoding == Encoding.AbiEncoded
             ? op == Operator.Pass
             : (encoding == Encoding.Static ||
                 encoding == Encoding.Dynamic ||
@@ -384,8 +399,8 @@ library Integrity {
         Node memory node = nodes[index];
         _requireEncoding(node.encoding == Encoding.None, index);
 
-        // One slot per zipped array, at least two
-        _requireCompValue(compValue.length >= 2, index);
+        // One slot per zipped array, at least one
+        _requireCompValue(compValue.length >= 1, index);
 
         // One child: a Tuple with one field per zipped array
         if (node.childCount != 1) {
@@ -403,19 +418,14 @@ library Integrity {
             revert IEvaluatorError.UnsupportedOperator(node.childStart);
         }
 
-        // Distinct slots, each written by an Array Pluck
-        uint256 seen;
+        // Each slot written by an Array Pluck. A slot may repeat: its array
+        // is then zipped with itself
         for (uint256 i; i < compValue.length; ++i) {
-            uint8 slot = uint8(compValue[i]);
-            uint256 mask = 1 << slot;
-            uint256 pluck = plucks[slot];
+            uint256 pluck = plucks[uint8(compValue[i])];
             _requireCompValue(
-                (seen & mask) == 0 &&
-                    pluck != 0 &&
-                    nodes[pluck - 1].encoding == Encoding.Array,
+                pluck != 0 && nodes[pluck - 1].encoding == Encoding.Array,
                 index
             );
-            seen |= mask;
         }
     }
 
@@ -474,9 +484,15 @@ library Integrity {
              */
             _requireCompValue(length == node.inlinedSize, index);
         } else {
-            // Dynamic, or a dynamic Tuple or Array: ABI encoded, at least
-            // an offset and one word
-            _requireCompValue(length >= 64, index);
+            // Dynamic, or a dynamic Tuple or Array: abi.encode(value), whole
+            // words starting with the offset word (32), which the packer
+            // drops
+            _requireCompValue(
+                length >= 64 &&
+                    length % 32 == 0 &&
+                    uint256(bytes32(compValue)) == 32,
+                index
+            );
         }
     }
 
@@ -588,22 +604,16 @@ library Integrity {
 
         bool navigates = _navigates(op);
         bool isLogical = op == Operator.And || op == Operator.Or;
-        bool isZip = op == Operator.ZipSome || op == Operator.ZipEvery;
         bool isContainer = encoding == Encoding.Tuple ||
             encoding == Encoding.Array ||
             encoding == Encoding.AbiEncoded;
-        // A leaf that reads no calldata: the ether value, allowances, ...
+        // A node that reads no calldata where it sits: the ether value,
+        // allowances, a Zip, ...
         bool readsNothing = (encoding == Encoding.None ||
-            encoding == Encoding.EtherValue) &&
-            !isLogical &&
-            !isZip;
+            encoding == Encoding.EtherValue) && !isLogical;
 
         Children memory children = _children(nodes, index);
-        node.pluck = op == Operator.Pluck ? index + 1 : children.pluck;
-        node.exact =
-            encoding == Encoding.AbiEncoded ||
-            op == Operator.Slice ||
-            (!navigates && children.allExact);
+        node.exact = op == Operator.Pass && children.allExact;
         node.rootOk =
             encoding == Encoding.AbiEncoded ||
             (isLogical && children.allRoots);
@@ -626,43 +636,41 @@ library Integrity {
         } else if (isContainer) {
             /*
              * A container describes one parameter per child, so a child
-             * that reads no calldata, or a Zip, has no place in it.
+             * that reads no calldata has no place in it. A Tuple or Array
+             * has at least one; AbiEncoded may have no parameters.
              */
-            if (node.childCount == 0 || !children.allTypes) {
+            if (
+                (node.childCount == 0 && encoding != Encoding.AbiEncoded) ||
+                !children.allTypes
+            ) {
                 revert IEvaluatorError.UnsuitableChildCount(index);
             }
 
-            /*
-             * Operators that read the container as a whole value (EqualTo,
-             * Custom, Pluck, Pass) size it from the children. Those must be
-             * a plain type description: a child that navigates (a Matches
-             * may list only some fields) would not give the value's size.
-             */
-            bool whole = encoding == Encoding.AbiEncoded
-                ? op != Operator.Matches
-                : !navigates;
-            if (whole && !children.allExact) {
+            // An Array read as a whole is described by its element type
+            // alone: its first child. Any other child would never be read
+            if (
+                encoding == Encoding.Array &&
+                !navigates &&
+                node.childCount != 1
+            ) {
+                revert IEvaluatorError.UnsuitableChildCount(index);
+            }
+
+            // Non-navigating containers never evaluate their children; they
+            // only describe the ABI type, so the subtree must be Pass nodes.
+            if (!navigates && !children.allExact) {
                 revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
 
             node.kind = TYPE_OF + index;
-            if (encoding == Encoding.Tuple) {
-                node.staticType = children.allStatic;
-            } else if (encoding == Encoding.Array) {
-                node.element = _elementType(nodes, index);
+            if (encoding == Encoding.Array) {
+                // Every child of an Array has a type, and there is one
+                node.element = _sharedType(nodes, index);
             }
-        } else if (isZip) {
-            /*
-             * A Zip is evaluated at the arrays its slots hold, not where it
-             * sits. A Pluck below it would write a slot once per element.
-             */
-            uint256 below = nodes[node.childStart].pluck;
-            if (below != 0) {
-                revert IEvaluatorError.UnsupportedOperator(below - 1);
-            }
-            node.kind = ZIP;
         } else {
-            node.kind = _logicalKind(nodes, index);
+            // And / Or: no type if no child has one
+            uint256 shared = _sharedType(nodes, index);
+            node.kind = shared == 0 ? NON_STRUCTURAL : shared;
         }
     }
 
@@ -670,14 +678,10 @@ library Integrity {
     struct Children {
         /// All are plain type descriptions
         bool allExact;
-        /// All have a type of fixed size
-        bool allStatic;
-        /// All describe a value: none reads no calldata, none is a Zip
+        /// All describe a value: none reads no calldata
         bool allTypes;
         /// All may sit below a root And / Or
         bool allRoots;
-        /// Index + 1 of the first Pluck at or below them
-        uint256 pluck;
     }
 
     function _children(
@@ -686,99 +690,40 @@ library Integrity {
     ) private pure returns (Children memory children) {
         Node memory node = nodes[index];
         children.allExact = true;
-        children.allStatic = true;
         children.allTypes = true;
         children.allRoots = true;
         for (uint256 i; i < node.childCount; ++i) {
             Node memory child = nodes[node.childStart + i];
             if (!child.exact) children.allExact = false;
-            if (!_isStatic(nodes, child.kind)) children.allStatic = false;
             if (child.kind < STATIC) children.allTypes = false;
             // Below a root And / Or: another root, or a node that is
             // evaluated nowhere in particular
             if (!child.rootOk && child.kind >= STATIC) {
                 children.allRoots = false;
             }
-            if (children.pluck == 0) children.pluck = child.pluck;
         }
     }
 
-    /**
-     * @dev The element type of an Array node. Its first child is the
-     *      template the evaluator decodes every element with, so it must be
-     *      the most specific: every element it types, the others type too.
-     */
-    function _elementType(
+    /// @dev The type the typed children of a node share: that of the first,
+    ///      which every other must have too. 0 if no child has a type.
+    function _sharedType(
         Node[] memory nodes,
         uint256 index
-    ) private pure returns (uint256 element) {
-        Node memory node = nodes[index];
-        element = nodes[node.childStart].kind;
-
-        for (uint256 i = 1; i < node.childCount; ++i) {
-            uint256 other = nodes[node.childStart + i].kind;
-            if (!_isSubtype(nodes, element, other)) {
-                revert IEvaluatorError.UnsuitableChildTypeTree(index);
-            }
-        }
-    }
-
-    /**
-     * @dev What an And / Or is. Its children are all evaluated at the value
-     *      it sits at.
-     *
-     *      - If none reads calldata, neither does the node.
-     *      - Otherwise its type is that of the most specific child: one
-     *        whose every value the other children type too (checks of
-     *        different prefixes of one tuple).
-     *      - A Zip reads nothing where it sits. The node's size comes from
-     *        its first structural child, which must come before any Zip,
-     *        and a Zip cannot sit at a static value at all: it would be
-     *        counted in the value's inlined size.
-     */
-    function _logicalKind(
-        Node[] memory nodes,
-        uint256 index
-    ) private pure returns (uint256) {
+    ) private pure returns (uint256 result) {
         Node memory node = nodes[index];
         uint256 start = node.childStart;
         uint256 end = start + node.childCount;
 
-        bool hasZip;
-        bool hasType;
         for (uint256 i = start; i < end; ++i) {
             uint256 kind = nodes[i].kind;
-            if (kind == ZIP) {
-                if (!hasType) {
-                    revert IEvaluatorError.UnsuitableChildTypeTree(index);
-                }
-                hasZip = true;
-            } else if (kind >= STATIC) {
-                hasType = true;
+            if (kind < STATIC) continue;
+
+            if (result == 0) {
+                result = kind;
+            } else if (!_isSubtype(nodes, result, kind)) {
+                revert IEvaluatorError.UnsuitableChildTypeTree(index);
             }
         }
-        if (!hasType) return NON_STRUCTURAL;
-
-        uint256 result;
-        for (uint256 i = start; i < end && result == 0; ++i) {
-            uint256 candidate = nodes[i].kind;
-            if (candidate < STATIC) continue;
-
-            bool fits = true;
-            for (uint256 j = start; j < end && fits; ++j) {
-                uint256 other = nodes[j].kind;
-                fits = other < STATIC || _isSubtype(nodes, candidate, other);
-            }
-            if (fits) result = candidate;
-        }
-        if (result == 0) {
-            revert IEvaluatorError.UnsuitableChildTypeTree(index);
-        }
-
-        if (hasZip && _isStatic(nodes, result)) {
-            revert IEvaluatorError.UnsuitableChildTypeTree(index);
-        }
-        return result;
     }
 
     /**
@@ -794,12 +739,7 @@ library Integrity {
     ) private pure {
         for (uint256 i; i < nodes.length; ++i) {
             Node memory node = nodes[i];
-            if (
-                node.operator != Operator.ZipSome &&
-                node.operator != Operator.ZipEvery
-            ) {
-                continue;
-            }
+            if (!_isZip(node.operator)) continue;
 
             bytes memory compValue = conditions[i].compValue;
             uint256 fieldStart = nodes[node.childStart].childStart;
@@ -838,75 +778,14 @@ library Integrity {
             return _isSubtype(nodes, x.element, y.element);
         }
 
-        bool openX = x.operator == Operator.Matches;
-        bool openY = y.operator == Operator.Matches;
-        if (!openY) {
-            // A full description: the same fields, none left out
-            return
-                !openX &&
-                x.childCount == y.childCount &&
-                _isPrefix(nodes, x, y, false);
-        }
-
-        /*
-         * An open tuple of static fields is read in place, with exactly the
-         * fields listed, so `a` has that many fields too. If `a` is open as
-         * well, its fields must be the very same types: a field left open
-         * on either side could differ in size.
-         */
-        if (y.staticType) {
-            return
-                x.childCount == y.childCount && _isPrefix(nodes, x, y, openX);
-        }
-
-        // Otherwise it types its first fields only, and `a` may have more
-        return x.childCount >= y.childCount && _isPrefix(nodes, x, y, false);
-    }
-
-    /// @dev Whether the first fields of tuple `x` are subtypes of (or, if
-    ///      `same`, the same types as) the fields of tuple `y`.
-    function _isPrefix(
-        Node[] memory nodes,
-        Node memory x,
-        Node memory y,
-        bool same
-    ) private pure returns (bool) {
+        // Tuples: the same fields, one by one
+        if (x.childCount != y.childCount) return false;
         for (uint256 i; i < y.childCount; ++i) {
-            uint256 a = nodes[x.childStart + i].kind;
-            uint256 b = nodes[y.childStart + i].kind;
-            if (!(same ? _isSame(nodes, a, b) : _isSubtype(nodes, a, b))) {
-                return false;
-            }
+            uint256 fieldA = nodes[x.childStart + i].kind;
+            uint256 fieldB = nodes[y.childStart + i].kind;
+            if (!_isSubtype(nodes, fieldA, fieldB)) return false;
         }
         return true;
-    }
-
-    /// @dev Whether `a` is the static type `b`.
-    function _isSame(
-        Node[] memory nodes,
-        uint256 a,
-        uint256 b
-    ) private pure returns (bool) {
-        if (a == STATIC || b == STATIC) return a == b;
-        if (a < TYPE_OF) return false;
-
-        Node memory x = nodes[a - TYPE_OF];
-        Node memory y = nodes[b - TYPE_OF];
-        return
-            x.encoding == Encoding.Tuple &&
-            (x.operator == Operator.Matches) ==
-            (y.operator == Operator.Matches) &&
-            x.childCount == y.childCount &&
-            _isPrefix(nodes, x, y, true);
-    }
-
-    function _isStatic(
-        Node[] memory nodes,
-        uint256 kind
-    ) private pure returns (bool) {
-        return
-            kind == STATIC ||
-            (kind >= TYPE_OF && nodes[kind - TYPE_OF].staticType);
     }
 
     function _isBytes(
@@ -939,6 +818,10 @@ library Integrity {
      *        evaluated, so its child's assignments count.
      *      - Every passes trivially on an empty collection — its child may
      *        never run, so nothing it assigns can be counted on.
+     *      - Zip runs its fields in order at every step, so a field sees the
+     *        slots filled by the fields before it. What outlives the Zip
+     *        follows Some and Every: the fields of the passing step for
+     *        ZipSome, nothing for ZipEvery.
      *      Children of Pass, Pluck, comparisons, and Custom only describe
      *      types and are never evaluated, so they are skipped.
      */
@@ -1030,6 +913,10 @@ library Integrity {
             op == Operator.Slice ||
             op == Operator.ZipSome ||
             op == Operator.ZipEvery;
+    }
+
+    function _isZip(Operator op) private pure returns (bool) {
+        return op == Operator.ZipSome || op == Operator.ZipEvery;
     }
 
     /// @dev The big-endian uint32 at `offset`.

@@ -204,7 +204,7 @@ describe("AbiLocation", () => {
             enc(["(uint256,bytes)"], [[42, enc(["uint256"], [777])]]),
             [
               pass(Encoding.Static),
-              pass(Encoding.AbiEncoded, [pass(Encoding.Static)]),
+              pass(Encoding.AbiEncoded),
             ],
           ),
         ]),
@@ -399,7 +399,7 @@ describe("AbiLocation", () => {
               ["bytes[]"],
               [[enc(["uint256"], [100]), enc(["uint256"], [200])]],
             ),
-            [pass(Encoding.AbiEncoded, [pass(Encoding.Static)])],
+            [pass(Encoding.AbiEncoded)],
           ),
         ]),
         valid: [[enc(["uint256"], [100]), enc(["uint256"], [200])]],

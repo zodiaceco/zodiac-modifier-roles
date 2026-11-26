@@ -198,7 +198,8 @@ library Packer {
 
     struct LayoutNode {
         uint256 childCount;
-        /// The node or a descendant is Dynamic, Array or AbiEncoded
+        /// The node or a descendant is Dynamic, Array or AbiEncoded, or the
+        /// node is a Zip
         bool notInlined;
         /// Encoded size in bytes, 0 if not inlined
         uint256 inlinedSize;
@@ -209,7 +210,8 @@ library Packer {
      *
      *      A node is inlined when its value is encoded in place and always
      *      has the same size. That holds unless the node, or anything below
-     *      it, is Dynamic, Array or AbiEncoded.
+     *      it, is Dynamic, Array or AbiEncoded. A Zip is not inlined and is
+     *      ignored by its parent.
      *
      *      Sizes:
      *      - Static:      32 bytes
@@ -229,8 +231,13 @@ library Packer {
             uint256 i = next - 1;
             LayoutNode memory node = nodes[i];
             uint8 encoding = conditions[i].paramType;
+            uint8 operator = conditions[i].operator;
+
+            bool isZip = operator == uint8(Operator.ZipSome) ||
+                operator == uint8(Operator.ZipEvery);
 
             if (
+                isZip ||
                 encoding == uint8(Encoding.Dynamic) ||
                 encoding == uint8(Encoding.Array) ||
                 encoding == uint8(Encoding.AbiEncoded)
@@ -249,6 +256,9 @@ library Packer {
             uint256 parentIndex = conditions[i].parent;
             LayoutNode memory parent = nodes[parentIndex];
             ++parent.childCount;
+            // A Zip is ignored by its parent
+            if (isZip) continue;
+
             if (node.notInlined) {
                 parent.notInlined = true;
             } else if (

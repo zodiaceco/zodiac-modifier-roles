@@ -252,8 +252,8 @@ library AbiLocation {
 
         // The offset must point forward past its own slot to at least one
         // word (a length, count, or first slot). It may point short of the end
-        // of the head: a `Matches` need not list every field, so the full head
-        // size is not known here.
+        // of the head: an `AbiEncoded` `Matches` need not list every
+        // parameter, so the full head size is not known here.
         uint256 offset = _wordAt(body, head);
         if (offset < next || offset > room || room - offset < 32) {
             return (Span.wrap(0), 0, false);

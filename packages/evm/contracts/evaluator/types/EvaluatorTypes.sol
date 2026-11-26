@@ -47,8 +47,8 @@ enum Operator {
     /* 07: */ ArrayEvery,
     /* 08: */ ArrayTailMatches,
     /* 09: */ _Placeholder09,
-    /* 10: */ ZipSome, // paramType: None, compValue: at least 2 bytes, one per plucked array
-    /* 11: */ ZipEvery, // paramType: None, compValue: at least 2 bytes, one per plucked array
+    /* 10: */ ZipSome, // paramType: None, compValue: at least 1 byte, one per plucked array
+    /* 11: */ ZipEvery, // paramType: None, compValue: at least 1 byte, one per plucked array
     /* 12: */ _Placeholder12,
     // ------------------------------------------------------------
     // 13-14: EXTRACTION EXPRESSIONS
@@ -73,7 +73,7 @@ enum Operator {
     /* 19: */ SignedIntGreaterThan, // paramType: Static / EtherValue
     /* 20: */ SignedIntLessThan, // paramType: Static / EtherValue
     /* 21: */ Bitmask, // paramType: Static / Dynamic
-    /* 22: */ Custom, // paramType: Static / Dynamic / Tuple / Array / EtherValue
+    /* 22: */ Custom, // paramType: None / Static / Dynamic / Tuple / Array / EtherValue
     /* 23: */ WithinRatio, // paramType: None
     /* 24: */ _Placeholder24,
     /* 25: */ _Placeholder25,

@@ -2,10 +2,8 @@ import { BigNumberish, isHexString, ParamType } from "ethers"
 import { Condition, Operator, Encoding } from "../../../types"
 
 import { coercePermission } from "../../../permission/coercePermission"
-import {
-  checkRootConditionIntegrity,
-  scopedType,
-} from "../../../condition/conditionIntegrity"
+import { checkStoredConditions } from "../../../condition/checkStored"
+import { flattenCondition } from "../../../condition/flattenCondition"
 import { describeStructure } from "./helpers/describeStructure"
 import { isFixedArray, parameterType } from "./helpers/parameterType"
 
@@ -86,14 +84,16 @@ export const matches =
     assertValidConditionsKeys(scoping, abiType)
     assertCompatibleParamTypes(conditions, abiType)
 
-    // A fixed-size array is a tuple: every element needs a child, also the
-    // ones the scoping leaves out.
-    if (isFixedArray(abiType)) {
-      conditions = Array.from(
-        { length: abiType.arrayLength! },
-        (_, i) => conditions[i]
-      )
-    }
+    // A tuple and a fixed-size array need a child for every field, also the
+    // ones the scoping leaves out: without them the node's layout (inlined or
+    // not, and its size) would not be the parameter's.
+    const fieldCount =
+      abiType.baseType === "tuple"
+        ? abiType.components!.length
+        : isFixedArray(abiType)
+          ? abiType.arrayLength!
+          : conditions.length
+    conditions = Array.from({ length: fieldCount }, (_, i) => conditions[i])
 
     return {
       paramType: parameterType(abiType),
@@ -181,25 +181,19 @@ const calldataMatchesScopings =
           compValue: encodeKey(callWithinAllowance),
         }
       : undefined
-    // Without parameters there is no Matches (it needs children). At the top
-    // level, the allowance alone; with neither allowance nor selector there
-    // is nothing to check (use a permission without a condition). On a
-    // `bytes` parameter, a Pass describing the bytes keeps the parameter's
-    // type next to the allowance or selector check.
+    // Without parameters, at the top level: the allowance alone; without an
+    // allowance there is nothing to check (use a permission without a
+    // condition). On a `bytes` parameter the Matches stays, without children:
+    // it keeps the parameter's type next to the allowance or selector check.
     if (paramTypes.length === 0 && !abiType && !allowance) {
       throw new Error(
         "`calldataMatches` without parameters or allowance checks nothing: use a function permission without a condition"
       )
     }
     const parts: Condition[] =
-      paramTypes.length > 0
+      paramTypes.length > 0 || abiType
         ? [matchesCondition, ...(allowance ? [allowance] : [])]
-        : abiType
-          ? [
-              { paramType: Encoding.Dynamic, operator: Operator.Pass },
-              ...(allowance ? [allowance] : []),
-            ]
-          : [allowance!]
+        : [allowance!]
 
     if (selector) {
       if (selector.length !== 10) {
@@ -236,7 +230,14 @@ const calldataMatchesFunctionPermission =
     const { selector, condition } = coercePermission(functionPermission)
     // any condition valid for a function's calldata: a Matches on the
     // parameters, or one with a call allowance next to it, or alone
-    if (condition) checkRootConditionIntegrity(condition)
+    if (
+      condition &&
+      checkStoredConditions(flattenCondition(condition)) === undefined
+    ) {
+      throw new Error(
+        "`calldataMatches`: the function permission's condition is rejected by checkStored"
+      )
+    }
 
     const selectorCondition = bitmask({
       mask: "0xffffffff",
@@ -335,6 +336,9 @@ export const abiEncodedMatches =
     return {
       paramType: Encoding.AbiEncoded,
       operator: Operator.Matches,
+      // no leading bytes: without a compValue the packer would default to
+      // skipping 4 (a selector)
+      compValue: "0x0000" as const,
       children: conditions.map(
         (condition, index) => condition || describeStructure(paramTypes[index])
       ),
@@ -472,6 +476,26 @@ const assertCompatibleParamTypes = (
       `Condition for field ${fieldReference} has wrong paramType \`${Encoding[scoped]}\` (expected: \`${Encoding[expectedType]}\`)`
     )
   })
+}
+
+/**
+ * The encoding a condition reads: its own, or for a logical node that of its
+ * first child reading a parameter. EtherValue checks and Zips read none.
+ */
+const scopedType = (condition: Condition): Encoding => {
+  if (condition.paramType === Encoding.EtherValue) return Encoding.None
+  if (
+    condition.operator === Operator.ZipSome ||
+    condition.operator === Operator.ZipEvery
+  ) {
+    return Encoding.None
+  }
+  if (condition.paramType !== Encoding.None) return condition.paramType
+  for (const child of condition.children ?? []) {
+    const t = scopedType(child)
+    if (t !== Encoding.None) return t
+  }
+  return Encoding.None
 }
 
 const arrayDiff = (a: string[], b: string[]) => {

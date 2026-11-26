@@ -290,9 +290,8 @@ describe("normalizeCondition", () => {
 
       expect(normalizeCondition(input)).toEqual(input)
     })
-    it("does not pad a prefix branch to push the Or down", () => {
-      // checks of a prefix of one dynamic struct need no padding (the SDK
-      // check accepts them as siblings); without it there is nothing to merge
+    it("pushes the Or down to the field two checks of one struct differ in", () => {
+      // both branches list every field of the struct
       const DYN: Condition = {
         paramType: Encoding.Dynamic,
         operator: Operator.EqualTo,
@@ -300,15 +299,14 @@ describe("normalizeCondition", () => {
       }
       const input = OR(
         MATCHES(Encoding.Tuple, DYN, COMP(2)),
-        MATCHES(Encoding.Tuple, DYN)
+        MATCHES(Encoding.Tuple, DYN, PASS())
       )
 
       const result = normalizeCondition(input)
 
-      expect(result.operator).toBe(Operator.Or)
-      expect(result.children!.map((c) => c.children!.length).sort()).toEqual([
-        1, 2,
-      ])
+      expect(result.operator).toBe(Operator.Matches)
+      expect(result.children).toHaveLength(2)
+      expect(result.children![1].operator).toBe(Operator.Or)
     })
   })
 
