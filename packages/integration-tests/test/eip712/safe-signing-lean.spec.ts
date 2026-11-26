@@ -40,8 +40,7 @@ import {
 } from "viem"
 import { network } from "hardhat"
 
-import { address as fallbackHandler } from "./setup/deploy-mastercopies/fallbackHandler.js"
-import { abi as safeAbi } from "./setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi, safeDeployments } from "./setup/safe-deployments/index.js"
 import { deploySafe } from "./setup/safe.js"
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
 
@@ -50,6 +49,8 @@ const LEAN_BIN = path.resolve(
   here,
   "../../../evm/formal/.lake/build/bin/roles-model"
 )
+const fallbackHandler =
+  safeDeployments["1.4.1"].compatibilityFallbackHandler.address
 const CASES = Number(process.env.SAFE_SIGNING_CASES ?? 24)
 const MAGIC = "0x1626ba7e"
 const SAFE_MSG_TYPEHASH =

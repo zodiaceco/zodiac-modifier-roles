@@ -10,16 +10,20 @@ import "../interfaces/SafeStorage.sol";
 
 /**
  * @title SignTypedMessageLib - Marks (typed) messages as signed in SafeStorage
- * @author gnosisguild
+ *
+ * @dev Execution context:
+ *        Signing calls must be executed via `delegatecall`, reverting with
+ *        `OnlyDelegateCall` otherwise. Callers are responsible for executing
+ *        in a Safe context.
  */
 contract SignTypedMessageLib is SafeStorage {
     /// @dev Deployment address of the contract.
     address public immutable deployedAt;
 
-    /// @dev Event emitted when a Safe signs a message and stores it.
+    /// @dev Emitted with the SafeMessage hash stored as the approval key.
     event SignMsg(bytes32 indexed msgHash);
 
-    /// @dev The EIP-712 type hash used to prefix the message.
+    /// @dev The EIP-712 type hash of Safe's message wrapper.
     bytes32 private constant safeMessageTypeHash =
         keccak256("SafeMessage(bytes message)");
 
@@ -34,11 +38,21 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * @notice Marks a message as signed
-     * @dev The message hash is marked as approved in SafeStorage
-     * @dev Can be verified using EIP-1271 validation by passing the
-     *      message and empty bytes as the signature
-     * @param message The message to be signed
+     * @notice Marks raw bytes as signed, matching Safe's SignMessageLib
+     *
+     * @dev Wraps `message` directly in `SafeMessage`, without first applying a
+     *      personal-sign prefix or computing a typed-data digest.
+     *
+     * @dev Storage write:
+     *        `signedMessages[keccak256(safeMessagePreimage(message))] = 1`
+     *
+     * @dev Verification:
+     *        - `isValidSignature(bytes32 digest, "") == 0x1626ba7e`
+     *          when `message = abi.encode(digest)`.
+     *        - `isValidSignature(bytes message, "") == 0x20c13b0b`
+     *          for arbitrary-length `message` (legacy; Safe 1.3.0 and 1.4.1 only).
+     *
+     * @param message Raw bytes to approve, typically a 32-byte digest
      */
     function signMessage(bytes calldata message) external {
         if (address(this) == deployedAt) revert OnlyDelegateCall();
@@ -49,11 +63,19 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * @notice Marks a personal_sign message as signed
-     * @dev Wraps the message with the EIP-191 prefix before hashing
-     * @dev Can be verified using EIP-1271 validation by passing the EIP-191
-     *      hash and empty bytes as the signature
-     * @param message The raw message text to be signed
+     * @notice Marks an EIP-191 (`personal_sign`) message as signed
+     *
+     * @dev Computes `digest` using the EIP-191 personal-sign prefix and decimal
+     *      byte length, then wraps `abi.encode(digest)` in `SafeMessage`.
+     *
+     * @dev Storage write:
+     *        `signedMessages[keccak256(safeMessagePreimage(abi.encode(digest)))] = 1`
+     *
+     * @dev Verification:
+     *        `isValidSignature(bytes32 digest, "") == 0x1626ba7e`
+     *        where `digest` is the EIP-191 personal-sign hash.
+     *
+     * @param message Raw message bytes before EIP-191 prefixing
      */
     function personalSign(bytes calldata message) external {
         if (address(this) == deployedAt) revert OnlyDelegateCall();
@@ -71,14 +93,22 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * @notice Mark a typed structured message (EIP-712) as signed
-     * @dev The typed message hash is marked as approved in SafeStorage
-     * @dev Can be verified using EIP-1271 validation by passing the typed
-     *      message hash as the message and empty bytes as the signature. Empty
-     *      bytes as signature represent an on-chain signature
-     * @param domain  The encoded EIP712 domain
-     * @param message The encoded EIP712 message
-     * @param types   The flattened EIP712 type nodes
+     * @notice Marks an EIP-712 typed structured message as signed
+     *
+     * @dev Computes `digest` with `EIP712Encoder`, then wraps `abi.encode(digest)`
+     *      in `SafeMessage`. Also reachable under unrecognized selectors via
+     *      `fallback`.
+     *
+     * @dev Storage write:
+     *        `signedMessages[keccak256(safeMessagePreimage(abi.encode(digest)))] = 1`
+     *
+     * @dev Verification:
+     *        `isValidSignature(bytes32 digest, "") == 0x1626ba7e`
+     *        where `digest` is the EIP-712 typed-data hash.
+     *
+     * @param domain ABI-encoded fields of the EIP-712 domain struct
+     * @param message ABI-encoded fields of the EIP-712 primary message struct
+     * @param types Flattened EIP-712 type layout for `domain` and `message`
      */
     function signTypedMessage(
         bytes calldata domain,
@@ -95,11 +125,10 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * @notice Builds the EIP-712 preimage for a SafeMessage
-     * @dev Follows Safe's internal type schema for signing messages
-     *
-     * @param message  The message to build the preimage for
-     * @return bytes   The EIP-712 preimage (hash it to get the SafeMessage hash)
+     * @notice Builds the EIP-712 `SafeMessage` approval preimage
+     * @dev Reads the domain separator from `ISafe(address(this)).domainSeparator()`.
+     * @param message Bytes to wrap in `SafeMessage(bytes message)`
+     * @return The preimage whose `keccak256` hash is the SafeMessage approval key
      */
     function safeMessagePreimage(
         bytes memory message
@@ -113,13 +142,13 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * @notice Builds the EIP-712 preimage for a typed SafeMessage
-     * @dev Follows Safe's internal type schema for signing messages
-     *
-     * @param domain   The encoded EIP712 domain
-     * @param message  The encoded EIP712 message
-     * @param types    The flattened EIP712 type nodes
-     * @return bytes   The EIP-712 preimage (hash it to get the SafeMessage hash)
+     * @notice Builds a SafeMessage approval preimage for EIP-712 typed data
+     * @dev Computes the EIP-712 `digest` with `EIP712Encoder` and wraps
+     *      `abi.encode(digest)` using `safeMessagePreimage`.
+     * @param domain ABI-encoded fields of the EIP-712 domain struct
+     * @param message ABI-encoded fields of the EIP-712 primary message struct
+     * @param types Flattened EIP-712 type layout for `domain` and `message`
+     * @return The preimage whose `keccak256` hash is the SafeMessage approval key
      */
     function safeTypedMessagePreimage(
         bytes calldata domain,
@@ -135,29 +164,34 @@ contract SignTypedMessageLib is SafeStorage {
     }
 
     /**
-     * We make the signTypedMessage function available under any selector. This
-     * allows scoping different layouts under different signTypedMessage
-     * aliases. Useful for expressing roles permissions
+     * @notice Dispatches unrecognized selectors to `signTypedMessage`
+     * @dev Decodes the same arguments as `signTypedMessage`, allowing Roles
+     *      permissions to use selector aliases for different type layouts.
+     *      Permissions must also constrain `types` to enforce the intended layout.
+     *      Reverts with `InvalidCalldata` if arguments lie outside calldata.
      */
     fallback() external {
+        // selector and three head words
+        if (msg.data.length < 0x64) revert InvalidCalldata();
+
         bytes calldata domain;
         bytes calldata message;
         TypeNodeFlat[] calldata types;
 
-        (uint256 offset, uint256 length) = _argument(0x04, 1);
+        (uint256 offset, uint256 length) = _locateArgument(0x04, 1);
         assembly {
             domain.offset := offset
             domain.length := length
         }
 
-        (offset, length) = _argument(0x24, 1);
+        (offset, length) = _locateArgument(0x24, 1);
         assembly {
             message.offset := offset
             message.length := length
         }
 
         // each TypeNodeFlat takes three words
-        (offset, length) = _argument(0x44, 0x60);
+        (offset, length) = _locateArgument(0x44, 0x60);
         assembly {
             types.offset := offset
             types.length := length
@@ -170,13 +204,10 @@ contract SignTypedMessageLib is SafeStorage {
      * @dev Locates a dynamic argument from its head word, and requires its
      *      length word and content to lie within calldata.
      */
-    function _argument(
+    function _locateArgument(
         uint256 head,
         uint256 itemSize
     ) private pure returns (uint256 offset, uint256 length) {
-        // selector and three head words
-        if (msg.data.length < 0x64) revert InvalidCalldata();
-
         uint256 pointer;
         assembly {
             pointer := calldataload(head)

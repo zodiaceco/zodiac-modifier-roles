@@ -18,7 +18,6 @@
     "@nomicfoundation/hardhat-node-test-runner": "^3.0.0",
     "@nomicfoundation/hardhat-viem": "^3.0.0",
     "@nomicfoundation/hardhat-viem-assertions": "^3.0.0",
-    "@safe-global/safe-contracts": "^1.4.1",
     "@types/node": "^24.19.2",
     "abitype": "^1.0.8",
     "hardhat": "^3.22.0",

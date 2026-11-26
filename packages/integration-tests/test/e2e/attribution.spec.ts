@@ -56,7 +56,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 
 import { extractRevertData } from "../../../evm/test/utils.js"
 import type { RolesContract } from "../../../evm/test/utils.js"
-import { abi as abiSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi as abiSafe } from "../eip712/setup/safe-deployments/index.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
 import {

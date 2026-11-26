@@ -5,15 +5,17 @@ import { baseType } from "./parseType"
 export function findPrimaryType({ types }: { types: TypedData }): string {
   const rootTypes = findRootTypes({ types })
 
-  if (rootTypes.length == 0 || rootTypes.length > 2) {
-    throw new Error(`Too many or too few roo types ${rootTypes.join(", ")}`)
+  const candidates = rootTypes.filter((type) => type !== "EIP712Domain")
+
+  if (candidates.length !== 1) {
+    throw new Error(
+      candidates.length === 0
+        ? "Cannot find the primary type: every message struct is referenced by another"
+        : `Cannot infer the primary type, candidates: ${candidates.join(", ")}. Pass primaryType`
+    )
   }
 
-  if (rootTypes.length > 1 && rootTypes[0] !== "EIP712Domain") {
-    throw new Error(`Roots should start with EIP712Domain`)
-  }
-
-  return rootTypes[rootTypes.length - 1]
+  return candidates[0]
 }
 
 export function findRootTypes({ types }: { types: TypedData }): string[] {

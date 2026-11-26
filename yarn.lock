@@ -3166,15 +3166,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@safe-global/safe-contracts@npm:^1.4.1":
-  version: 1.4.1
-  resolution: "@safe-global/safe-contracts@npm:1.4.1"
-  peerDependencies:
-    ethers: 5.4.0
-  checksum: 480676f29270ca2c81580968ed4faee3a92d057bcb4e6fa7af5d0420e020af0f85dafc44a56eed11121dd6beae4866f1b15ff0a1a7a2483d2b3a876b9323c79e
-  languageName: node
-  linkType: hard
-
 "@safe-global/safe-gateway-typescript-sdk@npm:^3.5.3":
   version: 3.22.9
   resolution: "@safe-global/safe-gateway-typescript-sdk@npm:3.22.9"
@@ -15110,7 +15101,6 @@ __metadata:
     "@nomicfoundation/hardhat-node-test-runner": ^3.0.0
     "@nomicfoundation/hardhat-viem": ^3.0.0
     "@nomicfoundation/hardhat-viem-assertions": ^3.0.0
-    "@safe-global/safe-contracts": ^1.4.1
     "@types/node": ^24.19.2
     abitype: ^1.0.8
     hardhat: ^3.22.0

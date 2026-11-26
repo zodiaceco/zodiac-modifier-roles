@@ -1,35 +1,10 @@
-import {
-  type Hex,
-  type PublicClient,
-  type WalletClient,
-  concat,
-  getCreate2Address,
-  parseEther,
-  zeroHash,
-} from "viem"
+import { type PublicClient, type WalletClient, parseEther } from "viem"
 
-export async function deployViaFactory(
-  { bytecode, salt = zeroHash }: { bytecode: Hex; salt?: Hex },
-  signer: WalletClient,
-  publicClient: PublicClient
-) {
-  const hash = await signer.sendTransaction({
-    account: signer.account!,
-    chain: signer.chain,
-    to: factory.address,
-    data: concat([salt, bytecode]),
-    value: 0n,
-  })
-  await publicClient.waitForTransactionReceipt({ hash })
-
-  return getCreate2Address({
-    from: factory.address,
-    salt,
-    bytecode,
-  })
-}
-
-const factory = {
+/**
+ * The deterministic deployment proxy (github.com/Arachnid/deterministic-deployment-proxy),
+ * which deployed Safe 1.3.0 at its canonical addresses.
+ */
+export const factory = {
   address: "0x4e59b44847b379578588920ca78fbf26c0b4956c" as const,
   signerAddress: "0x3fab184622dc19b6109349b94811493bf2a45362" as const,
   transaction:
@@ -41,7 +16,9 @@ export async function deployFactory(
   publicClient: PublicClient
 ) {
   const { address, signerAddress, transaction } = factory
-  // fund the presined transaction signer
+  if (await publicClient.getCode({ address })) return address
+
+  // fund the presigned transaction signer
   const fundHash = await signer.sendTransaction({
     account: signer.account!,
     chain: signer.chain,

@@ -99,4 +99,22 @@ describe("toAbiTypes", () => {
     }
     expect(() => toAbiTypes({ types })).toThrow(/Recursive/)
   })
+
+  it("does not duplicate EIP712Domain when passed as primaryType", () => {
+    const types = {
+      EIP712Domain: [{ name: "name", type: "string" }],
+    }
+    expect(toAbiTypes({ types, primaryType: "EIP712Domain" })).toEqual(
+      toAbiTypes({ types })
+    )
+  })
+
+  it("rejects an undeclared primaryType", () => {
+    const types = {
+      EIP712Domain: [{ name: "name", type: "string" }],
+    }
+    expect(() => toAbiTypes({ types, primaryType: "Missing" })).toThrow(
+      /not declared/
+    )
+  })
 })

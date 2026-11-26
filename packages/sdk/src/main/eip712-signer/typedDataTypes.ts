@@ -27,5 +27,8 @@ export type PrimaryType<T extends TypedData> = Exclude<
 export type DomainStructOf<T extends TypedData> =
   TypedDataToPrimitiveTypes<T>["EIP712Domain"]
 
-export type MessageStructOf<T extends TypedData> =
-  TypedDataToPrimitiveTypes<T>[PrimaryType<T> & string]
+/** The message struct of `P`, by default the inferred primary type. */
+export type MessageStructOf<
+  T extends TypedData,
+  P extends keyof T & string = PrimaryType<T> & string,
+> = TypedDataToPrimitiveTypes<T>[P]

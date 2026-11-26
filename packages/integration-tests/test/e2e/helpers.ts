@@ -20,7 +20,7 @@ import {
 import type { NetworkConnection } from "hardhat/types/network"
 import "@nomicfoundation/hardhat-viem"
 
-import { abi as abiSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi as abiSafe } from "../eip712/setup/safe-deployments/index.js"
 import { deploySafe } from "../eip712/setup/safe.js"
 
 import {

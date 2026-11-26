@@ -59,6 +59,7 @@ A few things to note:
 - Field values can be primitives — `string`, `number`, `bigint`, address literals, etc. — which are shorthand for [`c.eq`](/sdk/conditions#ceq); use any [condition function](/sdk/conditions#condition-functions) (`c.avatar`, `c.or`, `c.gt`, …) for non-equality constraints.
 - Omitted fields are unconstrained; an entire struct can also be replaced by a condition function like `c.pass`.
 - Nested structs and arrays of structs follow the same struct-shape rules; see [Conditions](/sdk/conditions) for the underlying authoring API.
+- Pass `primaryType` when the signing request names it, as `eth_signTypedData_v4` requests do. Without it, the primary type is inferred as the one struct no other struct references, which fails when `types` carries types the message does not use, or a struct that references the primary one. Types the primary type does not reach are dropped.
 
 <Callout type="info">
   `types` must include the `EIP712Domain` entry that matches the domain you
@@ -81,6 +82,7 @@ const data = encodeSignTypedMessage({
     verifyingContract: "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
   },
   types,
+  primaryType: "Order",
   message: {
     sellToken: "0x...",
     buyToken: "0x...",
@@ -90,21 +92,25 @@ const data = encodeSignTypedMessage({
 });
 
 // The selector portion of `data` matches the one in the permission returned
-// by `allowSignTypedMessage` for the same `types`.
+// by `allowSignTypedMessage` for the same `types` and `primaryType`.
 ```
 
-After the call lands, `isValidSignature(safeMessageHash, "0x")` on the Safe returns the EIP-1271 magic value.
+After the call lands, `isValidSignature(hash, "0x")` on the Safe returns the EIP-1271 magic value, where `hash` is the EIP-712 hash of the typed data (e.g. viem's `hashTypedData`), the hash any verifier passes.
 
 ### `encodeSignMessage`
 
-A thin wrapper for the legacy `signMessage(bytes)` entry point on `SignTypedMessageLib`, which signs a raw byte string without EIP-191 wrapping.
+A thin wrapper for the `signMessage(bytes)` entry point on `SignTypedMessageLib`, the scheme of Safe's own `SignMessageLib`: it signs a byte string without EIP-191 wrapping.
 Most integrations should prefer `encodePersonalSign` or `encodeSignTypedMessage` instead.
 
 ```typescript
 import { encodeSignMessage } from "zodiac-roles-sdk";
 
-const data = encodeSignMessage({ message: "0xdeadbeef" });
+// a 32-byte hash
+const data = encodeSignMessage({ message: hash });
 ```
+
+After the call lands, `isValidSignature(hash, "0x")` on the Safe returns the EIP-1271 magic value.
+A message of another length is only verifiable through the legacy `isValidSignature(bytes, bytes)`, which Safe 1.5.0 no longer has.
 
 ## `personal_sign` messages
 
@@ -125,6 +131,8 @@ The condition is a single bitmask check on the raw message bytes — the EIP-191
 `startsWith` must not be empty.
 A scoped permission with no prefix would allow signing arbitrary messages, which the Safe should generally not delegate to a member.
 
+For Sign-In with Ethereum (EIP-4361), include the rest of the first line in the prefix, as above: a bare `"example.com"` also matches `"example.com.attacker.xyz wants you to sign in…"`.
+
 ### `encodePersonalSign`
 
 Produces the calldata to mark a concrete `personal_sign` message as signed.
@@ -137,4 +145,10 @@ const data = encodePersonalSign({
 });
 ```
 
-After the call lands, `isValidSignature(hashMessage(text), "0x")` on the Safe returns the EIP-1271 magic value, where `hashMessage` is the standard EIP-191 hash (e.g. `ethers.hashMessage`).
+A string is signed as its UTF-8 text. The parameter of a `personal_sign` request is hex; to sign those bytes as they are, pass `{ raw }`, as with viem's `signMessage`:
+
+```typescript
+const data = encodePersonalSign({ message: { raw: request.params[0] } });
+```
+
+After the call lands, `isValidSignature(hash, "0x")` on the Safe returns the EIP-1271 magic value, where `hash` is the standard EIP-191 hash — e.g. `viem`'s `hashMessage(text)` / `hashMessage({ raw })`, or `ethers.hashMessage(text)` / `ethers.hashMessage(ethers.getBytes(raw))` (note that `ethers.hashMessage("0x...")` hashes the hex string as UTF-8 text rather than raw bytes).
