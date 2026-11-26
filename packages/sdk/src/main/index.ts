@@ -66,6 +66,15 @@ export {
   MigrateV2Error,
   type ConditionV2,
 } from "./condition/migrateV2"
+export {
+  toConditionV2,
+  toTargetsV2,
+  v2Issues,
+  IncompatibleWithV2Error,
+  type V2Issue,
+  type TargetV2,
+  type FunctionV2,
+} from "./condition/toV2"
 
 /*
  *
