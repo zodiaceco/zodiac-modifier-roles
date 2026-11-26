@@ -30,7 +30,7 @@ export const allowPersonalSign = ({ startsWith }: { startsWith: string }) => {
 
   return {
     targetAddress: SIGN_TYPED_MESSAGE_LIB_ADDRESS,
-    selector: "0x641e3d2b", // personalSign(bytes)
+    selector: "0x641e3d2b" as const, // personalSign(bytes)
     delegatecall: true,
     condition: {
       paramType: Encoding.AbiEncoded,

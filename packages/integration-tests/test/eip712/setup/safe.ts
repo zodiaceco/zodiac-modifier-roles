@@ -8,40 +8,25 @@ import {
   zeroHash,
 } from "viem"
 
-import { abi as safeAbi } from "./deploy-mastercopies/safeMastercopy.js"
 import {
+  type SafeCreation,
   calculateSafeAddress,
   populateSafeCreation,
 } from "./encodeSafeCreation.js"
+import { safeAbi } from "./safe-deployments/index.js"
 
+/** Creates a Safe (1.4.1 unless `version` says otherwise) and returns its address. */
 export async function deploySafe(
-  {
-    owners,
-    threshold,
-    creationNonce,
-  }: {
-    owners: Address[]
-    threshold: number
-    creationNonce: bigint | number
-  },
+  creation: SafeCreation,
   relayer: WalletClient
 ) {
-  const tx = populateSafeCreation({
-    owners,
-    threshold,
-    creationNonce: BigInt(creationNonce),
-  })
   await relayer.sendTransaction({
     account: relayer.account!,
     chain: relayer.chain,
-    ...tx,
+    ...populateSafeCreation(creation),
   })
 
-  return calculateSafeAddress({
-    owners,
-    threshold,
-    creationNonce: BigInt(creationNonce),
-  })
+  return calculateSafeAddress(creation)
 }
 
 export async function enableModuleInSafe(

@@ -13,6 +13,7 @@ export function encodeTypedDomain({
 }): `0x${string}` {
   return encodeTypedMessage({
     types: { EIP712Domain: domainFields(domain, types) },
+    primaryType: "EIP712Domain",
     message: domain,
   })
 }

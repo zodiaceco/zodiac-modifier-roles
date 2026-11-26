@@ -1,7 +1,5 @@
-import SafeProxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json" with { type: "json" }
 import {
   type Address,
-  type Hex,
   concat,
   encodeAbiParameters,
   encodeFunctionData,
@@ -10,62 +8,62 @@ import {
   zeroAddress,
 } from "viem"
 
-import { address as fallbackHandler } from "./deploy-mastercopies/fallbackHandler.js"
 import {
-  abi as safeAbi,
-  address as mastercopy,
-} from "./deploy-mastercopies/safeMastercopy.js"
-import {
-  abi as factoryAbi,
-  address as factory,
-} from "./deploy-mastercopies/safeProxyFactory.js"
+  type SafeVersion,
+  safeAbi,
+  safeDeployments,
+  safeProxyFactoryAbi,
+} from "./safe-deployments/index.js"
 
-const creationBytecode = SafeProxyArtifact.bytecode as Hex
-
-export function calculateSafeAddress({
-  owners,
-  threshold,
-  creationNonce,
-}: {
+export type SafeCreation = {
   owners: Address[]
   threshold: number
   creationNonce: bigint | number
-}): Address {
+  /** Safe 1.4.1 by default */
+  version?: SafeVersion
+  /** The version's CompatibilityFallbackHandler by default */
+  fallbackHandler?: Address
+}
+
+export function calculateSafeAddress(creation: SafeCreation): Address {
+  const { singleton, proxyFactory, proxyCreationCode } =
+    safeDeployments[creation.version ?? "1.4.1"]
+
   const salt = keccak256(
     concat([
-      keccak256(initializer({ owners, threshold })),
-      encodeAbiParameters([{ type: "uint256" }], [BigInt(creationNonce)]),
+      keccak256(initializer(creation)),
+      encodeAbiParameters(
+        [{ type: "uint256" }],
+        [BigInt(creation.creationNonce)]
+      ),
     ])
   )
 
-  const deploymentData = concat([
-    creationBytecode,
-    encodeAbiParameters([{ type: "address" }], [mastercopy]),
-  ])
-
   return getCreate2Address({
-    from: factory,
+    from: proxyFactory.address,
     salt,
-    bytecode: deploymentData,
+    bytecode: concat([
+      proxyCreationCode,
+      encodeAbiParameters([{ type: "address" }], [singleton.address]),
+    ]),
   })
 }
 
-export function populateSafeCreation({
-  owners,
-  threshold,
-  creationNonce,
-}: {
-  owners: Address[]
-  threshold: number
-  creationNonce: bigint
-}) {
+export function populateSafeCreation(creation: SafeCreation) {
+  const { singleton, proxyFactory } =
+    safeDeployments[creation.version ?? "1.4.1"]
+
   return {
-    to: factory,
+    to: proxyFactory.address,
     value: 0n,
     data: encodeFunctionData({
-      abi: factoryAbi,
+      abi: safeProxyFactoryAbi,
       functionName: "createProxyWithNonce",
-      args: [mastercopy, initializer({ owners, threshold }), creationNonce],
+      args: [
+        singleton.address,
+        initializer(creation),
+        BigInt(creation.creationNonce),
+      ],
     }),
   }
 }
@@ -73,10 +71,10 @@ export function populateSafeCreation({
 function initializer({
   owners,
   threshold,
-}: {
-  owners: Address[]
-  threshold: number
-}) {
+  version = "1.4.1",
+  fallbackHandler = safeDeployments[version].compatibilityFallbackHandler
+    .address,
+}: SafeCreation) {
   return encodeFunctionData({
     abi: safeAbi,
     functionName: "setup",

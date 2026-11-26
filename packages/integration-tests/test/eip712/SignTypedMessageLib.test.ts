@@ -19,7 +19,7 @@ import { network } from "hardhat"
 import { encodeSignTypedMessage } from "zodiac-roles-sdk"
 
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
-import { abi as safeAbi } from "./setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi } from "./setup/safe-deployments/index.js"
 
 import { deploySafe } from "./setup/safe.js"
 

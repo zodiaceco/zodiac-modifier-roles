@@ -16,8 +16,9 @@ The library exposes two entry points relevant to scoping:
 - `signTypedMessage(domain, message, types)` — for [EIP-712](https://eips.ethereum.org/EIPS/eip-712) typed structured data
 - `personalSign(message)` — for [EIP-191](https://eips.ethereum.org/EIPS/eip-191) `personal_sign` text messages
 
-Each entry point computes the same `SafeMessage` hash that EIP-1271 verification expects, then sets `signedMessages[hash] = 1` in the Safe's storage.
-After this, calling `isValidSignature(hash, "0x")` on the Safe returns the EIP-1271 magic value, so any verifier that follows the standard accepts the signature.
+Each entry point computes the same `SafeMessage` hash that EIP-1271 verification expects, then sets `signedMessages[safeMessageHash] = 1` in the Safe's storage.
+After this, calling `isValidSignature(hash, "0x")` on the Safe returns the EIP-1271 magic value, where `hash` is the message's own hash (the EIP-712 hash of the typed data, or the EIP-191 hash of the text), so any verifier that follows the standard accepts the signature.
+This holds for Safe 1.3.0, 1.4.1 and 1.5.0 with their `CompatibilityFallbackHandler` (and Safe 1.5.0's `ExtensibleFallbackHandler`).
 
 Because the call originates from the role member and goes through the Roles Modifier, the modifier's conditions decide whether the signing call is allowed at all.
 That is the surface signature scoping operates on.
