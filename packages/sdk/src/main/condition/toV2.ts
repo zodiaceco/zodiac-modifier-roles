@@ -60,7 +60,9 @@ export interface TargetV2 extends Omit<Target, "functions"> {
  *   or none (`AbiEncoded`), and compares neither. Check a selector with a
  *   `Bitmask` instead.
  * - **Bitmasks** wider than 15 bytes. Narrower ones are padded to v2's fixed
- *   15 bytes; trailing bytes the mask does not select are dropped first.
+ *   15 bytes. On a static value, trailing bytes the mask does not select are
+ *   dropped first. On a dynamic one, v2 only requires the length when the
+ *   last byte expects a non-zero value; otherwise the bitmask is refused.
  * - **Custom conditions** without a v2 checker: a checker implements one
  *   version's `ICustomCondition`, so only known v3 checkers map to their v2
  *   counterpart. Extra data must fit v2's 12 bytes.
@@ -229,7 +231,11 @@ const convert = (
     case Operator.WithinAllowance:
       return node(paramType, c.operator, allowanceKey(c, issue))
     case Operator.Bitmask:
-      return node(paramType, c.operator, toBitmask(c.compValue, issue))
+      return node(
+        paramType,
+        c.operator,
+        toBitmask(c.compValue, c.paramType, issue)
+      )
     case Operator.Custom:
       return node(paramType, c.operator, toCustom(c.compValue, issue))
     case Operator.EqualTo:
@@ -295,11 +301,15 @@ const allowanceKey = (c: Condition, issue: (message: string) => void) => {
 }
 
 /**
- * v3: 2 bytes shift, n bytes mask, n bytes value.
- * v2: 2 bytes shift, 15 bytes mask, 15 bytes value.
+ * v3: 2 bytes shift, n bytes mask, n bytes value. It fails unless the value
+ * has all `shift + n` bytes, even those the mask does not select.
+ * v2: 2 bytes shift, 15 bytes mask, 15 bytes value. It only needs the byte at
+ * `shift` and reads zeros past the end, so only a last byte expecting a
+ * non-zero value requires the length.
  */
 const toBitmask = (
   compValue: string | undefined,
+  paramType: Encoding,
   issue: (message: string) => void
 ) => {
   const cv = (compValue ?? "0x").slice(2)
@@ -307,10 +317,21 @@ const toBitmask = (
   const n = (cv.length - 4) / 4
   let mask = cv.slice(4, 4 + 2 * n)
   let value = cv.slice(4 + 2 * n)
-  // a byte the mask does not select, with no value expected, checks nothing
-  while (mask.endsWith("00") && value.endsWith("00")) {
-    mask = mask.slice(0, -2)
-    value = value.slice(0, -2)
+  if (paramType === Encoding.Static && parseInt(shift, 16) + n > 32) {
+    issue("a bitmask reaching past the 32 bytes of a static value never passes")
+  }
+  // A byte the mask does not select, with no value expected, checks nothing
+  // but the length. A static value always has its 32 bytes.
+  if (paramType === Encoding.Static) {
+    while (mask.endsWith("00") && value.endsWith("00")) {
+      mask = mask.slice(0, -2)
+      value = value.slice(0, -2)
+    }
+  } else if (value.endsWith("00")) {
+    // v2 reads a missing last byte as zero, and zero is what it expects
+    issue(
+      "a bitmask on a dynamic value whose last byte expects zero requires a length v2 does not check"
+    )
   }
   if (mask.length > 30) {
     issue(`bitmasks are at most 15 bytes, this one is ${mask.length / 2}`)

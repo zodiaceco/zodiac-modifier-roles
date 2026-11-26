@@ -109,9 +109,10 @@ describe("toConditionV2", () => {
         ),
       ],
       [
+        // on a static value: v2's zero padding requires no length there
         "a bitmask",
         calldata({
-          paramType: 2,
+          paramType: 1,
           operator: 21,
           compValue:
             "0x0000" +
@@ -226,19 +227,44 @@ describe("toConditionV2", () => {
     })
 
     it("bitmasks wider than 15 bytes", () => {
-      const bitmask = (mask: string, value: string): Condition =>
+      const bitmask = (
+        paramType: Encoding,
+        mask: string,
+        value: string,
+        shift = "0000"
+      ): Condition =>
         matches({
-          paramType: Encoding.Dynamic,
+          paramType,
           operator: Operator.Bitmask,
-          compValue: `0x0000${mask}${value}`,
+          compValue: `0x${shift}${mask}${value}`,
         })
-      expect(v2Issues(bitmask("ff".repeat(16), "00".repeat(16)))).toMatchObject(
-        [{ message: "bitmasks are at most 15 bytes, this one is 16" }]
-      )
-      // trailing bytes the mask does not select check nothing
       expect(
-        v2Issues(bitmask("ff".repeat(15) + "00".repeat(5), "00".repeat(20)))
+        v2Issues(bitmask(Encoding.Dynamic, "ff".repeat(16), "12".repeat(16)))
+      ).toMatchObject([
+        { message: "bitmasks are at most 15 bytes, this one is 16" },
+      ])
+      // a static value has its 32 bytes: trailing unselected bytes check nothing
+      expect(
+        v2Issues(
+          bitmask(
+            Encoding.Static,
+            "ff".repeat(15) + "00".repeat(5),
+            "00".repeat(20)
+          )
+        )
       ).toEqual([])
+      // on a dynamic value the last byte must expect a non-zero value, or v2
+      // accepts a shorter value
+      expect(v2Issues(bitmask(Encoding.Dynamic, "ffff", "1200"))).toMatchObject(
+        [{ message: expect.stringContaining("requires a length") }]
+      )
+      expect(v2Issues(bitmask(Encoding.Dynamic, "ffff", "0012"))).toEqual([])
+      expect(v2Issues(bitmask(Encoding.Dynamic, "ff00", "1200"))).toMatchObject(
+        [{ message: expect.stringContaining("requires a length") }]
+      )
+      expect(
+        v2Issues(bitmask(Encoding.Static, "ff", "12", "0020"))
+      ).toMatchObject([{ message: expect.stringContaining("never passes") }])
     })
 
     it("custom conditions without a v2 checker", () => {
