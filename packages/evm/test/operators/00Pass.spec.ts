@@ -1,4 +1,4 @@
-import { expect } from "chai";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
 
 import { createSetup } from "../setup.js";
@@ -7,13 +7,13 @@ import {
   Encoding,
   ExecutionOptions,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam } = createSetup(connection);
+const { setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
 
 describe("Operator - Pass", () => {
   after(async () => {
@@ -39,25 +39,8 @@ describe("Operator - Pass", () => {
       );
 
       // Any value passes - the operator performs no validation
-      await expect(invoke(0)).to.not.be.revert(ethers);
-      await expect(invoke(999)).to.not.be.revert(ethers);
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x".padEnd(66, "0"),
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      await invoke(0);
+      await invoke(999);
     });
   });
 });

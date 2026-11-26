@@ -4,23 +4,57 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../common/AbiLocation.sol";
-import "../../core/serialize/Integrity.sol";
-import "../../core/serialize/ConditionPacker.sol";
-import "../../core/serialize/ConditionUnpacker.sol";
+import {ConditionFlat} from "../../IEvaluator.sol";
+import "../../evaluator/AbiLocation.sol";
+import "../../evaluator/Integrity.sol";
+import "../../evaluator/serialize/Packer.sol";
+import "../../evaluator/serialize/Unpacker.sol";
+import "../../evaluator/types/EvaluatorTypes.sol";
 
+/**
+ * @dev Exposes AbiLocation, with the calldata as the frame: values are
+ *      given, and reported, by their location in it.
+ */
 contract MockLocator {
+    /**
+     * @dev The location of every child of the value at `location`: the
+     *      elements of an Array, the children of any other node. On
+     *      overflow, the locations found until then.
+     */
     function getChildLocations(
         bytes calldata data,
         uint256 location,
         ConditionFlat[] memory conditions,
         uint256 conditionIndex
-    ) public view returns (uint256[] memory, bool overflow) {
+    ) public view returns (uint256[] memory result, bool overflow) {
         Integrity.enforce(conditions);
         Condition memory condition = _unpackAndFind(conditions, conditionIndex);
-        return AbiLocation.children(data, location, condition);
+        if (location > data.length) {
+            if (condition.encoding != Encoding.Array) {
+                result = new uint256[](condition.children.length);
+            }
+            return (result, true);
+        }
+
+        (Span[] memory children, bool ok) = AbiLocation.children(
+            data[location:],
+            condition
+        );
+        overflow = !ok;
+
+        // From spans to locations. A child not found is left at 0
+        result = new uint256[](children.length);
+        for (uint256 i; i < children.length; ++i) {
+            if (Span.unwrap(children[i]) != 0) {
+                result[i] = _locate(data, AbiLocation.fromSpan(children[i]));
+            }
+        }
     }
 
+    /**
+     * @dev The size of the value at `location`, or `data.length + 1` if it
+     *      does not lie within the calldata.
+     */
     function getSize(
         bytes calldata data,
         uint256 location,
@@ -29,15 +63,21 @@ contract MockLocator {
     ) public view returns (uint256) {
         Integrity.enforce(conditions);
         Condition memory condition = _unpackAndFind(conditions, conditionIndex);
-        return AbiLocation.size(data, location, condition);
+        if (location > data.length) return data.length + 1;
+
+        (bytes calldata region, bool ok) = AbiLocation.sliceEncoded(
+            data[location:],
+            condition
+        );
+        return ok ? region.length : data.length + 1;
     }
 
-    function pluck(
+    /// @dev Where `slice` starts, as an offset into `data`.
+    function _locate(
         bytes calldata data,
-        uint256 offset,
-        uint256 size
-    ) public pure returns (bytes calldata) {
-        return data[offset:offset + size];
+        bytes calldata slice
+    ) private pure returns (uint256 result) {
+        return AbiLocation.offsetOf(AbiLocation.toSpan(data), slice);
     }
 
     /**
@@ -47,8 +87,8 @@ contract MockLocator {
         ConditionFlat[] memory conditions,
         uint256 bfsIndex
     ) internal view returns (Condition memory) {
-        bytes memory packed = ConditionPacker.pack(conditions);
-        (Condition memory root, ) = ConditionUnpacker.unpack(packed);
+        bytes memory packed = Packer.pack(conditions);
+        (Condition memory root, ) = Unpacker.unpack(packed, address(0));
 
         // BFS traversal to find condition at bfsIndex
         Condition[] memory queue = new Condition[](conditions.length);

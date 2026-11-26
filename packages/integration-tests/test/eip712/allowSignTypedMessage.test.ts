@@ -1,20 +1,24 @@
-import { expect } from "chai"
+import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
+import { after, describe, it } from "node:test"
 import {
-  TypedDataEncoder,
-  ZeroAddress,
-  ZeroHash,
+  type Address,
+  type Hex,
+  hashTypedData,
   keccak256,
-  randomBytes,
-} from "ethers"
+  parseAbi,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem"
 import { network } from "hardhat"
 import {
   allowSignTypedMessage,
   encodeSignTypedMessage,
+  ExecutionOptions,
   __integration,
 } from "zodiac-roles-sdk"
-import { ExecutionOptions } from "zodiac-roles-sdk"
 
-import { iface as ifaceFallback } from "./setup/deploy-mastercopies/fallbackHandler.js"
 import {
   connectRolesSafeAndMember,
   deployRoles,
@@ -24,9 +28,10 @@ import {
 } from "./setup/roles.js"
 import { deploySafe } from "./setup/safe.js"
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
+import { rolesModMastercopy } from "./setup/deploy-mastercopies/rolesMastercopy.js"
 
 const connection = await network.create()
-const { ethers, networkHelpers, provider } = connection
+const { viem, networkHelpers } = connection
 const { loadFixture } = networkHelpers
 
 const { toAbiTypes } = __integration
@@ -37,23 +42,26 @@ const AddressOne = "0x0000000000000000000000000000000000000001" as `0x${string}`
 
 const EIP712_MAGIC_VALUE = "0x20c13b0b"
 
+const isValidSignatureBytesAbi = parseAbi([
+  "function isValidSignature(bytes _data, bytes _signature) view returns (bytes4)",
+])
+
 describe("allowSignTypedMessage()", () => {
   after(async () => {
     await connection.close()
   })
 
   async function setup() {
-    await deployMastercopies(ethers)
+    await deployMastercopies(viem)
 
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
+    const lib = await viem.deployContract("SignTypedMessageLib")
 
-    const [owner, member, relayer] = await ethers.getSigners()
+    const [owner, member, relayer] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
 
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
         creationNonce: BigInt(randomHash()),
       },
@@ -61,22 +69,23 @@ describe("allowSignTypedMessage()", () => {
     )
 
     const roles = await deployRoles(
-      { avatar: safe, target: safe, owner: await owner.getAddress() },
-      relayer
+      { avatar: safe, target: safe, owner: owner.account.address },
+      relayer,
+      publicClient
     )
 
     const { roleKey } = await connectRolesSafeAndMember({
       owner,
       safe,
       roles,
-      member: await member.getAddress(),
+      member: member.account.address,
     })
 
     await scopeTarget({
       owner,
       roles,
       roleKey,
-      target: await lib.getAddress(),
+      target: lib.address,
     })
 
     const domain = {
@@ -133,25 +142,26 @@ describe("allowSignTypedMessage()", () => {
       owner,
       roles,
       roleKey,
-      target: await lib.getAddress(),
-      selector,
+      target: lib.address,
+      selector: selector as Hex,
       condition,
       executionOptions: ExecutionOptions.Both,
     })
 
     return {
       relayer,
+      publicClient,
       safe,
       roles,
-      lib: await lib.getAddress(),
+      lib: lib.address,
 
       execTransactionFromRoles: ({
         to,
         data,
         operation,
       }: {
-        to: string
-        data: string
+        to: Address
+        data: Hex
         operation: number
       }) =>
         execTransactionWithRole({
@@ -169,167 +179,166 @@ describe("allowSignTypedMessage()", () => {
   }
 
   it("correctly restricts some elements in domain", async () => {
-    const { lib, roles, message, domain, types, execTransactionFromRoles } =
+    const { lib, message, domain, types, execTransactionFromRoles } =
       await loadFixture(setup)
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
         data: encodeSignTypedMessage({
           domain,
           types,
           message: { ...message, name: "Alice" },
-        }),
+        }) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
         data: encodeSignTypedMessage({
           domain: {
             ...domain,
-            verifyingContract: ZeroAddress as `0x${string}`,
+            verifyingContract: zeroAddress,
           },
           types,
           message,
-        }),
+        }) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
 
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({ domain, types, message }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({ domain, types, message }) as Hex,
+      operation: 1,
+    })
 
     // any name for the app
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({ domain, types, message }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({ domain, types, message }) as Hex,
+      operation: 1,
+    })
 
     // any version for the app
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({
-          domain: {
-            ...domain,
-            version: "v3.4.5",
-          },
-          types,
-          message,
-        }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({
+        domain: {
+          ...domain,
+          version: "v3.4.5",
+        },
+        types,
+        message,
+      }) as Hex,
+      operation: 1,
+    })
 
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({
-          domain: {
-            ...domain,
-            name: "Our latest super release",
-          },
-          types,
-          message,
-        }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({
+        domain: {
+          ...domain,
+          name: "Our latest super release",
+        },
+        types,
+        message,
+      }) as Hex,
+      operation: 1,
+    })
   })
 
   it("correctly restricts some elements in message", async () => {
     const { lib, message, domain, types, execTransactionFromRoles } =
       await loadFixture(setup)
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
         data: encodeSignTypedMessage({
           domain,
           types,
           message: { ...message, name: "Alice" },
-        }),
+        }) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
         data: encodeSignTypedMessage({
           domain,
           types,
           message: { ...message, wallet: AddressOne },
-        }),
+        }) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
 
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({
-          domain,
-          types,
-          message: { ...message, attachments: [{ filename: "logs.csv" }] },
-        }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({
+        domain,
+        types,
+        message: { ...message, attachments: [{ filename: "logs.csv" }] },
+      }) as Hex,
+      operation: 1,
+    })
 
     // any name for the app
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodeSignTypedMessage({ domain, types, message }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodeSignTypedMessage({ domain, types, message }) as Hex,
+      operation: 1,
+    })
   })
 
   it("correctly enforces exact type layout", async () => {
     const { lib, message, domain, types, execTransactionFromRoles } =
       await loadFixture(setup)
 
-    const data = encodeSignTypedMessage({ domain, types, message })
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: data,
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    const data = encodeSignTypedMessage({ domain, types, message }) as Hex
+    await execTransactionFromRoles({
+      to: lib,
+      data: data,
+      operation: 1,
+    })
 
     const aTypeHash = toAbiTypes({ domain, types })
       .map((n) => n.typeHash)
-      .find((t) => t != ZeroHash)!
+      .find((t) => t !== zeroHash)!
 
     // change one hash
-    expect(data.includes(aTypeHash.slice(2))).to.be.true
+    assert.ok(data.includes(aTypeHash.slice(2)))
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
-        data: data.replace(aTypeHash.slice(2), keccak256(aTypeHash).slice(2)),
+        data: data.replace(
+          aTypeHash.slice(2),
+          keccak256(aTypeHash).slice(2)
+        ) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
   })
 
   it("signs a message from a safe, through a roles mod", async () => {
     const {
-      relayer,
+      publicClient,
       lib,
       safe,
       message,
@@ -338,47 +347,41 @@ describe("allowSignTypedMessage()", () => {
       execTransactionFromRoles,
     } = await loadFixture(setup)
 
-    const { EIP712Domain, ...rest } = types
-    const messageHashTypes = rest as any
+    const { EIP712Domain: _, ...messageHashTypes } = types
+    const messageHash = hashTypedData({
+      domain,
+      types: messageHashTypes,
+      primaryType: "Person",
+      message,
+    })
 
-    await expect(
-      relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes,bytes)",
-          [TypedDataEncoder.hash(domain, messageHashTypes, message), "0x"]
-        ),
-      })
-    ).to.be.revertedWith("Hash not approved")
+    await viem.assertions.revertWith(
+      publicClient.readContract({
+        address: safe,
+        abi: isValidSignatureBytesAbi,
+        functionName: "isValidSignature",
+        args: [messageHash, "0x"],
+      }),
+      "Hash not approved"
+    )
 
     await execTransactionFromRoles({
       to: lib,
-      data: encodeSignTypedMessage({ domain, types, message }),
+      data: encodeSignTypedMessage({ domain, types, message }) as Hex,
       operation: 1,
     })
 
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData("isValidSignature(bytes,bytes)", [
-        TypedDataEncoder.hash(domain, messageHashTypes, message),
-        "0x",
-      ]),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytesAbi,
+      functionName: "isValidSignature",
+      args: [messageHash, "0x"],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes,bytes)",
-      resultData
-    )
-
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE])
+    assert.equal(result, EIP712_MAGIC_VALUE)
   })
 })
 
-function randomHash(): string {
-  return (
-    "0x" +
-    Array.from(randomBytes(32))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  )
+function randomHash(): Hex {
+  return toHex(randomBytes(32))
 }

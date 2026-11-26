@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "declaration": true,
     "esModuleInterop": true,
     "module": "nodenext",
     "moduleResolution": "nodenext",
@@ -11,6 +10,6 @@
     "target": "es2023",
     "typeRoots": ["node_modules/@types"]
   },
-  "include": ["tasks", "./test", "./typechain-types"],
+  "include": ["tasks", "./test", "./build/artifacts"],
   "files": ["./hardhat.config.ts"]
 }

@@ -19,7 +19,7 @@
  * inlined drops its first word (the offset of `abi.encode`).
  *
  * Tested byte for byte against the Lean model of the packer and against
- * `ConditionPacker.pack` (packages/evm/test/formal/sdk-check.spec.ts).
+ * `ConditionPacker.pack` (packages/evm/formal/test/sdk-check.spec.ts).
  */
 import {
   type ConditionFlatInput,
@@ -88,11 +88,10 @@ const toHex = (b: Uint8Array): `0x${string}` =>
  * pass to a `...Packed` setter, or throws if the array is rejected.
  */
 export const checkAndPack = (
-  flat: readonly ConditionFlatInput[],
-  s = true
+  flat: readonly ConditionFlatInput[]
 ): { verdict: Verdict; packed: `0x${string}` } => {
   const fs = toFlatNodes(flat)
-  const verdict = checkStored(fs, s)
+  const verdict = checkStored(fs)
   if (verdict === undefined) {
     throw new Error("condition rejected by checkStored")
   }
@@ -105,15 +104,14 @@ export const checkAndPack = (
  * This is the pipeline `sdk_pipeline` (packages/evm/formal/Bridge) covers:
  * the stored tree enforces what the tree as written means. The proof needs
  * the tree as written to be well-typed, which the first check enforces
- * (tested: every tree it accepts is, `test/formal/sdk-check.spec.ts`).
+ * (tested: every tree it accepts is, `formal/test/sdk-check.spec.ts`).
  * Throws if either check rejects.
  */
 export const checkAndPackCondition = (
-  condition: Condition,
-  s = true
+  condition: Condition
 ): { verdict: Verdict; packed: `0x${string}` } => {
-  if (checkStored(toFlatNodes(flattenCondition(condition)), s) === undefined) {
+  if (checkStored(toFlatNodes(flattenCondition(condition))) === undefined) {
     throw new Error("condition rejected by checkStored (as written)")
   }
-  return checkAndPack(flattenCondition(normalizeCondition(condition)), s)
+  return checkAndPack(flattenCondition(normalizeCondition(condition)))
 }

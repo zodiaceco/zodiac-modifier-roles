@@ -6,322 +6,454 @@
  * function does on its own. They pin down documented behaviour:
  * - a signature of a Safe counts wherever its EIP-1271 signature does, so a
  *   role that can make it sign raw hashes acts with that Safe's roles
- *   (docs: general/signing, "What a signature authorizes");
- * - settlement writes after execution, so it overwrites allowance and
- *   membership changes the executed transaction made (docs: general/
- *   allowances and general/membership).
+ *   (docs: general/signing, "What a signature authorizes"); its digest is
+ *   still used once, and only until its deadline;
+ * - authorization runs before execution, against the allowance as it is
+ *   then; settlement runs after: for allowances it re-accrues from current
+ *   storage and deducts consumption (reverting if an executed call reduced
+ *   the allowance below what was consumed); for memberships it reads the
+ *   membership as the executed transaction left it, so a revocation by the
+ *   batch stands (docs: general/allowances and general/membership).
  */
-import { expect } from "chai"
-import {
-  AbiCoder,
-  Interface,
-  TypedDataEncoder,
-  ZeroAddress,
-  ZeroHash,
-  concat,
-  hexlify,
-  randomBytes,
-  solidityPacked,
-} from "ethers"
-import type { Signer } from "ethers"
+import assert from "node:assert/strict"
+import { after, before, describe, it } from "node:test"
 import { network } from "hardhat"
+import {
+  encodeFunctionData,
+  hashTypedData,
+  parseAbi,
+  parseEther,
+  toFunctionSelector,
+} from "viem"
+import type { Address, Hex } from "viem"
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts"
 
-import { iface as ifaceSafe } from "../eip712/setup/deploy-mastercopies/safeMastercopy.js"
-import { deploySafe } from "../eip712/setup/safe.js"
 import deployMastercopies from "../eip712/setup/deploy-mastercopies/index.js"
+import {
+  Encoding,
+  ExecutionOptions,
+  NO_DEADLINE,
+  Operator,
+  ROLE_TX_TYPES,
+  deployMultiSend,
+  encodeMultiSend,
+  randomKey,
+  safeWithRoles,
+} from "./helpers.js"
+import type { RoleTx } from "./helpers.js"
+import { assertNotEmitted } from "../../../evm/test/utils.js"
 
 const connection = await network.create()
-const { ethers } = connection
+const { viem } = connection
 
-const abi = AbiCoder.defaultAbiCoder()
-
-const Encoding = { None: 0, Static: 1, EtherValue: 6 } as const
-const Operator = { Pass: 0, WithinAllowance: 28 } as const
-const ExecutionOptions = { None: 0, Send: 1, DelegateCall: 2, Both: 3 }
-
-const libIface = new Interface(["function signMessage(bytes message)"])
-const multiSendIface = new Interface(["function multiSend(bytes transactions)"])
-
-const randomKey = () => hexlify(randomBytes(32))
-
-async function deployRoles(owner: string, avatar: string) {
-  const lib = async (name: string) =>
-    (await (await ethers.getContractFactory(name)).deploy()).getAddress()
-  const libraries = {
-    ConditionStorer: await lib("ConditionStorer"),
-    WithinRatioChecker: await lib("WithinRatioChecker"),
-    CustomConditionChecker: await lib("CustomConditionChecker"),
-  }
-  const factory = await ethers.getContractFactory("Roles", { libraries })
-  const roles = await factory.deploy(owner, avatar, avatar)
-  return roles
-}
-
-/** `owner` (threshold 1) executes a call from the Safe. */
-async function execSafe(
-  owner: Signer,
-  safe: string,
-  to: string,
-  data: string,
-  operation = 0,
-  value = 0n
-) {
-  const approval = concat([
-    abi.encode(["address"], [await owner.getAddress()]),
-    ZeroHash,
-    "0x01",
-  ])
-  return owner.sendTransaction({
-    to: safe,
-    data: ifaceSafe.encodeFunctionData("execTransaction", [
-      to,
-      value,
-      data,
-      operation,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      approval,
-    ]),
-  })
-}
-
-/** A Safe owned by `owner`, with a Roles modifier enabled as its module. */
-async function safeWithRoles(owner: Signer) {
-  const safe = await deploySafe(
-    {
-      owners: [await owner.getAddress()],
-      threshold: 1,
-      creationNonce: BigInt(randomKey()),
-    },
-    owner as any
-  )
-  const roles = await deployRoles(await owner.getAddress(), safe)
-  await execSafe(
-    owner,
-    safe,
-    safe,
-    ifaceSafe.encodeFunctionData("enableModule", [await roles.getAddress()])
-  )
-  return { safe, roles }
-}
-
-const encodeMultiSend = (
-  txs: { to: string; value: bigint; data: string; operation: number }[]
-) =>
-  multiSendIface.encodeFunctionData("multiSend", [
-    concat(
-      txs.map((t) =>
-        solidityPacked(
-          ["uint8", "address", "uint256", "uint256", "bytes"],
-          [t.operation, t.to, t.value, (t.data.length - 2) / 2, t.data]
-        )
-      )
-    ),
-  ])
+const libAbi = parseAbi(["function signMessage(bytes message)"])
 
 describe("Roles composition, end to end", () => {
+  before(async () => {
+    await deployMastercopies(viem)
+  })
   after(async () => {
     await connection.close()
   })
 
   it("a role that can make a member Safe sign raw hashes acts with that Safe's roles (ERC-1271)", async () => {
-    await deployMastercopies(ethers)
-    const [ownerA, ownerM, signerS, relayer] = await ethers.getSigners()
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
+    const [ownerA, ownerM, signerS, relayer] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
+    const lib = await viem.deployContract("SignTypedMessageLib")
 
     // Safe A with Roles R. Safe M is a module of R with role B: send 1 ETH to Y.
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const { safe: safeM, roles: Rm } = await safeWithRoles(ownerM)
-    await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("2") })
-    const Y = ethers.Wallet.createRandom().address
+    const { safe: safeA, roles: R } = await safeWithRoles(viem, ownerA)
+    const { safe: safeM, roles: Rm } = await safeWithRoles(viem, ownerM)
+    await ownerA.sendTransaction({ to: safeA, value: parseEther("2") })
+    const Y = privateKeyToAccount(generatePrivateKey()).address
     const roleB = randomKey()
-    await R.connect(ownerA).grantRole(safeM, roleB, 0, 0, 0)
-    await R.connect(ownerA).scopeTarget(roleB, Y)
-    await R.connect(ownerA).allowTarget(roleB, Y, [], ExecutionOptions.Send)
+    await R.write.grantRole([safeM, roleB, 0n, 0n, 0n], {
+      account: ownerA.account,
+    })
+    await R.write.scopeTarget([roleB, Y], { account: ownerA.account })
+    await R.write.allowTarget([roleB, Y, [], ExecutionOptions.Send], {
+      account: ownerA.account,
+    })
 
     // Safe M's own Roles Rm: role S may only make M sign messages.
     const roleS = randomKey()
-    await Rm.connect(ownerM).grantRole(
-      await signerS.getAddress(),
-      roleS,
-      0,
-      0,
-      0
-    )
-    await Rm.connect(ownerM).scopeTarget(roleS, await lib.getAddress())
-    await Rm.connect(ownerM).allowFunction(
-      roleS,
-      await lib.getAddress(),
-      libIface.getFunction("signMessage")!.selector,
-      [],
-      ExecutionOptions.DelegateCall
+    await Rm.write.grantRole([signerS.account.address, roleS, 0n, 0n, 0n], {
+      account: ownerM.account,
+    })
+    await Rm.write.scopeTarget([roleS, lib.address], {
+      account: ownerM.account,
+    })
+    await Rm.write.allowFunction(
+      [
+        roleS,
+        lib.address,
+        toFunctionSelector("signMessage(bytes)"),
+        [],
+        ExecutionOptions.DelegateCall,
+      ],
+      { account: ownerM.account }
     )
 
-    // S makes M sign the digest of a RoleTx for R, role B.
-    const salt = randomKey()
-    const message = {
-      to: Y,
-      value: ethers.parseEther("1"),
-      data: "0x",
-      operation: 0,
-      roleKey: roleB,
-      shouldRevert: true,
-      salt,
-    }
-    const digest = TypedDataEncoder.hash(
-      {
-        chainId: (await ethers.provider.getNetwork()).chainId,
-        verifyingContract: await R.getAddress(),
-      },
-      {
-        RoleTx: [
-          { name: "to", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "data", type: "bytes" },
-          { name: "operation", type: "uint8" },
-          { name: "roleKey", type: "bytes32" },
-          { name: "shouldRevert", type: "bool" },
-          { name: "salt", type: "bytes32" },
+    const chainId = await publicClient.getChainId()
+
+    /** S makes M sign the digest of a RoleTx for R, role B: 1 ETH to Y. */
+    const signedByM = async (deadline: bigint): Promise<RoleTx> => {
+      const message: RoleTx = {
+        to: Y,
+        value: parseEther("1"),
+        data: "0x",
+        operation: 0,
+        roleKey: roleB,
+        salt: randomKey(),
+        deadline,
+      }
+      const digest = hashTypedData({
+        domain: {
+          chainId,
+          verifyingContract: R.address,
+        },
+        types: ROLE_TX_TYPES,
+        primaryType: "RoleTx",
+        message,
+      })
+      await Rm.write.execTransactionWithRole(
+        [
+          lib.address,
+          0n,
+          encodeFunctionData({
+            abi: libAbi,
+            functionName: "signMessage",
+            args: [digest],
+          }),
+          1,
+          roleS,
         ],
-      },
-      message
-    )
-    await Rm.connect(signerS).execTransactionWithRole(
-      await lib.getAddress(),
-      0,
-      libIface.encodeFunctionData("signMessage", [digest]),
-      1,
-      roleS,
-      true
-    )
+        { account: signerS.account }
+      )
+      return message
+    }
 
     // Anyone relays it with M's contract signature (address, empty payload).
-    await R.connect(relayer).execTransactionWithSignature(
-      message.to,
-      message.value,
-      message.data,
-      message.operation,
-      message.roleKey,
-      message.shouldRevert,
-      message.salt,
-      safeM
+    const message = await signedByM(NO_DEADLINE)
+    await R.write.execTransactionWithRoleSigned([message, safeM], {
+      account: relayer.account,
+    })
+    assert.equal(await publicClient.getBalance({ address: Y }), parseEther("1"))
+
+    // M's approval of the digest stays, but the digest is used once.
+    await viem.assertions.revertWithCustomError(
+      R.write.execTransactionWithRoleSigned([message, safeM], {
+        account: relayer.account,
+      }),
+      R,
+      "HashAlreadyConsumed"
     )
-    expect(await ethers.provider.getBalance(Y)).to.equal(ethers.parseEther("1"))
+
+    // An approved digest past its deadline moves nothing.
+    const expired = await signedByM((await publicClient.getBlock()).timestamp)
+    await viem.assertions.revertWithCustomError(
+      R.write.execTransactionWithRoleSigned([expired, safeM], {
+        account: relayer.account,
+      }),
+      R,
+      "SignatureExpired"
+    )
+    assert.equal(await publicClient.getBalance({ address: Y }), parseEther("1"))
   })
 
-  it("settlement overwrites an allowance the executed batch set", async () => {
-    await deployMastercopies(ethers)
-    const [ownerA, member] = await ethers.getSigners()
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const Raddr = await R.getAddress()
-    await ownerA.sendTransaction({ to: safeA, value: ethers.parseEther("1") })
+  describe("settlement re-accrues allowances from storage after the executed batch", () => {
+    /** Role P sends ether to Y within allowance K, and may call
+     *  R.setAllowance; the Safe owns R. */
+    async function setup() {
+      const [ownerA, member] = await viem.getWalletClients()
+      const publicClient = await viem.getPublicClient()
+      const { safe: safeA, roles: R } = await safeWithRoles(viem, ownerA)
+      const Raddr = R.address
+      await ownerA.sendTransaction({ to: safeA, value: parseEther("1") })
 
-    const multiSend = await (
-      await ethers.getContractFactory("MultiSend")
-    ).deploy()
-    const unwrapper = await (
-      await ethers.getContractFactory("MultiSendUnwrapper")
-    ).deploy()
-    await R.connect(ownerA).setTransactionUnwrapper(
-      await multiSend.getAddress(),
-      multiSendIface.getFunction("multiSend")!.selector,
-      await unwrapper.getAddress()
-    )
+      const multiSendAddr = await deployMultiSend(viem, R, ownerA)
 
-    // Role P: send ether to Y within allowance K, and call R.setAllowance.
-    const K = randomKey()
-    const roleP = randomKey()
-    const Y = ethers.Wallet.createRandom().address
-    await R.connect(ownerA).setAllowance(K, 100, 0, 0, 0, 0)
-    await R.connect(ownerA).grantRole(await member.getAddress(), roleP, 0, 0, 0)
-    await R.connect(ownerA).scopeTarget(roleP, Y)
-    await R.connect(ownerA).allowTarget(
-      roleP,
-      Y,
-      [
-        {
-          parent: 0,
-          paramType: Encoding.EtherValue,
-          operator: Operator.WithinAllowance,
-          compValue: K,
-        },
-      ],
-      ExecutionOptions.Send
-    )
-    await R.connect(ownerA).scopeTarget(roleP, Raddr)
-    await R.connect(ownerA).allowFunction(
-      roleP,
-      Raddr,
-      R.interface.getFunction("setAllowance")!.selector,
-      [],
-      ExecutionOptions.None
-    )
-    // the Safe owns R from here on
-    await R.connect(ownerA).transferOwnership(safeA)
+      const K = randomKey()
+      const roleP = randomKey()
+      const Y = privateKeyToAccount(generatePrivateKey()).address
+      await R.write.grantRole([member.account.address, roleP, 0n, 0n, 0n], {
+        account: ownerA.account,
+      })
+      await R.write.setDefaultRole([member.account.address, roleP], {
+        account: ownerA.account,
+      })
+      await R.write.scopeTarget([roleP, Y], { account: ownerA.account })
+      await R.write.allowTarget(
+        [
+          roleP,
+          Y,
+          [
+            {
+              parent: 0,
+              paramType: Encoding.EtherValue,
+              operator: Operator.WithinAllowance,
+              compValue: K,
+            },
+          ],
+          ExecutionOptions.Send,
+        ],
+        { account: ownerA.account }
+      )
+      await R.write.scopeTarget([roleP, Raddr], { account: ownerA.account })
+      await R.write.allowFunction(
+        [
+          roleP,
+          Raddr,
+          toFunctionSelector(
+            "setAllowance(bytes32,uint128,uint128,uint128,uint64,uint64)"
+          ),
+          [],
+          ExecutionOptions.None,
+        ],
+        { account: ownerA.account }
+      )
 
-    const batch = encodeMultiSend([
-      {
-        to: R.target as string,
-        value: 0n,
-        data: R.interface.encodeFunctionData("setAllowance", [
-          K,
-          0,
-          0,
-          0,
-          0,
-          0,
-        ]),
-        operation: 0,
-      },
-      { to: Y, value: 10n, data: "0x", operation: 0 },
-    ])
-    await R.connect(member).execTransactionWithRole(
-      await multiSend.getAddress(),
-      0,
-      batch,
-      1,
-      roleP,
-      true
-    )
+      /** A batch setting K to `balance`, then sending 10 to Y. */
+      const setThenSend = (balance: bigint | number) =>
+        encodeMultiSend([
+          {
+            to: Raddr,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: R.abi,
+              functionName: "setAllowance",
+              args: [K, BigInt(balance), 0n, 0n, 0n, 0n],
+            }),
+            operation: 0,
+          },
+          { to: Y, value: 10n, data: "0x", operation: 0 },
+        ])
 
-    // In order, the batch sets K to 0 and then spends 10 from it, which
-    // should not pass. Both ran, and settlement wrote 100 - 10.
-    expect(await ethers.provider.getBalance(Y)).to.equal(10n)
-    expect((await R.allowances(K)).balance).to.equal(90n)
+      return {
+        ownerA,
+        member,
+        publicClient,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      }
+    }
+
+    it("reverts when the batch lowered the allowance below its consumption, on either entrypoint", async () => {
+      const {
+        ownerA,
+        member,
+        publicClient,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.write.setAllowance([K, 100n, 0n, 0n, 0n, 0n], {
+        account: ownerA.account,
+      })
+      await R.write.transferOwnership([safeA], { account: ownerA.account })
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        R.write.execTransactionWithRole(
+          [multiSendAddr, 0n, setThenSend(0), 1, roleP],
+          { account: member.account }
+        ),
+        R,
+        "AllowanceExceeded",
+        [K]
+      )
+      // settlement reverts: no `false` from the IAvatar entrypoint either
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        R.write.execTransactionFromModule(
+          [multiSendAddr, 0n, setThenSend(0), 1],
+          { account: member.account }
+        ),
+        R,
+        "AllowanceExceeded",
+        [K]
+      )
+      assert.equal(await publicClient.getBalance({ address: Y }), 0n)
+      assert.equal((await R.read.allowances([K]))[3], 100n)
+    })
+
+    it("deducts from the balance the batch set, not the one before it", async () => {
+      const {
+        ownerA,
+        member,
+        publicClient,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.write.setAllowance([K, 100n, 0n, 0n, 0n, 0n], {
+        account: ownerA.account,
+      })
+      await R.write.transferOwnership([safeA], { account: ownerA.account })
+
+      // 50 - 10, not 100 - 10
+      await R.write.execTransactionWithRole(
+        [multiSendAddr, 0n, setThenSend(50), 1, roleP],
+        { account: member.account }
+      )
+      assert.equal(await publicClient.getBalance({ address: Y }), 10n)
+      assert.equal((await R.read.allowances([K]))[3], 40n)
+    })
+
+    it("authorizes against the balance before execution, which a raise in the batch cannot help", async () => {
+      const {
+        ownerA,
+        member,
+        publicClient,
+        safeA,
+        R,
+        multiSendAddr,
+        K,
+        roleP,
+        Y,
+        setThenSend,
+      } = await setup()
+      await R.write.setAllowance([K, 5n, 0n, 0n, 0n, 0n], {
+        account: ownerA.account,
+      })
+      await R.write.transferOwnership([safeA], { account: ownerA.account })
+
+      await viem.assertions.revertWithCustomError(
+        R.write.execTransactionWithRole(
+          [multiSendAddr, 0n, setThenSend(100), 1, roleP],
+          { account: member.account }
+        ),
+        R,
+        "ConditionViolation"
+      )
+      assert.equal(await publicClient.getBalance({ address: Y }), 0n)
+      assert.equal((await R.read.allowances([K]))[3], 5n)
+    })
   })
 
-  it("settlement restores a limited membership the executed call revoked", async () => {
-    await deployMastercopies(ethers)
-    const [ownerA, member] = await ethers.getSigners()
-    const { safe: safeA, roles: R } = await safeWithRoles(ownerA)
-    const Raddr = await R.getAddress()
-    const roleP = randomKey()
-    const memberAddr = await member.getAddress()
-    await R.connect(ownerA).grantRole(memberAddr, roleP, 0, 0, 5)
-    await R.connect(ownerA).scopeTarget(roleP, Raddr)
-    await R.connect(ownerA).allowFunction(
-      roleP,
-      Raddr,
-      R.interface.getFunction("revokeRole")!.selector,
-      [],
-      ExecutionOptions.None
-    )
-    await R.connect(ownerA).transferOwnership(safeA)
+  describe("settlement does not restore a limited membership the executed batch revoked", () => {
+    /** Role P (5 uses) sends ether to Y and may call R.revokeRole; the Safe
+     *  owns R. */
+    async function setup() {
+      const [ownerA, member] = await viem.getWalletClients()
+      const publicClient = await viem.getPublicClient()
+      const { safe: safeA, roles: R } = await safeWithRoles(viem, ownerA)
+      const Raddr = R.address
+      await ownerA.sendTransaction({ to: safeA, value: parseEther("1") })
 
-    await R.connect(member).execTransactionWithRole(
-      Raddr,
-      0,
-      R.interface.encodeFunctionData("revokeRole", [memberAddr, roleP]),
-      0,
-      roleP,
-      true
-    )
-    // revoked by the call, restored (with one use less) by settlement
-    expect(await R.isMember(roleP, memberAddr)).to.equal(true)
+      const multiSendAddr = await deployMultiSend(viem, R, ownerA)
+      const reverter = (await viem.deployContract("Reverter")).address
+
+      const roleP = randomKey()
+      const memberAddr = member.account.address
+      const Y = privateKeyToAccount(generatePrivateKey()).address
+      await R.write.grantRole([memberAddr, roleP, 0n, 0n, 5n], {
+        account: ownerA.account,
+      })
+      for (const t of [Y, reverter]) {
+        await R.write.scopeTarget([roleP, t], { account: ownerA.account })
+        await R.write.allowTarget([roleP, t, [], ExecutionOptions.Send], {
+          account: ownerA.account,
+        })
+      }
+      await R.write.scopeTarget([roleP, Raddr], { account: ownerA.account })
+      await R.write.allowFunction(
+        [
+          roleP,
+          Raddr,
+          toFunctionSelector("revokeRole(address,bytes32)"),
+          [],
+          ExecutionOptions.None,
+        ],
+        { account: ownerA.account }
+      )
+      await R.write.transferOwnership([safeA], { account: ownerA.account })
+
+      /** A batch sending 10 to Y and revoking the member's role, then
+       *  calling `last` if given. */
+      const sendRevoke = (last?: Address) =>
+        encodeMultiSend([
+          { to: Y, value: 10n, data: "0x", operation: 0 },
+          {
+            to: Raddr,
+            value: 0n,
+            data: encodeFunctionData({
+              abi: R.abi,
+              functionName: "revokeRole",
+              args: [memberAddr, roleP],
+            }),
+            operation: 0,
+          },
+          ...(last
+            ? [{ to: last, value: 0n, data: "0x" as Hex, operation: 0 }]
+            : []),
+        ])
+      const exec = (batch: Hex) =>
+        R.write.execTransactionWithRole([multiSendAddr, 0n, batch, 1, roleP], {
+          account: member.account,
+        })
+
+      return {
+        R,
+        publicClient,
+        memberAddr,
+        roleP,
+        Y,
+        reverter,
+        sendRevoke,
+        exec,
+      }
+    }
+
+    it("the revocation stands after the batch", async () => {
+      const { R, publicClient, memberAddr, roleP, Y, sendRevoke, exec } =
+        await setup()
+
+      const hash = await exec(sendRevoke())
+      await viem.assertions.emitWithArgs(hash, R, "RevokeRole", [
+        roleP,
+        memberAddr,
+      ])
+      await assertNotEmitted(viem, hash, R, "UpdateRole")
+      assert.equal(await publicClient.getBalance({ address: Y }), 10n)
+      assert.deepEqual(await R.read.membershipOf([memberAddr, roleP]), [
+        false,
+        0n,
+        0n,
+        0n,
+      ])
+    })
+
+    it("a later entry reverting rolls back the revocation and the transfer", async () => {
+      const {
+        R,
+        publicClient,
+        memberAddr,
+        roleP,
+        Y,
+        reverter,
+        sendRevoke,
+        exec,
+      } = await setup()
+
+      await viem.assertions.revertWithCustomError(
+        exec(sendRevoke(reverter)),
+        R,
+        "ModuleTransactionFailed"
+      )
+      assert.equal(await publicClient.getBalance({ address: Y }), 0n)
+      assert.equal((await R.read.membershipOf([memberAddr, roleP]))[3], 5n)
+    })
   })
 })

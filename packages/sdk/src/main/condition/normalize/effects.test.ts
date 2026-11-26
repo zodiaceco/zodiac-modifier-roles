@@ -165,9 +165,9 @@ suite(
       expect(normalizeCondition(backward)).toEqual(backward)
     })
 
-    it("does not pad: checks of a prefix of one struct stay as they are", () => {
+    it("leaves the fields of a struct as written next to an ether value check", () => {
       // two checks of one dynamic struct ((bytes,uint), (bytes,uint,uint,uint)),
-      // the first with an ether value check in front
+      // each listing every field, the first with an ether value check in front
       const ether: Condition = {
         paramType: Encoding.EtherValue,
         operator: Operator.LessThan,
@@ -176,7 +176,11 @@ suite(
       const dyn = pass(Encoding.Dynamic)
       const result = normalizeCondition(
         or(
-          tuple(ether, tuple(dyn, eq(1)), tuple(dyn, eq(2), eq(3))),
+          tuple(
+            ether,
+            tuple(dyn, eq(1)),
+            tuple(dyn, eq(2), eq(3), pass(Encoding.Static))
+          ),
           tuple(tuple(dyn, eq(4)), tuple(dyn, eq(5), eq(6), eq(7)))
         )
       )
@@ -184,7 +188,7 @@ suite(
         (b) => b.children![0].paramType === Encoding.EtherValue
       )!
       expect(f.children![1].children).toHaveLength(2)
-      expect(f.children![2].children).toHaveLength(3)
+      expect(f.children![2].children).toHaveLength(4)
     })
 
     it("never pads a static tuple: later parameters would move", () => {
@@ -217,16 +221,11 @@ suite(
       expect(result.children).toContainEqual(zip)
     })
 
-    it("keeps a Zip after the check that describes the value when sorting", () => {
-      // And[EqualTo(bytes), Zip]: the And's size is its first child's that
-      // fits, and the SDK check requires the Zip after the described child
+    it("sorts a Zip like any other child (it has no size where it sits)", () => {
       const zip = zipEvery(pass(Encoding.Dynamic), pass(Encoding.Static))
-      const input = calldata(pluckArray(1), and(bytesEq("0x1234"), zip))
-      const inner = normalizeCondition(input).children!.find(
-        (c) => c.operator === Operator.And
-      )!
-      expect(inner.children![0].paramType).toBe(Encoding.Dynamic)
-      expect(inner.children![1]).toEqual(zip)
+      const a = calldata(pluckArray(1), and(bytesEq("0x1234"), zip))
+      const b = calldata(pluckArray(1), and(zip, bytesEq("0x1234")))
+      expect(normalizeCondition(a)).toEqual(normalizeCondition(b))
     })
 
     it("does not merge Or branches whose differing parameters have different types", () => {

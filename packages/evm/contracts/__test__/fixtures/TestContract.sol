@@ -17,10 +17,16 @@ contract TestContract {
         emit Invoked(bytes4(0));
     }
 
-    function fnThatReverts() public pure {
-        revert AnError();
+    /// @dev Reverts with `data` as the revert data, verbatim.
+    function revertWith(bytes calldata data) external pure {
+        assembly {
+            calldatacopy(0, data.offset, data.length)
+            revert(0, data.length)
+        }
     }
 
+    /// @dev Returns `a`, or reverts with AnError() if `maybe`: a parameter
+    ///      for conditions to charge, and a switch for the call to fail.
     function fnThatMaybeReverts(
         uint256 a,
         bool maybe

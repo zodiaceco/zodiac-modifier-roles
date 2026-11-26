@@ -1,6 +1,13 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface, solidityPacked } from "ethers";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+} from "viem";
 
 import { network } from "hardhat";
 
@@ -14,13 +21,12 @@ import {
   packConditions,
 } from "../utils.js";
 
-const defaultAbiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupDynamicParam, setupOneParamSigned } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupDynamicParam = setupFn("function fn(bytes)");
+const setupOneParamSigned = setupFn("function fn(int256)");
 
 describe("Operator - SignedIntLessThan", () => {
   after(async () => {
@@ -28,8 +34,7 @@ describe("Operator - SignedIntLessThan", () => {
   });
 
   it("passes when signed value < compValue", async () => {
-    const { roles, allowFunction, invoke } =
-      await loadFixture(setupOneParamSigned);
+    const { allowFunction, invoke } = await loadFixture(setupOneParamSigned);
 
     await allowFunction(
       flattenCondition({
@@ -39,14 +44,16 @@ describe("Operator - SignedIntLessThan", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.SignedIntLessThan,
-            compValue: defaultAbiCoder.encode(["int256"], [100]),
+            compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+              100n,
+            ]),
           },
         ],
       }),
     );
 
     // 99 < 100 passes
-    await expect(invoke(99)).to.not.be.revert(ethers);
+    await invoke(99n);
   });
 
   it("fails when signed value >= compValue", async () => {
@@ -61,29 +68,29 @@ describe("Operator - SignedIntLessThan", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.SignedIntLessThan,
-            compValue: defaultAbiCoder.encode(["int256"], [100]),
+            compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+              100n,
+            ]),
           },
         ],
       }),
     );
 
     // 100 == 100 fails
-    await expect(invoke(100))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(100n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
 
     // 101 > 100 fails
-    await expect(invoke(101))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(101n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
   });
 
   it("handles negative numbers correctly", async () => {
@@ -99,44 +106,43 @@ describe("Operator - SignedIntLessThan", () => {
           {
             paramType: Encoding.Static,
             operator: Operator.SignedIntLessThan,
-            compValue: defaultAbiCoder.encode(["int256"], [-50]),
+            compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+              -50n,
+            ]),
           },
         ],
       }),
     );
 
     // -51 < -50 passes
-    await expect(invoke(-51)).to.not.be.revert(ethers);
+    await invoke(-51n);
 
     // -100 < -50 passes
-    await expect(invoke(-100)).to.not.be.revert(ethers);
+    await invoke(-100n);
 
     // -50 == -50 fails
-    await expect(invoke(-50))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(-50n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
 
     // -49 > -50 fails
-    await expect(invoke(-49))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(-49n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
 
     // 0 > -50 fails
-    await expect(invoke(0))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        1,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(0n),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 1n, anyValue],
+    );
   });
 
   it("integrates with Slice operator", async () => {
@@ -152,12 +158,14 @@ describe("Operator - SignedIntLessThan", () => {
           {
             paramType: Encoding.Dynamic,
             operator: Operator.Slice,
-            compValue: solidityPacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
+            compValue: encodePacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
             children: [
               {
                 paramType: Encoding.Static,
                 operator: Operator.SignedIntLessThan,
-                compValue: defaultAbiCoder.encode(["int256"], [100]),
+                compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+                  100n,
+                ]),
               },
             ],
           },
@@ -166,16 +174,29 @@ describe("Operator - SignedIntLessThan", () => {
     );
 
     // 0x00000063 = 99 < 100 passes
-    await expect(invoke("0x00000063")).to.not.be.revert(ethers);
+    await invoke("0x00000063");
 
     // 0x00000064 = 100 >= 100 fails
-    await expect(invoke("0x00000064"))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        2,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke("0x00000064"),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
+
+    // 0xffffffff = -1 < 100 passes (the window is sign-extended)
+    await invoke("0xffffffff");
+
+    // 0x80000000 = int32 min < 100 passes
+    await invoke("0x80000000");
+
+    // 0x7fffffff = int32 max >= 100 fails
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke("0x7fffffff"),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
 
     // 2. Slice 32 bytes (full int256) at offset 0, then SignedIntLessThan -100
     await allowFunction(
@@ -186,12 +207,14 @@ describe("Operator - SignedIntLessThan", () => {
           {
             paramType: Encoding.Dynamic,
             operator: Operator.Slice,
-            compValue: solidityPacked(["uint16", "uint8"], [0, 32]), // shift=0, size=32
+            compValue: encodePacked(["uint16", "uint8"], [0, 32]), // shift=0, size=32
             children: [
               {
                 paramType: Encoding.Static,
                 operator: Operator.SignedIntLessThan,
-                compValue: defaultAbiCoder.encode(["int256"], [-100]),
+                compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+                  -100n,
+                ]),
               },
             ],
           },
@@ -200,35 +223,84 @@ describe("Operator - SignedIntLessThan", () => {
     );
 
     // -150 (32 bytes) < -100 -> Pass
-    const neg150 = solidityPacked(["int256"], [-150]);
-    await expect(invoke(neg150)).to.not.be.revert(ethers);
+    const neg150 = encodePacked(["int256"], [-150n]);
+    await invoke(neg150);
 
     // -100 (32 bytes) < -100 -> Fail (Equal)
-    const neg100 = solidityPacked(["int256"], [-100]);
-    await expect(invoke(neg100))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        2,
-        anyValue,
-      );
+    const neg100 = encodePacked(["int256"], [-100n]);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(neg100),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
 
     // -99 (32 bytes) < -100 -> Fail (Greater)
-    const neg99 = solidityPacked(["int256"], [-99]);
-    await expect(invoke(neg99))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        2,
-        anyValue,
-      );
+    const neg99 = encodePacked(["int256"], [-99n]);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(neg99),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
+
+    // 3. Slice 4 bytes (packed int32) at offset 0, then SignedIntLessThan -100
+    await allowFunction(
+      flattenCondition({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        children: [
+          {
+            paramType: Encoding.Dynamic,
+            operator: Operator.Slice,
+            compValue: encodePacked(["uint16", "uint8"], [0, 4]), // shift=0, size=4
+            children: [
+              {
+                paramType: Encoding.Static,
+                operator: Operator.SignedIntLessThan,
+                compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+                  -100n,
+                ]),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    // -150 (4 bytes) < -100 -> Pass
+    await invoke(encodePacked(["int32"], [-150]));
+
+    // -100 (4 bytes) < -100 -> Fail (Equal)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(encodePacked(["int32"], [-100])),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
+
+    // -99 (4 bytes) < -100 -> Fail (Greater)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(encodePacked(["int32"], [-99])),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
+
+    // 50 (4 bytes) < -100 -> Fail (Greater)
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(encodePacked(["int32"], [50])),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 2n, anyValue],
+    );
   });
 
   it("compares ether value (msg.value)", async () => {
     const { roles, member, testContractAddress, roleKey } =
       await loadFixture(setupTestContract);
-    const iface = new Interface(["function fn()"]);
-    const fn = iface.getFunction("fn")!;
+    const abi = parseAbi(["function fn()"]);
+    const selector = toFunctionSelector(abi[0]);
 
     // SignedIntLessThan on EtherValue: msg.value must be < 1000 wei
     const packed = await packConditions(
@@ -236,46 +308,43 @@ describe("Operator - SignedIntLessThan", () => {
       flattenCondition({
         paramType: Encoding.EtherValue,
         operator: Operator.SignedIntLessThan,
-        compValue: defaultAbiCoder.encode(["int256"], [1000]),
+        compValue: encodeAbiParameters(parseAbiParameters("int256"), [1000n]),
       }),
     );
-    await roles.allowFunctionPacked(
+    await roles.write.allowFunctionPacked([
       roleKey,
       testContractAddress,
-      fn.selector,
+      selector,
       packed,
       ExecutionOptions.Send,
-    );
+    ]);
 
     // 999 < 1000 passes
-    await expect(
-      roles
-        .connect(member)
-        .execTransactionFromModule(
-          testContractAddress,
-          999,
-          iface.encodeFunctionData(fn),
-          0,
-        ),
-    ).to.not.be.revert(ethers);
+    await roles.write.execTransactionFromModule(
+      [
+        testContractAddress,
+        999n,
+        encodeFunctionData({ abi, functionName: "fn" }),
+        0,
+      ],
+      { account: member.account },
+    );
 
     // 1000 >= 1000 fails
-    await expect(
-      roles
-        .connect(member)
-        .execTransactionFromModule(
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      roles.write.execTransactionFromModule(
+        [
           testContractAddress,
-          1000,
-          iface.encodeFunctionData(fn),
+          1000n,
+          encodeFunctionData({ abi, functionName: "fn" }),
           0,
-        ),
-    )
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ParameterGreaterThanAllowed,
-        0n,
-        anyValue,
-      );
+        ],
+        { account: member.account },
+      ),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ParameterGreaterThanAllowed, 0n, anyValue],
+    );
   });
 
   describe("violation context", () => {
@@ -291,19 +360,24 @@ describe("Operator - SignedIntLessThan", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.SignedIntLessThan,
-              compValue: defaultAbiCoder.encode(["int256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+                100n,
+              ]),
             },
           ],
         }),
       );
 
-      await expect(invoke(200))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(200n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterGreaterThanAllowed,
-          1, // SignedIntLessThan node at BFS index 1
+          1n, // SignedIntLessThan node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -318,80 +392,24 @@ describe("Operator - SignedIntLessThan", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.SignedIntLessThan,
-              compValue: defaultAbiCoder.encode(["int256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("int256"), [
+                100n,
+              ]),
             },
           ],
         }),
       );
 
-      await expect(invoke(200))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(200n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterGreaterThanAllowed,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4
-        );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.None,
-        Encoding.Dynamic,
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-      ]) {
-        await expect(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.SignedIntLessThan,
-              compValue: defaultAbiCoder.encode(["int256"], [100]),
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.SignedIntLessThan,
-            compValue: "0x0000", // Not 32 bytes
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
-
-    it("reverts LeafNodeCannotHaveChildren when SignedIntLessThan has children", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.SignedIntLessThan,
-            compValue: defaultAbiCoder.encode(["int256"], [100]),
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+          4n, // calldataOffset: parameter starts at byte 4
+        ],
+      );
     });
   });
 });

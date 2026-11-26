@@ -1,32 +1,43 @@
-import { expect } from "chai"
+import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
+import { after, describe, it } from "node:test"
 import {
-  AbiCoder,
-  Interface,
-  ZeroAddress,
-  ZeroHash,
+  type Address,
+  type Hex,
+  type PublicClient,
+  type WalletClient,
   concat,
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
   keccak256,
-  randomBytes,
-  solidityPacked,
-  toUtf8Bytes,
-} from "ethers"
-import type { Signer } from "ethers"
+  parseAbi,
+  toBytes,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem"
 import { network } from "hardhat"
-import { createPublicClient, custom } from "viem"
-import { hardhat } from "viem/chains"
 
-import { iface as ifaceFallback } from "./setup/deploy-mastercopies/fallbackHandler.js"
-import { iface as ifaceSafe } from "./setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi } from "./setup/safe-deployments/index.js"
 import { deploySafe } from "./setup/safe.js"
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
 
 const connection = await network.create()
-const { ethers, networkHelpers, provider } = connection
+const { viem, networkHelpers } = connection
 const { loadFixture } = networkHelpers
 
 const EIP712_MAGIC_VALUE = "0x1626ba7e"
 
-const SAFE_MSG_TYPEHASH = keccak256(toUtf8Bytes("SafeMessage(bytes message)"))
+const SAFE_MSG_TYPEHASH = keccak256(toBytes("SafeMessage(bytes message)"))
+
+const isValidSignatureBytes32Abi = parseAbi([
+  "function isValidSignature(bytes32 _dataHash, bytes _signature) view returns (bytes4)",
+])
+const safeDomainSeparatorAbi = parseAbi([
+  "function domainSeparator() view returns (bytes32)",
+])
+const personalSignAbi = parseAbi(["function personalSign(bytes message)"])
 
 // It's not possible to verify a contract signature (on-chain, "0x") directly
 // with viem's standard tooling because it throws on "0x" signatures.
@@ -39,147 +50,141 @@ describe("personal_sign", () => {
   })
 
   async function setup() {
-    await deployMastercopies(ethers)
+    await deployMastercopies(viem)
 
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
+    const lib = await viem.deployContract("SignTypedMessageLib")
 
-    const [owner, relayer] = await ethers.getSigners()
+    const [owner, relayer] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
 
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
         creationNonce: BigInt(randomHash()),
       },
       owner
     )
 
-    return { owner, relayer, safe, lib: await lib.getAddress() }
+    return { owner, relayer, publicClient, safe, lib: lib.address }
   }
 
   it("isValidSignature with off-chain EOA signature", async () => {
-    const { owner, relayer, safe, lib } = await loadFixture(setup)
+    const { owner, publicClient, safe } = await loadFixture(setup)
 
     const plainMessage = "hello sir"
-    const { dataHash } = await computeSafeMessageHash(plainMessage, safe, owner)
+    const { dataHash } = await computeSafeMessageHash(
+      plainMessage,
+      safe,
+      publicClient
+    )
 
     // EOA signs the SafeMessage typed data (normal ecrecover, v=27/28)
-    const chainId = (await owner.provider!.getNetwork()).chainId
-    const signature = await owner.signTypedData(
-      { chainId, verifyingContract: safe as `0x${string}` },
-      { SafeMessage: [{ name: "message", type: "bytes" }] },
-      { message: AbiCoder.defaultAbiCoder().encode(["bytes32"], [dataHash]) }
-    )
+    const chainId = await publicClient.getChainId()
+    const signature = await owner.signTypedData({
+      domain: { chainId, verifyingContract: safe },
+      types: { SafeMessage: [{ name: "message", type: "bytes" }] },
+      primaryType: "SafeMessage",
+      message: {
+        message: encodeAbiParameters([{ type: "bytes32" }], [dataHash]),
+      },
+    })
 
     // viem verifyMessage targeting the Safe (EIP-1271)
-    const client = createPublicClient({
-      chain: hardhat,
-      transport: custom(provider),
-    })
-    const isValid = await client.verifyMessage({
-      address: safe as `0x${string}`,
+    const isValid = await publicClient.verifyMessage({
+      address: safe,
       message: plainMessage,
-      signature: signature as `0x${string}`,
+      signature,
     })
-    expect(isValid).to.be.true
+    assert.equal(isValid, true)
 
-    // isValidSignature directly via ethers
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes32,bytes)",
-      await relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes32,bytes)",
-          [dataHash, signature]
-        ),
-      })
-    )
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE])
+    // isValidSignature directly via viem
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytes32Abi,
+      functionName: "isValidSignature",
+      args: [dataHash, signature],
+    })
+    assert.equal(result, EIP712_MAGIC_VALUE)
   })
 
   it("isValidSignature with on-chain signMessage", async () => {
-    const { owner, relayer, safe, lib } = await loadFixture(setup)
+    const { owner, publicClient, safe, lib } = await loadFixture(setup)
 
     const plainMessage = "hello sir"
-    const { dataHash } = await computeSafeMessageHash(plainMessage, safe, owner)
+    const { dataHash } = await computeSafeMessageHash(
+      plainMessage,
+      safe,
+      publicClient
+    )
 
     // Before signing on-chain, isValidSignature with 0x should revert
-    await expect(
-      relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes32,bytes)",
-          [dataHash, "0x"]
-        ),
+    await viem.assertions.revert(
+      publicClient.readContract({
+        address: safe,
+        abi: isValidSignatureBytes32Abi,
+        functionName: "isValidSignature",
+        args: [dataHash, "0x"],
       })
-    ).to.be.revert(ethers)
+    )
 
     // Safe calls signMessage("hello sir") via SignTypedMessageLib
     await owner.sendTransaction(
       await encodePersonalSign({ owner, safe, lib, message: plainMessage })
     )
 
-    // Sanity check: ethers-based isValidSignature with 0x works
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes32,bytes)",
-      await relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes32,bytes)",
-          [dataHash, "0x"]
-        ),
-      })
-    )
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE])
+    // Sanity check: direct isValidSignature with 0x works
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytes32Abi,
+      functionName: "isValidSignature",
+      args: [dataHash, "0x"],
+    })
+    assert.equal(result, EIP712_MAGIC_VALUE)
 
     // viem's verifyMessage throws on "0x" signature, so this returns false
-    const client = createPublicClient({
-      chain: hardhat,
-      transport: custom(provider),
-    })
-    const isValid = await client.verifyMessage({
-      address: safe as `0x${string}`,
+    const isValid = await publicClient.verifyMessage({
+      address: safe,
       message: plainMessage,
       signature: "0x",
     })
-    expect(isValid).to.be.false
+    assert.equal(isValid, false)
   })
 })
 
 async function computeSafeMessageHash(
   plainMessage: string,
-  safe: string,
-  caller: Signer
+  safe: Address,
+  publicClient: PublicClient
 ) {
   // EIP-191 personal_sign envelope
   const eip191Envelope = concat([
-    toUtf8Bytes("\x19Ethereum Signed Message:\n"),
-    toUtf8Bytes(String(toUtf8Bytes(plainMessage).length)),
-    toUtf8Bytes(plainMessage),
+    toBytes("\x19Ethereum Signed Message:\n"),
+    toBytes(String(toBytes(plainMessage).length)),
+    toBytes(plainMessage),
   ])
   const dataHash = keccak256(eip191Envelope)
 
   // isValidSignature(bytes32 _dataHash, ...) internally computes
   // message = abi.encode(_dataHash) before wrapping with Safe's domain
-  const message = AbiCoder.defaultAbiCoder().encode(["bytes32"], [dataHash])
+  const message = encodeAbiParameters([{ type: "bytes32" }], [dataHash])
 
-  const domainSeparator = await caller.call({
-    to: safe,
-    data: ifaceSafe.encodeFunctionData("domainSeparator"),
+  const domainSeparator = await publicClient.readContract({
+    address: safe,
+    abi: safeDomainSeparatorAbi,
+    functionName: "domainSeparator",
   })
 
   const safeMessageHash = keccak256(
-    solidityPacked(
+    encodePacked(
       ["bytes1", "bytes1", "bytes32", "bytes32"],
       [
         "0x19",
         "0x01",
         domainSeparator,
         keccak256(
-          AbiCoder.defaultAbiCoder().encode(
-            ["bytes32", "bytes32"],
+          encodeAbiParameters(
+            [{ type: "bytes32" }, { type: "bytes32" }],
             [SAFE_MSG_TYPEHASH, keccak256(message)]
           )
         ),
@@ -196,42 +201,49 @@ async function encodePersonalSign({
   lib,
   message,
 }: {
-  owner: Signer
-  safe: string
-  lib: string
+  owner: WalletClient
+  safe: Address
+  lib: Address
   message: string
 }) {
-  const iface = Interface.from(["function personalSign(bytes message)"])
+  const data = encodeFunctionData({
+    abi: safeAbi,
+    functionName: "execTransaction",
+    args: [
+      lib,
+      0n,
+      encodeFunctionData({
+        abi: personalSignAbi,
+        functionName: "personalSign",
+        args: [toHex(toBytes(message))],
+      }),
+      1, // Delegatecall
+      0n,
+      0n,
+      0n,
+      zeroAddress,
+      zeroAddress,
+      createPreApprovedSignature(owner.account!.address),
+    ],
+  })
 
-  const data = ifaceSafe.encodeFunctionData("execTransaction", [
-    lib,
-    0,
-    iface.encodeFunctionData("personalSign", [toUtf8Bytes(message)]),
-    1, // Delegatecall
-    0n,
-    0n,
-    0n,
-    ZeroAddress,
-    ZeroAddress,
-    createPreApprovedSignature(await owner.getAddress()),
-  ])
-
-  return { to: safe, data, value: 0n }
+  return {
+    account: owner.account!,
+    chain: owner.chain,
+    to: safe,
+    data,
+    value: 0n,
+  }
 }
 
-const createPreApprovedSignature = (approver: string) => {
+const createPreApprovedSignature = (approver: Address) => {
   return concat([
-    AbiCoder.defaultAbiCoder().encode(["address"], [approver]),
-    ZeroHash,
+    encodeAbiParameters([{ type: "address" }], [approver]),
+    zeroHash,
     "0x01",
   ])
 }
 
-function randomHash(): string {
-  return (
-    "0x" +
-    Array.from(randomBytes(32))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  )
+function randomHash(): Hex {
+  return toHex(randomBytes(32))
 }

@@ -1,9 +1,7 @@
 import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
-import type { NetworkConnection } from "hardhat/types/network";
-import { ZeroHash } from "ethers";
+import type { LinkReferences } from "hardhat/types/artifacts";
+import { getAddress, zeroHash } from "viem";
 import { predictSingletonAddress } from "@gnosis-guild/zodiac-core";
-
-import "@nomicfoundation/hardhat-ethers";
 
 const AddressOne = "0x0000000000000000000000000000000000000001";
 
@@ -22,26 +20,59 @@ export type MastercopyDeployment = {
   salt: string;
 };
 
+export function linkBytecode(
+  bytecode: string,
+  linkReferences: LinkReferences,
+  libraries: Record<string, string>,
+): string {
+  let linked = bytecode;
+  for (const names of Object.values(linkReferences)) {
+    for (const [name, refs] of Object.entries(names)) {
+      const address = libraries[name];
+      if (!address) {
+        throw new Error(`Missing library address for ${name}`);
+      }
+      const hexAddress = getAddress(address).slice(2).toLowerCase();
+      for (const { start, length } of refs) {
+        const offset = 2 + start * 2;
+        const hexLen = length * 2;
+        if (hexAddress.length !== hexLen) {
+          throw new Error(
+            `Unexpected link reference length ${length} for ${name}`,
+          );
+        }
+        linked =
+          linked.slice(0, offset) + hexAddress + linked.slice(offset + hexLen);
+      }
+    }
+  }
+  return linked;
+}
+
 export async function buildMastercopyDeployments(
   hre: HardhatRuntimeEnvironment,
-  connection: NetworkConnection,
 ): Promise<MastercopyDeployment[]> {
-  const conditionStorer = await readArtifact({
+  const integrity = await readArtifact({
     hre,
-    contractName: "ConditionStorer",
-    contract: "contracts/core/serialize/ConditionStorer.sol:ConditionStorer",
+    contractName: "Integrity",
+    contract: "contracts/evaluator/Integrity.sol:Integrity",
   });
-  const withinRatioChecker = await readArtifact({
-    hre,
-    contractName: "WithinRatioChecker",
-    contract:
-      "contracts/core/evaluate/WithinRatioChecker.sol:WithinRatioChecker",
-  });
-  const customConditionChecker = await readArtifact({
-    hre,
-    contractName: "CustomConditionChecker",
-    contract:
-      "contracts/core/evaluate/CustomConditionChecker.sol:CustomConditionChecker",
+  // Evaluator links Integrity: its bytecode, and so its address, depend on
+  // where Integrity is deployed.
+  const evaluatorLibraries = { Integrity: integrity.address };
+  const evaluatorArtifact = await hre.artifacts.readArtifact(
+    "contracts/evaluator/Evaluator.sol:Evaluator",
+  );
+  const evaluator = buildDeployment({
+    contractName: "Evaluator",
+    contract: "contracts/evaluator/Evaluator.sol:Evaluator",
+    bytecode: linkBytecode(
+      evaluatorArtifact.bytecode,
+      evaluatorArtifact.linkReferences,
+      evaluatorLibraries,
+    ),
+    constructorArgs: { types: [], values: [] },
+    libraries: evaluatorLibraries,
   });
   const avatarIsOwnerOfERC721 = await readArtifact({
     hre,
@@ -62,29 +93,23 @@ export async function buildMastercopyDeployments(
       "contracts/periphery/signing/SignTypedMessageLib.sol:SignTypedMessageLib",
   });
 
-  const libraries = {
-    ConditionStorer: conditionStorer.address,
-    WithinRatioChecker: withinRatioChecker.address,
-    CustomConditionChecker: customConditionChecker.address,
-  };
-  const rolesFactory = await connection.ethers.getContractFactory("Roles", {
-    libraries,
-  });
+  const rolesArtifact = await hre.artifacts.readArtifact(
+    "contracts/Roles.sol:Roles",
+  );
   const roles = buildDeployment({
     contractName: "Roles",
     contract: "contracts/Roles.sol:Roles",
-    bytecode: rolesFactory.bytecode,
+    bytecode: rolesArtifact.bytecode,
     constructorArgs: {
-      types: ["address", "address", "address"],
-      values: [AddressOne, AddressOne, AddressOne],
+      types: ["address", "address", "address", "address"],
+      values: [AddressOne, AddressOne, AddressOne, AddressOne],
     },
-    libraries,
   });
 
+  // In deployment order: a library before the contract that links it.
   return [
-    conditionStorer,
-    withinRatioChecker,
-    customConditionChecker,
+    integrity,
+    evaluator,
     avatarIsOwnerOfERC721,
     multiSendUnwrapper,
     signTypedMessageLib,
@@ -117,7 +142,7 @@ function buildDeployment({
   constructorArgs,
   libraries,
 }: Omit<MastercopyDeployment, "address" | "salt">): MastercopyDeployment {
-  const salt = ZeroHash;
+  const salt = zeroHash;
   return {
     address: predictSingletonAddress({ bytecode, constructorArgs, salt }),
     bytecode,

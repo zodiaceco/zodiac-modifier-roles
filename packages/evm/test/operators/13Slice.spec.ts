@@ -1,9 +1,19 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, hexlify, randomBytes, solidityPacked } from "ethers";
-
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbiParameters,
+  toHex,
+  type Hex,
+} from "viem";
 
+import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../setup.js";
 import {
   Encoding,
@@ -13,25 +23,24 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 // compValue layout: 2 bytes shift + 1 byte size
 const encodeCompValue = (shift: number, size: number) =>
-  solidityPacked(["uint16", "uint8"], [shift, size]);
+  encodePacked(["uint16", "uint8"], [shift, size]);
 
-function replaceBytes(data: string, byteOffset: number, replacement: string) {
+function replaceBytes(data: Hex, byteOffset: number, replacement: Hex): Hex {
   const hex = data.slice(2);
   const replacementHex = replacement.slice(2);
   const start = byteOffset * 2;
   const end = start + replacementHex.length;
-  return `0x${hex.slice(0, start)}${replacementHex}${hex.slice(end)}`;
+  return `0x${hex.slice(0, start)}${replacementHex}${hex.slice(end)}` as Hex;
 }
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam } =
-  createSetup(connection);
+const { setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
 
 describe("Operator - Slice", () => {
   after(async () => {
@@ -57,7 +66,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0xdeadbeef]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xdeadbeefn],
+                  ),
                 },
               ],
             },
@@ -68,19 +80,23 @@ describe("Operator - Slice", () => {
 
       // bytes: [4 bytes prefix][0xdeadbeef][suffix]
       // Slice extracts bytes 4-7 which should equal 0xdeadbeef
-      await expect(invoke("0x00000000deadbeef00000000")).to.not.be.revert(
-        ethers,
-      );
+      await invoke("0x00000000deadbeef00000000");
 
       // Wrong value at the slice position
-      await expect(invoke("0x00000000cafebabe00000000"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x00000000cafebabe00000000"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, anyValue],
+      );
 
       // Value at wrong position (shift 0 instead of 4) - fails
-      await expect(invoke("0xdeadbeef0000000000000000"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xdeadbeef0000000000000000"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, anyValue],
+      );
     });
 
     it("extracts 1-byte size from compValue (size 1)", async () => {
@@ -102,7 +118,10 @@ describe("Operator - Slice", () => {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
                   // Single byte 0xab right-aligned to 32 bytes
-                  compValue: abiCoder.encode(["uint256"], [0xab]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xabn],
+                  ),
                 },
               ],
             },
@@ -112,12 +131,15 @@ describe("Operator - Slice", () => {
       );
 
       // bytes starting with 0xab - passes
-      await expect(invoke("0xab00000000000000")).to.not.be.revert(ethers);
+      await invoke("0xab00000000000000");
 
       // bytes starting with 0xcd - fails
-      await expect(invoke("0xcd00000000000000"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcd00000000000000"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, anyValue],
+      );
     });
 
     it("extracts 1-byte size from compValue (size 32)", async () => {
@@ -138,7 +160,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [12345]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [12345n],
+                  ),
                 },
               ],
             },
@@ -148,14 +173,17 @@ describe("Operator - Slice", () => {
       );
 
       // 32 bytes encoding 12345 - passes
-      await expect(
-        invoke(abiCoder.encode(["uint256"], [12345])),
-      ).to.not.be.revert(ethers);
+      await invoke(
+        encodeAbiParameters(parseAbiParameters("uint256"), [12345n]),
+      );
 
       // 32 bytes encoding different value - fails
-      await expect(invoke(abiCoder.encode(["uint256"], [12346])))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(encodeAbiParameters(parseAbiParameters("uint256"), [12346n])),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, anyValue],
+      );
     });
 
     it("rejects dynamic slices beyond the declared byte length", async () => {
@@ -175,7 +203,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0xdeadbeef]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xdeadbeefn],
+                  ),
                 },
               ],
             },
@@ -185,20 +216,24 @@ describe("Operator - Slice", () => {
       );
 
       const call = replaceBytes(
-        ethers.Interface.from(["function fn(bytes)"]).encodeFunctionData(fn, [
-          "0x01",
-        ]),
+        encodeFunctionData({
+          abi: [fn],
+          functionName: fn.name,
+          args: ["0x01"],
+        }),
         69,
         "0xdeadbeef",
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, call, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.CalldataOverflow, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, call, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, 1n, anyValue],
+      );
     });
   });
 
@@ -221,7 +256,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.GreaterThan,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
               ],
             },
@@ -231,26 +269,25 @@ describe("Operator - Slice", () => {
       );
 
       // Value 101 > 100 - child passes, Slice propagates success
-      await expect(invoke("0x00000065")).to.not.be.revert(ethers); // 101 in 4 bytes
+      await invoke("0x00000065"); // 101 in 4 bytes
 
       // Value 100 not > 100 - child fails with ParameterLessThanAllowed, Slice propagates
-      await expect(invoke("0x00000064")) // 100 in 4 bytes
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterLessThanAllowed,
-          2,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x00000064"), // 100 in 4 bytes
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterLessThanAllowed, 2n, anyValue],
+      );
     });
 
     it("propagates consumption from child", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupDynamicParam);
 
-      const allowanceKey = hexlify(randomBytes(32));
+      const allowanceKey = toHex(randomBytes(32));
 
       // Set up allowance of 100
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       // Slice 32 bytes, child consumes via WithinAllowance
       await allowFunction(
@@ -276,13 +313,11 @@ describe("Operator - Slice", () => {
       );
 
       // Consume 30 from sliced value
-      await expect(invoke(abiCoder.encode(["uint256"], [30]))).to.not.be.revert(
-        ethers,
-      );
+      await invoke(encodeAbiParameters(parseAbiParameters("uint256"), [30n]));
 
       // Consumption propagated through Slice - remaining is 70
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(70);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 70n);
     });
 
     it("frames a Bitmask child by the slice window", async () => {
@@ -314,14 +349,13 @@ describe("Operator - Slice", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke("0xdeadbeefcafe")).to.not.be.revert(ethers);
-      await expect(invoke("0xcafebabe1234"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.BitmaskNotAllowed,
-          anyValue,
-          anyValue,
-        );
+      await invoke("0xdeadbeefcafe");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcafebabe1234"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, anyValue, anyValue],
+      );
     });
 
     it("reverts BitmaskOverflow when a Bitmask child's mask exceeds the slice window", async () => {
@@ -354,9 +388,12 @@ describe("Operator - Slice", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke("0xdeadbeefcafe"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.BitmaskOverflow, anyValue, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xdeadbeefcafe"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskOverflow, anyValue, anyValue],
+      );
     });
 
     it("frames Bitmask under a Slice of a static operand", async () => {
@@ -384,21 +421,22 @@ describe("Operator - Slice", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(0xdeadbeef)).to.not.be.revert(ethers);
-      await expect(invoke(0xcafebabe))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.BitmaskNotAllowed,
-          anyValue,
-          anyValue,
-        );
+      await invoke(0xdeadbeef);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(0xcafebabe),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, anyValue, anyValue],
+      );
     });
 
     it("propagates the narrowed frame through nested slices", async () => {
-      const { roles, allowFunction, invoke } =
+      const { roles, roleKey, testContractAddress, selector, invoke } =
         await loadFixture(setupDynamicParam);
 
-      await allowFunction(
+      // Integrity rejects a Slice of a Slice: packed without it, to cover how it
+      // is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -424,17 +462,22 @@ describe("Operator - Slice", () => {
             },
           ],
         }),
-        ExecutionOptions.Both,
       );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
+        ExecutionOptions.Both,
+      ]);
 
-      await expect(invoke("0xaadeadbeefbbcc")).to.not.be.revert(ethers);
-      await expect(invoke("0xaacafebabebbcc"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.BitmaskNotAllowed,
-          anyValue,
-          anyValue,
-        );
+      await invoke("0xaadeadbeefbbcc");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xaacafebabebbcc"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.BitmaskNotAllowed, anyValue, anyValue],
+      );
     });
   });
 
@@ -456,7 +499,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0xdeadbeef]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xdeadbeefn],
+                  ),
                 },
               ],
             },
@@ -464,13 +510,16 @@ describe("Operator - Slice", () => {
         }),
       );
 
-      await expect(invoke("0xcafebabe"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcafebabe"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo node at BFS index 2
+          2n, // EqualTo node at BFS index 2
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -490,7 +539,10 @@ describe("Operator - Slice", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0xdeadbeef]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xdeadbeefn],
+                  ),
                 },
               ],
             },
@@ -498,138 +550,16 @@ describe("Operator - Slice", () => {
         }),
       );
 
-      await expect(invoke("0xcafebabe"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcafebabe"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          68, // payloadLocation: bytes data at byte 68 (4 + 32 + 32)
-        );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [Encoding.Tuple, Encoding.Array]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Slice,
-              compValue: encodeCompValue(0, 4),
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    describe("compValue", () => {
-      it("reverts UnsuitableCompValue when compValue is not 3 bytes", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Slice,
-              compValue: "0x0000", // 2 bytes instead of 3
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-
-      it("reverts UnsuitableCompValue when size is 0", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Slice,
-              compValue: encodeCompValue(0, 0), // size=0 not allowed
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-
-      it("reverts UnsuitableCompValue when size is greater than 32", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Slice,
-              compValue: encodeCompValue(0, 33), // size=33 exceeds max
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-    });
-
-    describe("children", () => {
-      it("reverts UnsuitableChildCount when Slice has more than one child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Slice,
-              compValue: encodeCompValue(0, 4),
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-      });
-
-      it("reverts SliceChildNotStatic when Slice child is not Static", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        // All non-Static encodings should be rejected
-        for (const encoding of [
-          Encoding.None,
-          Encoding.Dynamic,
-          Encoding.Tuple,
-          Encoding.AbiEncoded,
-          Encoding.EtherValue,
-        ]) {
-          await expect(
-            allowTarget([
-              {
-                parent: 0,
-                paramType: Encoding.Static,
-                operator: Operator.Slice,
-                compValue: encodeCompValue(0, 4),
-              },
-              {
-                parent: 0,
-                paramType: encoding,
-                operator: Operator.Pass,
-                compValue: "0x",
-              },
-            ]),
-          ).to.be.revertedWithCustomError(roles, "SliceChildNotStatic");
-        }
-      });
+          68n, // calldataOffset: bytes data at byte 68 (4 + 32 + 32)
+        ],
+      );
     });
   });
 });

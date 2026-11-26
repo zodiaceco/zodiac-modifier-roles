@@ -1,9 +1,22 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface, solidityPacked, ZeroHash } from "ethers";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  toHex,
+  zeroHash,
+  type Address,
+  type Hex,
+} from "viem";
 
 import { network } from "hardhat";
 
+import { toFlatNodes } from "../../../sdk/src/main/condition/checkStored.js";
+import { packConditions } from "../../../sdk/src/main/condition/packConditions.js";
 import { createSetup } from "../setup.js";
 import {
   Encoding,
@@ -13,13 +26,13 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupDynamicParam, setupArrayParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
+const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - EqualTo", () => {
   after(async () => {
@@ -39,7 +52,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [12345]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                12345n,
+              ]),
             },
           ],
         }),
@@ -47,7 +62,7 @@ describe("Operator - EqualTo", () => {
       );
 
       // Exact match passes
-      await expect(invoke(12345)).to.not.be.revert(ethers);
+      await invoke(12345n);
     });
 
     it("fails when values differ", async () => {
@@ -62,7 +77,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
@@ -70,13 +87,16 @@ describe("Operator - EqualTo", () => {
       );
 
       // Different value fails
-      await expect(invoke(101))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(101n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          1, // EqualTo node
+          1n, // EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("integrates with Slice operator", async () => {
@@ -92,12 +112,15 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.Slice,
-              compValue: solidityPacked(["uint16", "uint8"], [4, 4]), // shift=4, size=4
+              compValue: encodePacked(["uint16", "uint8"], [4, 4]), // shift=4, size=4
               children: [
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0xdeadbeef]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0xdeadbeefn],
+                  ),
                 },
               ],
             },
@@ -107,16 +130,19 @@ describe("Operator - EqualTo", () => {
       );
 
       // bytes[4:8] = 0xdeadbeef matches (first 4 bytes ignored)
-      await expect(invoke("0x00000000deadbeef")).to.not.be.revert(ethers);
+      await invoke("0x00000000deadbeef");
 
       // bytes[4:8] = 0xcafebabe does not match
-      await expect(invoke("0x00000000cafebabe"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x00000000cafebabe"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo node under Slice
+          2n, // EqualTo node under Slice
           anyValue,
-        );
+        ],
+      );
     });
 
     it("compares ether value (msg.value)", async () => {
@@ -141,7 +167,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.EtherValue,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [1000]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                1000n,
+              ]),
             },
           ],
         }),
@@ -149,23 +177,26 @@ describe("Operator - EqualTo", () => {
       );
 
       // Exact ether value passes
-      await expect(invoke(42, { value: 1000 })).to.not.be.revert(ethers);
+      await invoke(42n, { value: 1000n });
 
       // Different ether value fails
-      await expect(invoke(42, { value: 1001 }))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(42n, { value: 1001n }),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EtherValue/EqualTo node: And[0] -> Matches[1], EqualTo[2]
+          2n, // EtherValue/EqualTo node: And[0] -> Matches[1], EqualTo[2]
           anyValue,
-        );
+        ],
+      );
     });
   });
 
   describe("hashed comparison (size > 32)", () => {
     it("matches large dynamic data (e.g. large string/bytes) by comparing hash", async () => {
-      const iface = new Interface(["function fn(string)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(string)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -174,10 +205,10 @@ describe("Operator - EqualTo", () => {
         "This is a string that is definitely longer than 32 bytes and will be hashed for comparison";
 
       // EqualTo: parameter must equal the large string (compared by hash)
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -185,30 +216,35 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["string"], [largeString]),
+              compValue: encodeAbiParameters(parseAbiParameters("string"), [
+                largeString,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Exact match passes (hash comparison)
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [largeString]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [largeString],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
     });
 
     it("matches complex types (e.g. Tuple, Array) by comparing hash", async () => {
       const { allowFunction, invoke } = await loadFixture(setupArrayParam);
 
-      const targetArray = [1, 2, 3, 4, 5];
+      const targetArray = [1n, 2n, 3n, 4n, 5n];
 
       // EqualTo on Array: entire array must match (compared by hash)
       await allowFunction(
@@ -219,7 +255,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Array,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256[]"), [
+                targetArray,
+              ]),
               children: [
                 {
                   paramType: Encoding.Static,
@@ -233,12 +271,12 @@ describe("Operator - EqualTo", () => {
       );
 
       // Exact array match passes
-      await expect(invoke(targetArray)).to.not.be.revert(ethers);
+      await invoke(targetArray);
     });
 
     it("fails when large dynamic data differs", async () => {
-      const iface = new Interface(["function fn(string)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(string)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -246,10 +284,10 @@ describe("Operator - EqualTo", () => {
         "This is a string that is definitely longer than 32 bytes and will be hashed for comparison";
 
       // EqualTo: parameter must equal the large string
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -257,32 +295,40 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["string"], [largeString]),
+              compValue: encodeAbiParameters(parseAbiParameters("string"), [
+                largeString,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Different large string fails
       const differentString =
         "This is a different string that is also longer than 32 bytes but has different content";
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [differentString],
+            }),
             0,
-            iface.encodeFunctionData(fn, [differentString]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          1, // EqualTo node
+          1n, // EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -299,18 +345,23 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes"], ["0x"]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                "0x",
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
       );
 
-      await expect(invoke("0x")).to.not.be.revert(ethers);
+      await invoke("0x");
 
-      await expect(invoke("0xaa"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xaa"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("matches 10-byte dynamic value", async () => {
@@ -327,25 +378,30 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes"], [bytes10]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                bytes10,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(bytes10)).to.not.be.revert(ethers);
+      await invoke(bytes10);
 
-      await expect(invoke("0x00112233445566778800"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x00112233445566778800"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("matches 32-byte dynamic value", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupDynamicParam);
 
-      const bytes32 = ZeroHash;
+      const bytes32 = zeroHash;
 
       await allowFunction(
         flattenCondition({
@@ -355,26 +411,31 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes"], [bytes32]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                bytes32,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(bytes32)).to.not.be.revert(ethers);
+      await invoke(bytes32);
 
-      await expect(invoke("0x" + "ff".repeat(32)))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x" + "ff".repeat(32)),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("matches 33-byte dynamic value and fails on length mismatch", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupDynamicParam);
 
-      const bytes33 = "0x" + "11".repeat(33);
-      const bytes32 = "0x" + "11".repeat(32);
+      const bytes33 = `0x${"11".repeat(33)}` as const;
+      const bytes32 = `0x${"11".repeat(32)}` as const;
 
       await allowFunction(
         flattenCondition({
@@ -384,18 +445,23 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes"], [bytes33]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                bytes33,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(bytes33)).to.not.be.revert(ethers);
+      await invoke(bytes33);
 
-      await expect(invoke(bytes32))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(bytes32),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("matches 100-byte dynamic value", async () => {
@@ -404,7 +470,7 @@ describe("Operator - EqualTo", () => {
 
       // 100 bytes
       const bytes100 =
-        "0x" + "00112233445566778899aabbccddeeff".repeat(6) + "00112233";
+        `0x${"00112233445566778899aabbccddeeff".repeat(6)}00112233` as const;
 
       await allowFunction(
         flattenCondition({
@@ -414,35 +480,40 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Dynamic,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes"], [bytes100]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes"), [
+                bytes100,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
       );
 
-      await expect(invoke(bytes100)).to.not.be.revert(ethers);
+      await invoke(bytes100);
 
-      await expect(invoke("0x" + "ff".repeat(100)))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x" + "ff".repeat(100)),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
   });
 
   describe("array equality", () => {
     describe("flat arrays", () => {
       it("matches uint256[] array", async () => {
-        const iface = new Interface(["function fn(uint256[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [1, 2, 3, 4, 5];
+        const targetArray = [1n, 2n, 3n, 4n, 5n];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -450,7 +521,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -461,35 +535,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches address[] array", async () => {
-        const iface = new Interface(["function fn(address[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(address[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
+        const targetArray: Address[] = [
           "0x1111111111111111111111111111111111111111",
           "0x2222222222222222222222222222222222222222",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -497,7 +574,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["address[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("address[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -508,35 +588,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches bytes32[] array", async () => {
-        const iface = new Interface(["function fn(bytes32[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(bytes32[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
+        const targetArray: Hex[] = [
           "0x1111111111111111111111111111111111111111111111111111111111111111",
           "0x2222222222222222222222222222222222222222222222222222222222222222",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -544,7 +627,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["bytes32[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("bytes32[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -555,32 +641,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches empty uint256[] array", async () => {
-        const iface = new Interface(["function fn(uint256[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: number[] = [];
+        const targetArray: bigint[] = [];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -588,7 +677,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -599,32 +691,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches empty address[] array", async () => {
-        const iface = new Interface(["function fn(address[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(address[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: string[] = [];
+        const targetArray: Address[] = [];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -632,7 +727,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["address[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("address[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -643,32 +741,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when array elements differ", async () => {
-        const iface = new Interface(["function fn(uint256[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [1, 2, 3];
+        const targetArray = [1n, 2n, 3n];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -676,7 +777,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -687,34 +791,40 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[1n, 2n, 4n]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [[1, 2, 4]]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
 
       it("fails when array length differs", async () => {
-        const iface = new Interface(["function fn(uint256[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [1, 2, 3];
+        const targetArray = [1n, 2n, 3n];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -722,7 +832,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Static,
@@ -733,36 +846,42 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.None,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[1n, 2n, 3n, 4n]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [[1, 2, 3, 4]]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("nested arrays (2 levels)", () => {
       it("matches uint256[][] (array of arrays)", async () => {
-        const iface = new Interface(["function fn(uint256[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [[1, 2], [3, 4, 5], [6]];
+        const targetArray = [[1n, 2n], [3n, 4n, 5n], [6n]];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -770,7 +889,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -787,27 +909,30 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches address[][] (array of arrays)", async () => {
-        const iface = new Interface(["function fn(address[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(address[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
+        const targetArray: Address[][] = [
           [
             "0x1111111111111111111111111111111111111111",
             "0x2222222222222222222222222222222222222222",
@@ -815,10 +940,10 @@ describe("Operator - EqualTo", () => {
           ["0x3333333333333333333333333333333333333333"],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -826,7 +951,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["address[][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("address[][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -843,32 +971,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches empty outer array uint256[][]", async () => {
-        const iface = new Interface(["function fn(uint256[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: number[][] = [];
+        const targetArray: bigint[][] = [];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -876,7 +1007,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -893,32 +1027,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches array with empty inner arrays [[],[]]", async () => {
-        const iface = new Interface(["function fn(uint256[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: number[][] = [[], []];
+        const targetArray: bigint[][] = [[], []];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -926,7 +1063,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -943,32 +1083,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when nested array differs", async () => {
-        const iface = new Interface(["function fn(uint256[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [[1, 2], [3]];
+        const targetArray = [[1n, 2n], [3n]];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -976,7 +1119,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -993,36 +1139,42 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[[1n, 2n], [4n]]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [[[1, 2], [4]]]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("deeply nested arrays (3 levels)", () => {
       it("matches uint256[][][] (3 levels deep)", async () => {
-        const iface = new Interface(["function fn(uint256[][][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [[[1, 2], [3]], [[4, 5, 6]]];
+        const targetArray = [[[1n, 2n], [3n]], [[4n, 5n, 6n]]];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1030,7 +1182,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -1053,32 +1208,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches empty 3-level array", async () => {
-        const iface = new Interface(["function fn(uint256[][][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: number[][][] = [];
+        const targetArray: bigint[][][] = [];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1086,7 +1244,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -1109,32 +1270,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches 3-level array with mixed empty/populated", async () => {
-        const iface = new Interface(["function fn(uint256[][][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [[[]], [[1], []], [[2, 3]]];
+        const targetArray = [[[]], [[1n], []], [[2n, 3n]]];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1142,7 +1306,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -1165,32 +1332,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when deeply nested array differs", async () => {
-        const iface = new Interface(["function fn(uint256[][][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(uint256[][][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [[[1, 2]], [[3]]];
+        const targetArray = [[[1n, 2n]], [[3n]]];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1198,7 +1368,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(["uint256[][][]"], [targetArray]),
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("uint256[][][]"),
+                  [targetArray],
+                ),
                 children: [
                   {
                     paramType: Encoding.Array,
@@ -1221,20 +1394,26 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[[[1n, 2n]], [[4n]]]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [[[[1, 2]], [[4]]]]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
   });
@@ -1242,17 +1421,20 @@ describe("Operator - EqualTo", () => {
   describe("tuple equality", () => {
     describe("flat tuples", () => {
       it("matches (uint256, address) tuple", async () => {
-        const iface = new Interface(["function fn((uint256, address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [100, "0x1111111111111111111111111111111111111111"];
+        const targetTuple: [bigint, Address] = [
+          100n,
+          "0x1111111111111111111111111111111111111111",
+        ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1260,8 +1442,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1278,38 +1460,39 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (uint256, address, bytes32) tuple", async () => {
-        const iface = new Interface([
-          "function fn((uint256, address, bytes32))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address, bytes32))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          100,
+        const targetTuple: [bigint, Address, Hex] = [
+          100n,
           "0x1111111111111111111111111111111111111111",
-          ZeroHash,
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1317,8 +1500,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address,bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address,bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1339,32 +1522,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (bool, uint8, int256) tuple", async () => {
-        const iface = new Interface(["function fn((bool, uint8, int256))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((bool, uint8, int256))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [true, 255, -100];
+        const targetTuple: [boolean, number, bigint] = [true, 255, -100n];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1372,8 +1558,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(bool,uint8,int256)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(bool,uint8,int256)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1394,32 +1580,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when tuple field differs", async () => {
-        const iface = new Interface(["function fn((uint256, address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [100, "0x1111111111111111111111111111111111111111"];
+        const targetTuple: [bigint, Address] = [
+          100n,
+          "0x1111111111111111111111111111111111111111",
+        ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1427,8 +1619,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1445,42 +1637,44 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[101n, "0x1111111111111111111111111111111111111111"]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [101, "0x1111111111111111111111111111111111111111"],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
 
       it("fails when last tuple field differs", async () => {
-        const iface = new Interface([
-          "function fn((uint256, address, bytes32))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address, bytes32))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          100,
+        const targetTuple: [bigint, Address, Hex] = [
+          100n,
           "0x1111111111111111111111111111111111111111",
-          ZeroHash,
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1488,8 +1682,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address,bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address,bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1510,47 +1704,51 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [
-                [
-                  100,
-                  "0x1111111111111111111111111111111111111111",
-                  "0x2222222222222222222222222222222222222222222222222222222222222222",
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [
+                    100n,
+                    "0x1111111111111111111111111111111111111111",
+                    "0x2222222222222222222222222222222222222222222222222222222222222222",
+                  ],
                 ],
-              ]),
+              }),
               0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("nested tuples (2 levels)", () => {
       it("matches ((uint256, address), bytes32) - tuple containing tuple", async () => {
-        const iface = new Interface([
-          "function fn(((uint256, address), bytes32))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(((uint256, address), bytes32))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [100, "0x1111111111111111111111111111111111111111"],
-          ZeroHash,
+        const targetTuple: [[bigint, Address], Hex] = [
+          [100n, "0x1111111111111111111111111111111111111111"],
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1558,8 +1756,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256,address),bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("((uint256,address),bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1586,37 +1784,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (uint256, (address, uint256)) - tuple with nested tuple", async () => {
-        const iface = new Interface([
-          "function fn((uint256, (address, uint256)))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, (address, uint256)))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          100,
-          ["0x1111111111111111111111111111111111111111", 200],
+        const targetTuple: [bigint, [Address, bigint]] = [
+          100n,
+          ["0x1111111111111111111111111111111111111111", 200n],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1624,8 +1823,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,(address,uint256))"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,(address,uint256))"),
                   [targetTuple],
                 ),
                 children: [
@@ -1652,40 +1851,43 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches ((uint256, uint256), (address, address))", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn(((uint256, uint256), (address, address)))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [100, 200],
+        const targetTuple: [[bigint, bigint], [Address, Address]] = [
+          [100n, 200n],
           [
             "0x1111111111111111111111111111111111111111",
             "0x2222222222222222222222222222222222222222",
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1693,8 +1895,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256,uint256),(address,address))"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("((uint256,uint256),(address,address))"),
                   [targetTuple],
                 ),
                 children: [
@@ -1731,37 +1933,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when nested tuple field differs", async () => {
-        const iface = new Interface([
-          "function fn(((uint256, address), bytes32))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(((uint256, address), bytes32))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [100, "0x1111111111111111111111111111111111111111"],
-          ZeroHash,
+        const targetTuple: [[bigint, Address], Hex] = [
+          [100n, "0x1111111111111111111111111111111111111111"],
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1769,8 +1972,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256,address),bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("((uint256,address),bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1797,43 +2000,52 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [
+                    [101n, "0x1111111111111111111111111111111111111111"],
+                    zeroHash,
+                  ],
+                ],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [[101, "0x1111111111111111111111111111111111111111"], ZeroHash],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("deeply nested tuples (3 levels)", () => {
       it("matches (((uint256, address), bytes32), uint256)", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn((((uint256, address), bytes32), uint256))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [[100, "0x1111111111111111111111111111111111111111"], ZeroHash],
-          200,
+        const targetTuple: [[[bigint, Address], Hex], bigint] = [
+          [[100n, "0x1111111111111111111111111111111111111111"], zeroHash],
+          200n,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1841,8 +2053,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(((uint256,address),bytes32),uint256)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(((uint256,address),bytes32),uint256)"),
                   [targetTuple],
                 ),
                 children: [
@@ -1879,40 +2091,43 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (uint256, ((address, uint256), (bool, bytes32)))", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn((uint256, ((address, uint256), (bool, bytes32))))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          100,
+        const targetTuple: [bigint, [[Address, bigint], [boolean, Hex]]] = [
+          100n,
           [
-            ["0x1111111111111111111111111111111111111111", 200],
-            [true, ZeroHash],
+            ["0x1111111111111111111111111111111111111111", 200n],
+            [true, zeroHash],
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -1920,8 +2135,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,((address,uint256),(bool,bytes32)))"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters(
+                    "(uint256,((address,uint256),(bool,bytes32)))",
+                  ),
                   [targetTuple],
                 ),
                 children: [
@@ -1968,37 +2185,40 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when deeply nested tuple differs", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn((((uint256, address), bytes32), uint256))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [[100, "0x1111111111111111111111111111111111111111"], ZeroHash],
-          200,
+        const targetTuple: [[[bigint, Address], Hex], bigint] = [
+          [[100n, "0x1111111111111111111111111111111111111111"], zeroHash],
+          200n,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2006,8 +2226,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(((uint256,address),bytes32),uint256)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(((uint256,address),bytes32),uint256)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2044,28 +2264,34 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [
-                [
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
                   [
-                    [101, "0x1111111111111111111111111111111111111111"],
-                    ZeroHash,
+                    [
+                      [101n, "0x1111111111111111111111111111111111111111"],
+                      zeroHash,
+                    ],
+                    200n,
                   ],
-                  200,
                 ],
-              ]),
+              }),
               0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
   });
@@ -2073,20 +2299,20 @@ describe("Operator - EqualTo", () => {
   describe("tuple-array combinations", () => {
     describe("arrays of tuples", () => {
       it("matches (uint256, address)[] - array of tuples", async () => {
-        const iface = new Interface(["function fn((uint256, address)[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address)[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
-          [100, "0x1111111111111111111111111111111111111111"],
-          [200, "0x2222222222222222222222222222222222222222"],
+        const targetArray: [bigint, Address][] = [
+          [100n, "0x1111111111111111111111111111111111111111"],
+          [200n, "0x2222222222222222222222222222222222222222"],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2094,8 +2320,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)[]"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address)[]"),
                   [targetArray],
                 ),
                 children: [
@@ -2118,32 +2344,35 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches empty (uint256, address)[] array", async () => {
-        const iface = new Interface(["function fn((uint256, address)[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address)[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray: [number, string][] = [];
+        const targetArray: [bigint, Address][] = [];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2151,8 +2380,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)[]"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address)[]"),
                   [targetArray],
                 ),
                 children: [
@@ -2175,37 +2404,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches ((uint256, address), bytes32)[] - array of nested tuples", async () => {
-        const iface = new Interface([
-          "function fn(((uint256, address), bytes32)[])",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(((uint256, address), bytes32)[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
-          [[100, "0x1111111111111111111111111111111111111111"], ZeroHash],
-          [[200, "0x2222222222222222222222222222222222222222"], ZeroHash],
+        const targetArray: [[bigint, Address], Hex][] = [
+          [[100n, "0x1111111111111111111111111111111111111111"], zeroHash],
+          [[200n, "0x2222222222222222222222222222222222222222"], zeroHash],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2213,8 +2443,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256,address),bytes32)[]"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("((uint256,address),bytes32)[]"),
                   [targetArray],
                 ),
                 children: [
@@ -2247,34 +2477,37 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when array of tuples differs", async () => {
-        const iface = new Interface(["function fn((uint256, address)[])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address)[])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
-          [100, "0x1111111111111111111111111111111111111111"],
+        const targetArray: [bigint, Address][] = [
+          [100n, "0x1111111111111111111111111111111111111111"],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2282,8 +2515,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)[]"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256,address)[]"),
                   [targetArray],
                 ),
                 children: [
@@ -2306,41 +2539,45 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [[[101n, "0x1111111111111111111111111111111111111111"]]],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [[101, "0x1111111111111111111111111111111111111111"]],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("tuples containing arrays", () => {
       it("matches (uint256[], address) - tuple with array field", async () => {
-        const iface = new Interface(["function fn((uint256[], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [1, 2, 3],
+        const targetTuple: [bigint[], Address] = [
+          [1n, 2n, 3n],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2348,8 +2585,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2372,38 +2609,39 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (address, uint256[], bytes32)", async () => {
-        const iface = new Interface([
-          "function fn((address, uint256[], bytes32))",
-        ]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((address, uint256[], bytes32))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
+        const targetTuple: [Address, bigint[], Hex] = [
           "0x1111111111111111111111111111111111111111",
-          [1, 2, 3],
-          ZeroHash,
+          [1n, 2n, 3n],
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2411,8 +2649,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(address,uint256[],bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(address,uint256[],bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2439,35 +2677,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches tuple with empty array field", async () => {
-        const iface = new Interface(["function fn((uint256[], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple: [number[], string] = [
+        const targetTuple: [bigint[], Address] = [
           [],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2475,8 +2716,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2499,35 +2740,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when tuple array field differs", async () => {
-        const iface = new Interface(["function fn((uint256[], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [1, 2, 3],
+        const targetTuple: [bigint[], Address] = [
+          [1n, 2n, 3n],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2535,8 +2779,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2559,39 +2803,45 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [[1n, 2n, 4n], "0x1111111111111111111111111111111111111111"],
+                ],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [[1, 2, 4], "0x1111111111111111111111111111111111111111"],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
 
       it("fails when tuple array field length differs", async () => {
-        const iface = new Interface(["function fn((uint256[], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [1, 2, 3],
+        const targetTuple: [bigint[], Address] = [
+          [1n, 2n, 3n],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2599,8 +2849,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2623,41 +2873,50 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [
+                    [1n, 2n, 3n, 4n],
+                    "0x1111111111111111111111111111111111111111",
+                  ],
+                ],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [[1, 2, 3, 4], "0x1111111111111111111111111111111111111111"],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("2-level combinations", () => {
       it("matches (uint256[][], address) - tuple with nested array", async () => {
-        const iface = new Interface(["function fn((uint256[][], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[][], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [[1, 2], [3]],
+        const targetTuple: [bigint[][], Address] = [
+          [[1n, 2n], [3n]],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2665,8 +2924,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[][],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[][],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2695,37 +2954,40 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches ((uint256, address)[]) - array of tuples in tuple", async () => {
-        const iface = new Interface(["function fn(((uint256, address)[]))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn(((uint256, address)[]))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
+        const targetTuple: [[bigint, Address][]] = [
           [
-            [100, "0x1111111111111111111111111111111111111111"],
-            [200, "0x2222222222222222222222222222222222222222"],
+            [100n, "0x1111111111111111111111111111111111111111"],
+            [200n, "0x2222222222222222222222222222222222222222"],
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2733,8 +2995,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256,address)[])"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("((uint256,address)[])"),
                   [targetTuple],
                 ),
                 children: [
@@ -2763,38 +3025,41 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (uint256, address)[][] - nested array of tuples", async () => {
-        const iface = new Interface(["function fn((uint256, address)[][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address)[][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
-          [[100, "0x1111111111111111111111111111111111111111"]],
+        const targetArray: [bigint, Address][][] = [
+          [[100n, "0x1111111111111111111111111111111111111111"]],
           [
-            [200, "0x2222222222222222222222222222222222222222"],
-            [300, "0x3333333333333333333333333333333333333333"],
+            [200n, "0x2222222222222222222222222222222222222222"],
+            [300n, "0x3333333333333333333333333333333333333333"],
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2802,8 +3067,13 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)[][]"],
+                compValue: encodeAbiParameters(
+                  [
+                    {
+                      type: "tuple[][]",
+                      components: [{ type: "uint256" }, { type: "address" }],
+                    },
+                  ],
                   [targetArray],
                 ),
                 children: [
@@ -2832,35 +3102,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when 2-level combination differs", async () => {
-        const iface = new Interface(["function fn((uint256[][], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[][], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [[1, 2], [3]],
+        const targetTuple: [bigint[][], Address] = [
+          [[1n, 2n], [3n]],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2868,8 +3141,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[][],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[][],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2898,46 +3171,55 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
               testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [
+                    [[1n, 2n], [4n]],
+                    "0x1111111111111111111111111111111111111111",
+                  ],
+                ],
+              }),
               0,
-              iface.encodeFunctionData(fn, [
-                [[[1, 2], [4]], "0x1111111111111111111111111111111111111111"],
-              ]),
-              0,
-            ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+            ],
+            { account: member.account },
+          ),
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
 
     describe("3-level combinations", () => {
       it("matches (((uint256, address), uint256[]), bytes32)", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn((((uint256, address), uint256[]), bytes32))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
+        const targetTuple: [[[bigint, Address], bigint[]], Hex] = [
           [
-            [100, "0x1111111111111111111111111111111111111111"],
-            [1, 2, 3],
+            [100n, "0x1111111111111111111111111111111111111111"],
+            [1n, 2n, 3n],
           ],
-          ZeroHash,
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -2945,8 +3227,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(((uint256,address),uint256[]),bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(((uint256,address),uint256[]),bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -2989,49 +3271,52 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches ((uint256[], address[]), (bytes32, uint256)[])", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn(((uint256[], address[]), (bytes32, uint256)[]))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
+        const targetTuple: [[bigint[], Address[]], [Hex, bigint][]] = [
           [
-            [1, 2],
+            [1n, 2n],
             [
               "0x1111111111111111111111111111111111111111",
               "0x2222222222222222222222222222222222222222",
             ],
           ],
           [
-            [ZeroHash, 100],
+            [zeroHash, 100n],
             [
               "0x1111111111111111111111111111111111111111111111111111111111111111",
-              200,
+              200n,
             ],
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -3039,8 +3324,10 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["((uint256[],address[]),(bytes32,uint256)[])"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters(
+                    "((uint256[],address[]),(bytes32,uint256)[])",
+                  ),
                   [targetTuple],
                 ),
                 children: [
@@ -3095,38 +3382,41 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches (uint256, address)[][][] - 3-level array of tuples", async () => {
-        const iface = new Interface(["function fn((uint256, address)[][][])"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256, address)[][][])"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetArray = [
-          [[[100, "0x1111111111111111111111111111111111111111"]]],
+        const targetArray: [bigint, Address][][][] = [
+          [[[100n, "0x1111111111111111111111111111111111111111"]]],
           [
-            [[200, "0x2222222222222222222222222222222222222222"]],
-            [[300, "0x3333333333333333333333333333333333333333"]],
+            [[200n, "0x2222222222222222222222222222222222222222"]],
+            [[300n, "0x3333333333333333333333333333333333333333"]],
           ],
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -3134,8 +3424,13 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Array,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256,address)[][][]"],
+                compValue: encodeAbiParameters(
+                  [
+                    {
+                      type: "tuple[][][]",
+                      components: [{ type: "uint256" }, { type: "address" }],
+                    },
+                  ],
                   [targetArray],
                 ),
                 children: [
@@ -3170,35 +3465,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetArray]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetArray],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches tuple with 3-level nested array field", async () => {
-        const iface = new Interface(["function fn((uint256[][][], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[][][], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
-          [[[1, 2], [3]], [[4]]],
+        const targetTuple: [bigint[][][], Address] = [
+          [[[1n, 2n], [3n]], [[4n]]],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -3206,8 +3504,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[][][],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[][][],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -3242,35 +3540,38 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("matches 3-level combo with empty arrays at each level", async () => {
-        const iface = new Interface(["function fn((uint256[][][], address))"]);
-        const fn = iface.getFunction("fn")!;
+        const abi = parseAbi(["function fn((uint256[][][], address))"]);
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple: [number[][][], string] = [
-          [[], [[]], [[1], []]],
+        const targetTuple: [bigint[][][], Address] = [
+          [[], [[]], [[1n], []]],
           "0x1111111111111111111111111111111111111111",
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -3278,8 +3579,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(uint256[][][],address)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(uint256[][][],address)"),
                   [targetTuple],
                 ),
                 children: [
@@ -3314,40 +3615,43 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles
-            .connect(member)
-            .execTransactionFromModule(
-              testContractAddress,
-              0,
-              iface.encodeFunctionData(fn, [targetTuple]),
-              0,
-            ),
-        ).to.not.be.revert(ethers);
+        await roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [targetTuple],
+            }),
+            0,
+          ],
+          { account: member.account },
+        );
       });
 
       it("fails when 3-level combination differs", async () => {
-        const iface = new Interface([
+        const abi = parseAbi([
           "function fn((((uint256, address), uint256[]), bytes32))",
         ]);
-        const fn = iface.getFunction("fn")!;
+        const selector = toFunctionSelector(abi[0]);
         const { roles, member, testContractAddress, roleKey } =
           await loadFixture(setupTestContract);
 
-        const targetTuple = [
+        const targetTuple: [[[bigint, Address], bigint[]], Hex] = [
           [
-            [100, "0x1111111111111111111111111111111111111111"],
-            [1, 2, 3],
+            [100n, "0x1111111111111111111111111111111111111111"],
+            [1n, 2n, 3n],
           ],
-          ZeroHash,
+          zeroHash,
         ];
 
-        await roles.allowFunction(
+        await roles.write.allowFunction([
           roleKey,
           testContractAddress,
-          fn.selector,
+          selector,
           flattenCondition({
             paramType: Encoding.AbiEncoded,
             operator: Operator.Matches,
@@ -3355,8 +3659,8 @@ describe("Operator - EqualTo", () => {
               {
                 paramType: Encoding.Tuple,
                 operator: Operator.EqualTo,
-                compValue: abiCoder.encode(
-                  ["(((uint256,address),uint256[]),bytes32)"],
+                compValue: encodeAbiParameters(
+                  parseAbiParameters("(((uint256,address),uint256[]),bytes32)"),
                   [targetTuple],
                 ),
                 children: [
@@ -3399,43 +3703,49 @@ describe("Operator - EqualTo", () => {
             ],
           }),
           ExecutionOptions.Both,
-        );
+        ]);
 
-        await expect(
-          roles.connect(member).execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [
-              [
-                [
-                  [101, "0x1111111111111111111111111111111111111111"],
-                  [1, 2, 3],
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          roles.write.execTransactionFromModule(
+            [
+              testContractAddress,
+              0n,
+              encodeFunctionData({
+                abi,
+                functionName: "fn",
+                args: [
+                  [
+                    [
+                      [101n, "0x1111111111111111111111111111111111111111"],
+                      [1n, 2n, 3n],
+                    ],
+                    zeroHash,
+                  ],
                 ],
-                ZeroHash,
-              ],
-            ]),
-            0,
+              }),
+              0,
+            ],
+            { account: member.account },
           ),
-        )
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          roles,
+          "ConditionViolation",
+          [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+        );
       });
     });
   });
 
   describe("EqualTo with And-typed children", () => {
     it("tuple with And(Static, None) child", async () => {
-      const iface = new Interface(["function fn((uint256, uint256))"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn((uint256, uint256))"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetTuple = [100, 200];
+      const targetTuple: [bigint, bigint] = [100n, 200n];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3443,7 +3753,10 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Tuple,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["(uint256,uint256)"], [targetTuple]),
+              compValue: encodeAbiParameters(
+                parseAbiParameters("(uint256,uint256)"),
+                [targetTuple],
+              ),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3466,47 +3779,60 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetTuple],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[999n, 200n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [targetTuple]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [[999, 200]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("dynamic tuple with And(Static, None) child", async () => {
-      const iface = new Interface(["function fn((bytes, uint256))"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn((bytes, uint256))"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetTuple = ["0xdeadbeef", 42];
+      const targetTuple: [Hex, bigint] = ["0xdeadbeef", 42n];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3514,7 +3840,10 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Tuple,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["(bytes,uint256)"], [targetTuple]),
+              compValue: encodeAbiParameters(
+                parseAbiParameters("(bytes,uint256)"),
+                [targetTuple],
+              ),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3537,33 +3866,48 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetTuple],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [["0xdeadbeef", 99n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [targetTuple]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [["0xdeadbeef", 99]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("AbiEncoded with And(None, Static) child", async () => {
@@ -3585,7 +3929,10 @@ describe("Operator - EqualTo", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [12345]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [12345n],
+                  ),
                 },
               ],
             },
@@ -3594,25 +3941,26 @@ describe("Operator - EqualTo", () => {
         ExecutionOptions.None,
       );
 
-      await expect(invoke(12345)).to.not.be.revert(ethers);
+      await invoke(12345n);
 
-      await expect(invoke(99999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 3, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(99999n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 3n, anyValue],
+      );
     });
 
     it("array with And(None, Static) child", async () => {
-      const iface = new Interface(["function fn(uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetArray = [10, 20, 30];
+      const targetArray = [10n, 20n, 30n];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3620,7 +3968,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Array,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256[]"], [targetArray]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256[]"), [
+                targetArray,
+              ]),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3639,50 +3989,63 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetArray],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[10n, 20n, 99n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [targetArray]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [[10, 20, 99]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("array with And(None, DynamicTuple) child", async () => {
-      const iface = new Interface(["function fn((bytes, uint256)[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn((bytes, uint256)[])"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetArray = [
-        ["0xaabb", 1],
-        ["0xccdd", 2],
+      const targetArray: [Hex, bigint][] = [
+        ["0xaabb", 1n],
+        ["0xccdd", 2n],
       ];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3690,7 +4053,10 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Array,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["(bytes,uint256)[]"], [targetArray]),
+              compValue: encodeAbiParameters(
+                parseAbiParameters("(bytes,uint256)[]"),
+                [targetArray],
+              ),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3719,61 +4085,78 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [
+              [
+                ["0xaabb", 1n],
+                ["0xccdd", 2n],
+              ],
+            ],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles.connect(member).execTransactionFromModule(
-          testContractAddress,
-          0,
-          iface.encodeFunctionData(fn, [
-            [
-              ["0xaabb", 1],
-              ["0xccdd", 2],
-            ],
-          ]),
-          0,
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
+            testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [
+                [
+                  ["0xaabb", 1n],
+                  ["0xccdd", 999n],
+                ],
+              ],
+            }),
+            0,
+          ],
+          { account: member.account },
         ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles.connect(member).execTransactionFromModule(
-          testContractAddress,
-          0,
-          iface.encodeFunctionData(fn, [
-            [
-              ["0xaabb", 1],
-              ["0xccdd", 999],
-            ],
-          ]),
-          0,
-        ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("array with Dynamic and AbiEncoded elements", async () => {
-      const iface = new Interface(["function fn(bytes[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(bytes[])"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const innerEncoded1 = abiCoder.encode(
-        ["uint256", "address"],
-        [100, "0x1111111111111111111111111111111111111111"],
+      const innerEncoded1 = encodeAbiParameters(
+        parseAbiParameters("uint256, address"),
+        [100n, "0x1111111111111111111111111111111111111111"],
       );
-      const innerEncoded2 = abiCoder.encode(
-        ["uint256", "address"],
-        [200, "0x2222222222222222222222222222222222222222"],
+      const innerEncoded2 = encodeAbiParameters(
+        parseAbiParameters("uint256, address"),
+        [200n, "0x2222222222222222222222222222222222222222"],
       );
       const targetArray = [innerEncoded1, innerEncoded2];
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3781,7 +4164,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Array,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes[]"], [targetArray]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes[]"), [
+                targetArray,
+              ]),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3810,54 +4195,67 @@ describe("Operator - EqualTo", () => {
               ],
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetArray],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [targetArray]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      const badInner = abiCoder.encode(
-        ["uint256", "address"],
-        [999, "0x1111111111111111111111111111111111111111"],
+      const badInner = encodeAbiParameters(
+        parseAbiParameters("uint256, address"),
+        [999n, "0x1111111111111111111111111111111111111111"],
       );
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[badInner, innerEncoded2]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [[badInner, innerEncoded2]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
 
     it("nested tuple - EqualTo on inner tuple", async () => {
-      const iface = new Interface([
-        "function fn(((uint256, uint256), uint256))",
-      ]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(((uint256, uint256), uint256))"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const innerTuple = [10, 20];
-      const targetTuple = [innerTuple, 300];
+      const innerTuple: [bigint, bigint] = [10n, 20n];
+      const targetTuple: [[bigint, bigint], bigint] = [innerTuple, 300n];
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3869,8 +4267,8 @@ describe("Operator - EqualTo", () => {
                 {
                   paramType: Encoding.Tuple,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(
-                    ["(uint256,uint256)"],
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("(uint256,uint256)"),
                     [innerTuple],
                   ),
                   children: [
@@ -3893,54 +4291,61 @@ describe("Operator - EqualTo", () => {
           ],
         }),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetTuple],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[[99n, 20n], 300n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [targetTuple]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [[[99, 20], 300]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 2, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 2n, anyValue],
+      );
     });
 
     it("array of AbiEncoded elements - EqualTo on array", async () => {
-      const iface = new Interface(["function fn(bytes[], uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(bytes[], uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const innerEncoded1 = abiCoder.encode(
-        ["uint256", "bytes"],
-        [50, "0xaabbccdd"],
+      const innerEncoded1 = encodeAbiParameters(
+        parseAbiParameters("uint256, bytes"),
+        [50n, "0xaabbccdd"],
       );
-      const innerEncoded2 = abiCoder.encode(
-        ["uint256", "bytes"],
-        [60, "0xeeff0011"],
+      const innerEncoded2 = encodeAbiParameters(
+        parseAbiParameters("uint256, bytes"),
+        [60n, "0xeeff0011"],
       );
       const targetArray = [innerEncoded1, innerEncoded2];
-      const targetDynamic = 777;
+      const targetDynamic = 777n;
 
-      await roles.allowFunction(
-        roleKey,
-        testContractAddress,
-        fn.selector,
+      // Integrity rejects this tree: packed without it, to cover how it is read
+      const flat = toFlatNodes(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -3948,7 +4353,9 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Array,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["bytes[]"], [targetArray]),
+              compValue: encodeAbiParameters(parseAbiParameters("bytes[]"), [
+                targetArray,
+              ]),
               children: [
                 {
                   paramType: Encoding.None,
@@ -3981,67 +4388,82 @@ describe("Operator - EqualTo", () => {
               operator: Operator.Pass,
             },
           ],
-        }),
+        }) as any,
+      );
+      await roles.write.allowFunctionPacked([
+        roleKey,
+        testContractAddress,
+        selector,
+        toHex(packConditions(flat)),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetArray, targetDynamic],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [targetArray, targetDynamic]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-
-      const badInner = abiCoder.encode(
-        ["uint256", "bytes"],
-        [999, "0xaabbccdd"],
+      const badInner = encodeAbiParameters(
+        parseAbiParameters("uint256, bytes"),
+        [999n, "0xaabbccdd"],
       );
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[badInner, innerEncoded2], targetDynamic],
+            }),
             0,
-            iface.encodeFunctionData(fn, [
-              [badInner, innerEncoded2],
-              targetDynamic,
-            ]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 1, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 1n, anyValue],
+      );
     });
   });
 
   describe("edge cases for complex types", () => {
     it("handles maximum practical nesting depth", async () => {
-      const iface = new Interface([
+      const abi = parseAbi([
         "function fn((((uint256, address), (bytes32, uint256)), ((bool, uint8), (int256, address))))",
       ]);
-      const fn = iface.getFunction("fn")!;
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetTuple = [
+      const targetTuple: [
+        [[bigint, Address], [Hex, bigint]],
+        [[boolean, number], [bigint, Address]],
+      ] = [
         [
-          [100, "0x1111111111111111111111111111111111111111"],
-          [ZeroHash, 200],
+          [100n, "0x1111111111111111111111111111111111111111"],
+          [zeroHash, 200n],
         ],
         [
           [true, 255],
-          [-100, "0x2222222222222222222222222222222222222222"],
+          [-100n, "0x2222222222222222222222222222222222222222"],
         ],
       ];
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -4049,10 +4471,10 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Tuple,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(
-                [
+              compValue: encodeAbiParameters(
+                parseAbiParameters(
                   "(((uint256,address),(bytes32,uint256)),((bool,uint8),(int256,address)))",
-                ],
+                ),
                 [targetTuple],
               ),
               children: [
@@ -4129,112 +4551,61 @@ describe("Operator - EqualTo", () => {
           ],
         }),
         ExecutionOptions.Both,
+      ]);
+
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetTuple],
+          }),
+          0,
+        ],
+        { account: member.account },
       );
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [targetTuple]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
-    });
-
-    it.skip("handles large condition trees (600 nodes)", async () => {
-      // Limited by block gas (100M in hardhat config)
-      // 1 AbiEncoded + 1 Tuple + X*(1 Array + 1 Tuple + 4 Static) = 602
-      // 2 + 6X = 602 => X = 100 array fields (602 nodes)
-
-      const innerTupleType = "(uint256, uint256, uint256, address)";
-      const arrayCount = 100;
-      const fields = Array(arrayCount).fill(`${innerTupleType}[]`);
-      const outerTupleType = `(${fields.join(", ")})`;
-
-      const iface = new Interface([`function fn(${outerTupleType})`]);
-      const fn = iface.getFunction("fn")!;
-      const { roles, member, testContractAddress, allowTarget } =
-        await loadFixture(setupTestContract);
-
-      // Each array has 2 tuples
-      const innerTuple = [
-        42,
-        100,
-        200,
-        "0x1111111111111111111111111111111111111111",
-      ];
-      const targetValue = Array(arrayCount).fill([innerTuple, innerTuple]);
-
-      await allowTarget(
-        flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          children: [
-            {
-              paramType: Encoding.Tuple,
-              operator: Operator.EqualTo,
-              compValue: abiCoder.encode([outerTupleType], [targetValue]),
-              children: Array.from({ length: arrayCount }, () => ({
-                paramType: Encoding.Array,
-                operator: Operator.Pass,
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Pass,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              })),
-            },
-          ],
-        }),
-      );
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [targetValue]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
     });
 
     it("handles tuples with many fields (10+ fields)", async () => {
-      const iface = new Interface([
+      const abi = parseAbi([
         "function fn((uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256, address))",
       ]);
-      const fn = iface.getFunction("fn")!;
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const targetTuple = [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        9,
-        10,
+      const targetTuple: [
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        bigint,
+        Address,
+      ] = [
+        1n,
+        2n,
+        3n,
+        4n,
+        5n,
+        6n,
+        7n,
+        8n,
+        9n,
+        10n,
         "0x1111111111111111111111111111111111111111",
       ];
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -4242,10 +4613,10 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Tuple,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(
-                [
+              compValue: encodeAbiParameters(
+                parseAbiParameters(
                   "(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,address)",
-                ],
+                ),
                 [targetTuple],
               ),
               children: [
@@ -4265,18 +4636,21 @@ describe("Operator - EqualTo", () => {
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [targetTuple]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [targetTuple],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
     });
   });
 
@@ -4292,20 +4666,25 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
         ExecutionOptions.None,
       );
 
-      await expect(invoke(999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(999n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          1, // EqualTo node at BFS index 1
+          1n, // EqualTo node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -4319,54 +4698,25 @@ describe("Operator - EqualTo", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
         ExecutionOptions.None,
       );
 
-      await expect(invoke(999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(999n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          4, // payloadLocation: parameter starts at byte 4 (after selector)
-        );
-    });
-  });
-
-  describe.skip("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [Encoding.None, Encoding.AbiEncoded]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.EqualTo,
-            compValue: "0x",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+          4n, // calldataOffset: parameter starts at byte 4 (after selector)
+        ],
+      );
     });
   });
 });

@@ -1,7 +1,8 @@
 import { Clearance, Function, Target } from "../types"
 
 import { checkAllowanceUnits } from "../allowance"
-import { checkRootConditionIntegrity } from "../condition/conditionIntegrity"
+import { checkStoredConditions } from "../condition/checkStored"
+import { flattenCondition } from "../condition/flattenCondition"
 
 export const targetIntegrity = (targets: Target[]): void => {
   const uniqueAddresses = new Set(
@@ -61,7 +62,12 @@ const functionEntry = (func: Function): void => {
     )
   }
 
-  if (func.condition) {
-    checkRootConditionIntegrity(func.condition)
+  if (
+    func.condition &&
+    checkStoredConditions(flattenCondition(func.condition)) === undefined
+  ) {
+    throw new Error(
+      `Condition rejected by checkStored (function in violation: ${func.selector})`
+    )
   }
 }

@@ -1,87 +1,92 @@
-import SafeProxyArtifact from "@safe-global/safe-contracts/build/artifacts/contracts/proxies/SafeProxy.sol/SafeProxy.json" with { type: "json" }
 import {
-  AbiCoder,
-  ZeroAddress,
+  type Address,
   concat,
+  encodeAbiParameters,
+  encodeFunctionData,
   getCreate2Address,
   keccak256,
-} from "ethers"
+  zeroAddress,
+} from "viem"
 
-import { address as fallbackHandler } from "./deploy-mastercopies/fallbackHandler.js"
 import {
-  iface as ifaceSafe,
-  address as mastercopy,
-} from "./deploy-mastercopies/safeMastercopy.js"
-import {
-  address as factory,
-  iface as ifaceFactory,
-} from "./deploy-mastercopies/safeProxyFactory.js"
+  type SafeVersion,
+  safeAbi,
+  safeDeployments,
+  safeProxyFactoryAbi,
+} from "./safe-deployments/index.js"
 
-const { bytecode: creationBytecode } = SafeProxyArtifact
-
-export function calculateSafeAddress({
-  owners,
-  threshold,
-  creationNonce,
-}: {
-  owners: string[]
+export type SafeCreation = {
+  owners: Address[]
   threshold: number
   creationNonce: bigint | number
-}): string {
-  const abi = AbiCoder.defaultAbiCoder()
+  /** Safe 1.4.1 by default */
+  version?: SafeVersion
+  /** The version's CompatibilityFallbackHandler by default */
+  fallbackHandler?: Address
+}
+
+export function calculateSafeAddress(creation: SafeCreation): Address {
+  const { singleton, proxyFactory, proxyCreationCode } =
+    safeDeployments[creation.version ?? "1.4.1"]
 
   const salt = keccak256(
     concat([
-      keccak256(initializer({ owners, threshold })),
-      abi.encode(["uint256"], [creationNonce]),
+      keccak256(initializer(creation)),
+      encodeAbiParameters(
+        [{ type: "uint256" }],
+        [BigInt(creation.creationNonce)]
+      ),
     ])
   )
 
-  const deploymentData = concat([
-    creationBytecode,
-    abi.encode(["address"], [mastercopy]),
-  ])
-
-  return getCreate2Address(factory, salt, keccak256(deploymentData))
+  return getCreate2Address({
+    from: proxyFactory.address,
+    salt,
+    bytecode: concat([
+      proxyCreationCode,
+      encodeAbiParameters([{ type: "address" }], [singleton.address]),
+    ]),
+  })
 }
 
-export function populateSafeCreation({
-  owners,
-  threshold,
-  creationNonce,
-}: {
-  owners: string[]
-  threshold: number
-  creationNonce: bigint
-}) {
+export function populateSafeCreation(creation: SafeCreation) {
+  const { singleton, proxyFactory } =
+    safeDeployments[creation.version ?? "1.4.1"]
+
   return {
-    to: factory,
-    value: 0,
-    data: ifaceFactory.encodeFunctionData("createProxyWithNonce", [
-      mastercopy,
-      initializer({ owners, threshold }),
-      creationNonce,
-    ]),
+    to: proxyFactory.address,
+    value: 0n,
+    data: encodeFunctionData({
+      abi: safeProxyFactoryAbi,
+      functionName: "createProxyWithNonce",
+      args: [
+        singleton.address,
+        initializer(creation),
+        BigInt(creation.creationNonce),
+      ],
+    }),
   }
 }
 
 function initializer({
   owners,
   threshold,
-}: {
-  owners: string[]
-  threshold: number
-}) {
-  const initializer = ifaceSafe.encodeFunctionData("setup", [
-    owners,
-    threshold,
-    ZeroAddress,
-    "0x",
-    fallbackHandler,
-    ZeroAddress,
-    0,
-    ZeroAddress,
-  ])
-
-  return initializer
+  version = "1.4.1",
+  fallbackHandler = safeDeployments[version].compatibilityFallbackHandler
+    .address,
+}: SafeCreation) {
+  return encodeFunctionData({
+    abi: safeAbi,
+    functionName: "setup",
+    args: [
+      owners,
+      BigInt(threshold),
+      zeroAddress,
+      "0x",
+      fallbackHandler,
+      zeroAddress,
+      0n,
+      zeroAddress,
+    ],
+  })
 }

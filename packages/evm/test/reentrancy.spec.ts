@@ -1,11 +1,22 @@
-import { expect } from "chai";
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
 import { network } from "hardhat";
+import {
+  decodeFunctionResult,
+  encodeFunctionData,
+  toFunctionSelector,
+  toHex,
+} from "viem";
+import type { Hex } from "viem";
 
-import { ExecutionOptions } from "./utils.js";
+import { ExecutionOptions, maxUint64 } from "./utils.js";
 import { createSetup } from "./setup.js";
+import { ENTRYPOINTS, encodeEntrypoint } from "./roleTx.js";
+import type { Entrypoint } from "./roleTx.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { deployRolesMod } = createSetup(connection);
 
@@ -15,7 +26,10 @@ const { deployRolesMod } = createSetup(connection);
  * Scope: Reentrancy Protection.
  *
  * This file verifies that every execution entry point in the module is non-reentrant.
- * It ensures that the module prevents nested calls back into itself during an active transaction, protecting against reentrancy attacks.
+ * From inside a call executed through any of the four entry points, a call back into
+ * any of the four reverts with `Reentrancy`, even though the caller is an enabled
+ * member module whose call would otherwise be authorized. The guard is released
+ * afterwards.
  */
 
 describe("Reentrancy", () => {
@@ -24,73 +38,154 @@ describe("Reentrancy", () => {
   });
 
   async function setup() {
-    const [owner, invoker] = await ethers.getSigners();
+    const [owner, invoker] = await viem.getWalletClients();
 
-    const Avatar = await ethers.getContractFactory("TestAvatar");
-    const avatar = await Avatar.deploy();
-    const avatarAddress = await avatar.getAddress();
-
+    const avatar = await viem.deployContract("TestAvatar");
     const roles = await deployRolesMod(
-      owner.address,
-      avatarAddress,
-      avatarAddress,
+      owner.account.address,
+      avatar.address,
+      avatar.address,
     );
+    const checker = await viem.deployContract("ReentrancyChecker", [
+      roles.address,
+    ]);
+    const roleKey = toHex(randomBytes(32));
 
-    // Enable invoker as module so it can call execTransactionWithRole
-    await roles.connect(owner).enableModule(invoker.address);
-
-    return {
-      roles,
-      owner,
-      invoker,
-    };
-  }
-
-  it("blocks reentrant call - doNothing is never executed", async () => {
-    const { roles, invoker } = await loadFixture(setup);
-
-    const roleKey = ethers.hexlify(ethers.randomBytes(32));
-
-    const ReentrancyChecker =
-      await ethers.getContractFactory("ReentrancyChecker");
-    const checker = await ReentrancyChecker.deploy(
-      await roles.getAddress(),
+    // invoker (the signer) and checker (which sends and relays every call):
+    // members with a default role (granting enables them as modules), so
+    // that only the reentrancy guard stops the checker's call
+    for (const module of [invoker.account.address, checker.address]) {
+      await roles.write.grantRole([module, roleKey, 0n, 0n, 0n]);
+      await roles.write.setDefaultRole([module, roleKey]);
+    }
+    await roles.write.allowTargetPacked([
       roleKey,
-    );
-    const checkerAddress = await checker.getAddress();
-
-    // Setup: grant role to invoker
-    await roles.grantRole(invoker.address, roleKey, 0, 0, 0);
-
-    // Setup: enable checker as module and grant same role so it can callback
-    await roles.enableModule(checkerAddress);
-    await roles.grantRole(checkerAddress, roleKey, 0, 0, 0);
-
-    await roles.allowTargetPacked(
-      roleKey,
-      checkerAddress,
+      checker.address,
       "0x",
       ExecutionOptions.None,
-    );
+    ]);
 
-    await roles
-      .connect(invoker)
-      .execTransactionWithRole(
-        checkerAddress,
-        0,
-        checker.interface.encodeFunctionData("attack"),
-        0,
-        roleKey,
-        true,
+    /** Calldata for `entrypoint`, to call `data` on the checker; the signed
+     *  one is signed by the invoker, an enabled member module. */
+    const encode = (entrypoint: Entrypoint, data: Hex) =>
+      encodeEntrypoint(
+        roles,
+        entrypoint,
+        { to: checker.address, data, roleKey },
+        invoker,
       );
 
-    // Verify attack() was executed
-    expect(await checker.attackCalled()).to.equal(true);
+    /** A call that only passes once the guard is released. */
+    const probe = () =>
+      encode(
+        "execTransactionWithRole",
+        encodeFunctionData({ abi: checker.abi, functionName: "probe" }),
+      );
 
-    // Verify the reentrant call was caught with Reentrancy error
-    expect(await checker.caughtReentrancy()).to.equal(true);
+    return { roles, checker, invoker, roleKey, encode, probe };
+  }
 
-    // Verify that doNothing was NOT called (reentrancy was blocked)
-    expect(await checker.doNothingCalled()).to.equal(false);
-  });
+  // The guard is transient storage, which clears at the end of every
+  // transaction: whether an entrypoint releases it shows only within the same
+  // transaction, so `callTwice` probes right after the outer call.
+
+  for (const outer of ENTRYPOINTS)
+    for (const inner of ENTRYPOINTS)
+      it(`blocks ${inner} from inside ${outer}, then releases`, async () => {
+        const { checker, encode, probe } = await loadFixture(setup);
+
+        await checker.write.setReentry([
+          await encode(
+            inner,
+            encodeFunctionData({ abi: checker.abi, functionName: "doNothing" }),
+          ),
+        ]);
+        await checker.write.callTwice([
+          await encode(
+            outer,
+            encodeFunctionData({ abi: checker.abi, functionName: "attack" }),
+          ),
+          await probe(),
+        ]);
+
+        assert.equal(await checker.read.attackCalled(), true);
+        assert.equal(await checker.read.reentered(), false);
+        assert.equal(
+          await checker.read.reentryResult(),
+          toFunctionSelector("Reentrancy()"),
+        );
+        assert.equal(await checker.read.doNothingCalled(), false);
+
+        assert.equal(await checker.read.secondSucceeded(), true);
+        assert.equal(await checker.read.probeCalled(), true);
+      });
+
+  // The target catches the refused reentry and returns normally: the outer
+  // execution settles as usual, and the blocked call left nothing behind.
+  for (const outer of ENTRYPOINTS)
+    it(`${outer} settles normally when the target catches the refused reentry`, async () => {
+      const { roles, checker, invoker, roleKey, encode } =
+        await loadFixture(setup);
+      // the outer call is attributed to its signer, or else its sender
+      const module =
+        outer === "execTransactionWithRoleSigned"
+          ? invoker.account.address
+          : checker.address;
+      await roles.write.grantRole([module, roleKey, 0n, 0n, 3n]);
+      await checker.write.setReentry([
+        await encode(
+          "execTransactionWithRole",
+          encodeFunctionData({ abi: checker.abi, functionName: "doNothing" }),
+        ),
+      ]);
+
+      await viem.assertions.emitWithArgs(
+        checker.write.callTwice([
+          await encode(
+            outer,
+            encodeFunctionData({ abi: checker.abi, functionName: "attack" }),
+          ),
+          "0x",
+        ]),
+        roles,
+        "UpdateRole",
+        [roleKey, module, 0n, maxUint64, 2n],
+      );
+      assert.equal(
+        await checker.read.reentryResult(),
+        toFunctionSelector("Reentrancy()"),
+      );
+      assert.equal(await checker.read.doNothingCalled(), false);
+      const [, , , usesLeft] = await roles.read.membershipOf([module, roleKey]);
+      assert.equal(usesLeft, 2n);
+    });
+
+  // The IAvatar entrypoints return false, without reverting, when the call
+  // fails: nothing rolls the guard back, so the entrypoint must release it.
+  for (const outer of [
+    "execTransactionFromModule",
+    "execTransactionFromModuleReturnData",
+  ] as const)
+    it(`${outer} releases the guard when the call fails`, async () => {
+      const { roles, checker, encode, probe } = await loadFixture(setup);
+
+      await checker.write.callTwice([
+        await encode(
+          outer,
+          encodeFunctionData({ abi: checker.abi, functionName: "fail" }),
+        ),
+        await probe(),
+      ]);
+
+      // it returned success = false
+      const decoded = decodeFunctionResult({
+        abi: roles.abi,
+        functionName: outer,
+        data: await checker.read.firstResult(),
+      });
+      const success = Array.isArray(decoded) ? decoded[0] : decoded;
+      assert.equal(success, false);
+      assert.equal(await checker.read.secondSucceeded(), true);
+      assert.equal(await checker.read.probeCalled(), true);
+    });
 });

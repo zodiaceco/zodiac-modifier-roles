@@ -22,10 +22,7 @@ export default task(
       await connection.provider.request({ method: "eth_chainId" }),
     );
 
-    for (const deployment of await buildMastercopyDeployments(
-      hre,
-      connection,
-    )) {
+    for (const deployment of await buildMastercopyDeployments(hre)) {
       const { noop } = await verifyMastercopy({
         chainId,
         apiKey,

@@ -1,285 +1,318 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, hexlify, Interface, randomBytes, ZeroHash } from "ethers";
-import type { BigNumberish } from "ethers";
-
-const defaultAbiCoder = AbiCoder.defaultAbiCoder();
-
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
+import {
+  encodeAbiParameters,
+  parseAbiParameters,
+  parseEventLogs,
+  toHex,
+  type Hex,
+} from "viem";
 import { network } from "hardhat";
 
 import {
   Encoding,
   Operator,
-  ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
-  packConditions,
 } from "../utils.js";
 import { createSetup } from "../setup.js";
-import type { Roles } from "../../typechain-types/index.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture, time } = networkHelpers;
-const { setupTestContract, setupOneParam } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupNoParam = setupFn("function fn()");
+const setupOneParam = setupFn("function fn(uint256)");
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
 
-describe("Operator - CallWithinAllowance", async () => {
+const callWithinAllowance = (key: Hex) => ({
+  paramType: Encoding.None,
+  operator: Operator.CallWithinAllowance,
+  compValue: key,
+});
+const equalTo = (value: bigint) => ({
+  paramType: Encoding.Static,
+  operator: Operator.EqualTo,
+  compValue: encodeAbiParameters(parseAbiParameters("uint256"), [value]),
+});
+const randomKey = () => toHex(randomBytes(32));
+
+describe("Operator - CallWithinAllowance", () => {
   after(async () => {
     await connection.close();
   });
 
-  async function setAllowance(
-    roles: Roles,
-    key: string,
-    balance: BigNumberish,
-    maxRefill: BigNumberish = 0,
-    refill: BigNumberish = 0,
-    period: BigNumberish = 0,
-    timestamp: BigNumberish = 0,
-  ) {
-    await roles.setAllowance(
-      key,
-      balance,
-      maxRefill,
-      refill,
-      period,
-      timestamp,
-    );
-  }
+  describe("as the root condition", () => {
+    it("charges one per call until the balance runs out", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupNoParam);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 2n, 0n, 0n, 0n, 0n]);
+      await allowFunction(flattenCondition(callWithinAllowance(key)));
 
-  describe("CallWithinAllowance - Check", () => {
-    async function setup() {
-      const { roles, member, testContractAddress, roleKey } =
-        await setupTestContract();
-      const iface = new Interface(["function doNothing()"]);
-      const fn = iface.getFunction("doNothing")!;
-
-      const allowanceKey = hexlify(randomBytes(32));
-
-      const packed = await packConditions(
+      await viem.assertions.emitWithArgs(invoke(), roles, "ConsumeAllowance", [
+        key,
+        1n,
+        1n,
+      ]);
+      await viem.assertions.emitWithArgs(invoke(), roles, "ConsumeAllowance", [
+        key,
+        1n,
+        0n,
+      ]);
+      // the root node, and no payload: offset 0
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(),
         roles,
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: defaultAbiCoder.encode(["bytes32"], [allowanceKey]),
-        }),
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 0n, 0n],
       );
-      await roles.allowFunctionPacked(
-        roleKey,
-        testContractAddress,
-        fn.selector,
-        packed,
-        ExecutionOptions.None,
-      );
+    });
 
-      async function invoke() {
-        return roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, []),
-            0,
-          );
-      }
+    it("charges a pending refill, then refuses until the next one", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupNoParam);
+      const key = randomKey();
+      // balance 0; one refill of 1 is due
+      await roles.write.setAllowance([
+        key,
+        0n,
+        0n,
+        1n,
+        1000n,
+        BigInt(await time.latest()) - 1010n,
+      ]);
+      await allowFunction(flattenCondition(callWithinAllowance(key)));
 
-      return {
+      await viem.assertions.emitWithArgs(invoke(), roles, "ConsumeAllowance", [
+        key,
+        1n,
+        0n,
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(),
         roles,
-        member,
-        allowanceKey,
-        invoke,
-      };
-    }
-
-    it("success - from existing balance", async () => {
-      const { roles, allowanceKey, invoke } = await loadFixture(setup);
-
-      await setAllowance(roles, allowanceKey, 1);
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      await expect(invoke())
-        .to.emit(roles, "ConsumeAllowance")
-        .withArgs(allowanceKey, 1, 0);
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      await expect(invoke())
-        .to.be.revertedWithCustomError(roles, `ConditionViolation`)
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance node (root)
-          anyValue,
-        );
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 0n, 0n],
+      );
     });
 
-    it("success - multiple checks from existing balance", async () => {
-      const { roles, allowanceKey, invoke } = await loadFixture(setup);
-
-      await setAllowance(roles, allowanceKey, 2);
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(2);
-
-      await expect(invoke()).to.not.be.revert(ethers);
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      await expect(invoke()).to.not.be.revert(ethers);
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      await expect(invoke())
-        .to.be.revertedWithCustomError(roles, `ConditionViolation`)
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance node (root)
-          anyValue,
+    it("on a whole target, charges calls with empty calldata too", async () => {
+      const { roles, member, testContractAddress, allowTarget } =
+        await loadFixture(setupTestContract);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 2n, 0n, 0n, 0n, 0n]);
+      await allowTarget(flattenCondition(callWithinAllowance(key)));
+      const exec = (data: Hex) =>
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, data, 0],
+          { account: member.account },
         );
-    });
 
-    it("success - from balance 0 but enough refill pending", async () => {
-      const { roles, allowanceKey, invoke } = await loadFixture(setup);
-
-      const timestamp = await time.latest();
-      await setAllowance(roles, allowanceKey, 0, 0, 1, 1000, timestamp - 1010);
-
-      await expect(invoke()).to.not.be.revert(ethers);
-      await expect(invoke())
-        .to.be.revertedWithCustomError(roles, `ConditionViolation`)
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance node (root)
-          anyValue,
-        );
-    });
-
-    it("fail - insufficient balance and not enough elapsed for next refill", async () => {
-      const { roles, allowanceKey, invoke } = await loadFixture(setup);
-
-      const timestamp = await time.latest();
-      await setAllowance(roles, allowanceKey, 0, 0, 1, 1000, timestamp);
-
-      await expect(invoke())
-        .to.be.revertedWithCustomError(roles, `ConditionViolation`)
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance node (root)
-          anyValue,
-        );
+      await viem.assertions.emitWithArgs(
+        exec("0x"),
+        roles,
+        "ConsumeAllowance",
+        [key, 1n, 1n],
+      );
+      await viem.assertions.emitWithArgs(
+        exec("0x12345678"),
+        roles,
+        "ConsumeAllowance",
+        [key, 1n, 0n],
+      );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec("0x"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 0n, 0n],
+      );
     });
   });
 
-  describe("CallWithinAllowance - Variants", () => {
-    it("enforces different call allowances per variant", async () => {
-      const { roles, invoke, allowFunction } = await loadFixture(setupOneParam);
+  describe("in logical combinations", () => {
+    it("charges after the rest of an And passes", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 1n, 0n, 0n, 0n, 0n]);
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.And,
+          children: [
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [equalTo(42n)],
+            },
+            callWithinAllowance(key),
+          ],
+        }),
+      );
 
-      const allowanceKey1 =
-        "0x1000000000000000000000000000000000000000000000000000000000000001";
-      const allowanceKey2 =
-        "0x2000000000000000000000000000000000000000000000000000000000000002";
-      const value1 = 100;
-      const value2 = 200;
-      const valueOther = 9999;
+      // And[0] -> Matches[1], CallWithinAllowance[2] -> EqualTo[3]
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(999n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 3n, 4n],
+      );
+      await viem.assertions.emitWithArgs(
+        invoke(42n),
+        roles,
+        "ConsumeAllowance",
+        [key, 1n, 0n],
+      );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(42n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 2n, 0n],
+      );
+    });
 
-      await setAllowance(roles, allowanceKey1, 0);
-      await setAllowance(roles, allowanceKey2, 1);
+    it("charges only the allowance of the Or branch that passes", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
+      const [key100, key200] = [randomKey(), randomKey()];
+      await roles.write.setAllowance([key100, 1n, 0n, 0n, 0n, 0n]);
+      await roles.write.setAllowance([key200, 1n, 0n, 0n, 0n, 0n]);
+      const branch = (value: bigint, key: Hex) => ({
+        paramType: Encoding.None,
+        operator: Operator.And,
+        children: [
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [equalTo(value)],
+          },
+          callWithinAllowance(key),
+        ],
+      });
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [branch(100n, key100), branch(200n, key200)],
+        }),
+      );
 
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(9999n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, 0n, 0n],
+      );
+
+      // 200's branch passes: its allowance is charged, 100's is left alone
+      await viem.assertions.emitWithArgs(
+        invoke(200n),
+        roles,
+        "ConsumeAllowance",
+        [key200, 1n, 0n],
+      );
+      assert.equal((await roles.read.allowances([key100]))[3], 1n);
+      // 200's is used up, and 100's balance does not stand in for it
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(200n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, 0n, 0n],
+      );
+
+      await viem.assertions.emitWithArgs(
+        invoke(100n),
+        roles,
+        "ConsumeAllowance",
+        [key100, 1n, 0n],
+      );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(100n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, 0n, 0n],
+      );
+    });
+
+    it("does not charge an Or branch that fails after it", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 1n, 0n, 0n, 0n, 0n]);
       await allowFunction(
         flattenCondition({
           paramType: Encoding.None,
           operator: Operator.Or,
           children: [
             {
+              // charges first, then fails for anything but 100
               paramType: Encoding.None,
               operator: Operator.And,
               children: [
+                callWithinAllowance(key),
                 {
                   paramType: Encoding.AbiEncoded,
                   operator: Operator.Matches,
-                  children: [
-                    {
-                      paramType: Encoding.Static,
-                      operator: Operator.EqualTo,
-                      compValue: defaultAbiCoder.encode(["uint256"], [value1]),
-                    },
-                  ],
-                },
-                {
-                  paramType: Encoding.None,
-                  operator: Operator.CallWithinAllowance,
-                  compValue: defaultAbiCoder.encode(
-                    ["bytes32"],
-                    [allowanceKey1],
-                  ),
+                  children: [equalTo(100n)],
                 },
               ],
             },
             {
-              paramType: Encoding.None,
-              operator: Operator.And,
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
               children: [
-                {
-                  paramType: Encoding.AbiEncoded,
-                  operator: Operator.Matches,
-                  children: [
-                    {
-                      paramType: Encoding.Static,
-                      operator: Operator.EqualTo,
-                      compValue: defaultAbiCoder.encode(["uint256"], [value2]),
-                    },
-                  ],
-                },
-                {
-                  paramType: Encoding.None,
-                  operator: Operator.CallWithinAllowance,
-                  compValue: defaultAbiCoder.encode(
-                    ["bytes32"],
-                    [allowanceKey2],
-                  ),
-                },
+                { paramType: Encoding.Static, operator: Operator.Pass },
               ],
             },
           ],
         }),
       );
 
-      await expect(invoke(valueOther))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.OrViolation,
-          0, // Or node
-          anyValue,
-        );
-
-      await expect(invoke(value1))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.OrViolation,
-          0, // Or node
-          anyValue,
-        );
-
-      await expect(invoke(value2)).not.to.be.revert(ethers);
-      await expect(invoke(value2))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.OrViolation,
-          0, // Or node
-          anyValue,
-        );
+      const publicClient = await viem.getPublicClient();
+      const hash = await invoke(999n);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const logs = parseEventLogs({
+        abi: roles.abi,
+        eventName: "ConsumeAllowance",
+        logs: receipt.logs,
+      });
+      assert.equal(logs.length, 0);
+      assert.equal((await roles.read.allowances([key]))[3], 1n);
+      await viem.assertions.emitWithArgs(
+        invoke(100n),
+        roles,
+        "ConsumeAllowance",
+        [key, 1n, 0n],
+      );
     });
-  });
 
-  describe("CallWithinAllowance - Logical Combinations", () => {
-    it("AND(CallWithinAllowance, SomeParamComparison)", async () => {
-      const { roles, invoke, allowFunction } = await loadFixture(setupOneParam);
+    it("charges twice when it appears twice in an And", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupNoParam);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 3n, 0n, 0n, 0n, 0n]);
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.And,
+          children: [callWithinAllowance(key), callWithinAllowance(key)],
+        }),
+      );
 
-      const allowanceKey =
-        "0x0000000000000000000000000000000000000000000000000000000000000001";
-      const allowedValue = 42;
+      await viem.assertions.emitWithArgs(invoke(), roles, "ConsumeAllowance", [
+        key,
+        2n,
+        1n,
+      ]);
+      // one left: the second charge fails
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 2n, 0n],
+      );
+    });
 
-      await setAllowance(roles, allowanceKey, 3);
-
+    it("charges the same allowance as a WithinAllowance on a parameter", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(setupOneParam);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 10n, 0n, 0n, 0n, 0n]);
       await allowFunction(
         flattenCondition({
           paramType: Encoding.None,
@@ -291,563 +324,73 @@ describe("Operator - CallWithinAllowance", async () => {
               children: [
                 {
                   paramType: Encoding.Static,
-                  operator: Operator.EqualTo,
-                  compValue: defaultAbiCoder.encode(
-                    ["uint256"],
-                    [allowedValue],
-                  ),
+                  operator: Operator.WithinAllowance,
+                  compValue: key,
                 },
               ],
             },
-            {
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: defaultAbiCoder.encode(["bytes32"], [allowanceKey]),
-            },
+            callWithinAllowance(key),
           ],
         }),
       );
 
-      // Wrong param value - should fail
-      await expect(invoke(999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAllowed,
-          3, // EqualTo node
-          anyValue,
-        );
-
-      // Correct param - should succeed (3 times)
-      await expect(invoke(allowedValue)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(2);
-
-      await expect(invoke(allowedValue)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      await expect(invoke(allowedValue)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      // Now should fail due to exhausted allowance
-      await expect(invoke(allowedValue))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          2, // CallWithinAllowance node
-          anyValue,
-        );
-    });
-
-    it("AND(CallWithinAllowance, OR(ParamA, ParamB))", async () => {
-      const { roles, invoke, allowFunction } = await loadFixture(setupOneParam);
-
-      const allowanceKey =
-        "0x0000000000000000000000000000000000000000000000000000000000000001";
-      const allowedValueA = 100;
-      const allowedValueB = 200;
-
-      await setAllowance(roles, allowanceKey, 4);
-
-      await allowFunction(
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.And,
-          children: [
-            {
-              paramType: Encoding.AbiEncoded,
-              operator: Operator.Matches,
-              children: [
-                {
-                  paramType: Encoding.None,
-                  operator: Operator.Or,
-                  children: [
-                    {
-                      paramType: Encoding.Static,
-                      operator: Operator.EqualTo,
-                      compValue: defaultAbiCoder.encode(
-                        ["uint256"],
-                        [allowedValueA],
-                      ),
-                    },
-                    {
-                      paramType: Encoding.Static,
-                      operator: Operator.EqualTo,
-                      compValue: defaultAbiCoder.encode(
-                        ["uint256"],
-                        [allowedValueB],
-                      ),
-                    },
-                  ],
-                },
-              ],
-            },
-            {
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: defaultAbiCoder.encode(["bytes32"], [allowanceKey]),
-            },
-          ],
-        }),
-      );
-
-      // Wrong param value (not A or B) - should fail
-      await expect(invoke(999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.OrViolation,
-          3, // Or node
-          anyValue,
-        );
-
-      // Allowed value A - should succeed
-      await expect(invoke(allowedValueA)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(3);
-
-      // Allowed value B - should succeed
-      await expect(invoke(allowedValueB)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(2);
-
-      // Allowed value A again - should succeed
-      await expect(invoke(allowedValueA)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      // Allowed value B again - should succeed
-      await expect(invoke(allowedValueB)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      // Both values should now fail due to exhausted allowance
-      await expect(invoke(allowedValueA))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          2, // CallWithinAllowance node
-          anyValue,
-        );
-      await expect(invoke(allowedValueB))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          2, // CallWithinAllowance node
-          anyValue,
-        );
-    });
-
-    it("CallWithinAllowance inside And as tuple field - Tuple(Static, And(CallWithinAllowance, Static))", async () => {
-      const { member, roles, testContractAddress, roleKey } =
-        await loadFixture(setupTestContract);
-
-      const iface = new Interface([
-        "function twoParams(uint256 first, uint256 second)",
-      ]);
-      const fn = iface.getFunction("twoParams")!;
-
-      const allowanceKey =
-        "0x0000000000000000000000000000000000000000000000000000000000000001";
-
-      await setAllowance(roles, allowanceKey, 2);
-
-      // Structure: AbiEncoded -> Matches(Pass, And(EqualTo, CallWithinAllowance))
-      // The And wraps CallWithinAllowance together with the field's structural check.
-      // Type tree sees this as tuple(static, static).
-      const packed = await packConditions(
+      // 5 for the parameter, 1 for the call
+      await viem.assertions.emitWithArgs(
+        invoke(5n),
         roles,
+        "ConsumeAllowance",
+        [key, 6n, 4n],
+      );
+      // the parameter takes all 4: none left for the call
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(4n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 2n, 0n],
+      );
+    });
+
+    it("as a tuple field inside And, charges once the field matches", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupTwoParams);
+      const key = randomKey();
+      await roles.write.setAllowance([key, 1n, 0n, 0n, 0n, 0n]);
+      // Matches[0] -> Pass[1], And[2] -> EqualTo[3], CallWithinAllowance[4]
+      await allowFunction(
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
           children: [
-            {
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-            },
+            { paramType: Encoding.Static, operator: Operator.Pass },
             {
               paramType: Encoding.None,
               operator: Operator.And,
-              children: [
-                {
-                  paramType: Encoding.Static,
-                  operator: Operator.EqualTo,
-                  compValue: defaultAbiCoder.encode(["uint256"], [42]),
-                },
-                {
-                  paramType: Encoding.None,
-                  operator: Operator.CallWithinAllowance,
-                  compValue: defaultAbiCoder.encode(
-                    ["bytes32"],
-                    [allowanceKey],
-                  ),
-                },
-              ],
+              children: [equalTo(42n), callWithinAllowance(key)],
             },
           ],
         }),
       );
-      await roles.allowFunctionPacked(
-        roleKey,
-        testContractAddress,
-        fn.selector,
-        packed,
-        ExecutionOptions.None,
-      );
 
-      const invoke = (first: number, second: number) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [first, second]),
-            0,
-          );
-
-      // Wrong second param - should fail
-      await expect(invoke(100, 999))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAllowed,
-          3, // EqualTo: Matches[0] -> Pass[1], And[2] -> EqualTo[3], CallWithinAllowance[4]
-          anyValue,
-        );
-
-      // Correct second param (42) - should succeed and consume allowance
-      await expect(invoke(100, 42)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      await expect(invoke(200, 42)).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      // Allowance exhausted - should fail
-      await expect(invoke(300, 42))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          4, // CallWithinAllowance node
-          anyValue,
-        );
-    });
-  });
-
-  describe("CallWithinAllowance - Standalone Root", () => {
-    it("works as standalone root condition with allowTarget", async () => {
-      const { member, roles, testContractAddress, roleKey } =
-        await loadFixture(setupTestContract);
-
-      const iface = new Interface([
-        "function doNothing()",
-        "function doEvenLess()",
-      ]);
-
-      const allowanceKey =
-        "0x0000000000000000000000000000000000000000000000000000000000000002";
-
-      // Allowance of 2 calls
-      await setAllowance(roles, allowanceKey, 2);
-
-      const packed = await packConditions(
+      // the second parameter's word starts at 4 + 32
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(100n, 999n),
         roles,
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: allowanceKey,
-        }),
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 3n, 36n],
       );
-      await roles.allowTargetPacked(
-        roleKey,
-        testContractAddress,
-        packed,
-        ExecutionOptions.Both,
-      );
-
-      const doNothingData = iface.encodeFunctionData("doNothing", []);
-      const doEvenLessData = iface.encodeFunctionData("doEvenLess", []);
-
-      // First call passes (allowance: 2 -> 1)
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            doNothingData,
-            0,
-            roleKey,
-            true,
-          ),
-      ).to.not.be.revert(ethers);
-
-      // Second call passes (allowance: 1 -> 0)
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            doEvenLessData,
-            0,
-            roleKey,
-            true,
-          ),
-      ).to.not.be.revert(ethers);
-
-      // Third call fails (allowance exhausted)
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionWithRole(
-            testContractAddress,
-            0,
-            doNothingData,
-            0,
-            roleKey,
-            true,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance as root node
-          anyValue,
-        );
-    });
-
-    it("works as standalone root condition with allowFunction", async () => {
-      const { member, roles, testContractAddress, roleKey } =
-        await loadFixture(setupTestContract);
-
-      const iface = new Interface(["function doNothing()"]);
-      const fn = iface.getFunction("doNothing")!;
-
-      const allowanceKey =
-        "0x0000000000000000000000000000000000000000000000000000000000000003";
-
-      // Allowance of 3 calls to this specific function
-      await setAllowance(roles, allowanceKey, 3);
-
-      // CallWithinAllowance as the sole/root condition for a specific function
-      const packedCondition = await packConditions(
+      await viem.assertions.emitWithArgs(
+        invoke(100n, 42n),
         roles,
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: allowanceKey,
-        }),
+        "ConsumeAllowance",
+        [key, 1n, 0n],
       );
-      await roles.allowFunctionPacked(
-        roleKey,
-        testContractAddress,
-        fn.selector,
-        packedCondition,
-        ExecutionOptions.None,
-      );
-
-      async function invoke() {
-        return roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, []),
-            0,
-          );
-      }
-
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(3);
-
-      // First call passes (allowance: 3 -> 2)
-      await expect(invoke()).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(2);
-
-      // Second call passes (allowance: 2 -> 1)
-      await expect(invoke()).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(1);
-
-      // Third call passes (allowance: 1 -> 0)
-      await expect(invoke()).to.not.be.revert(ethers);
-      expect((await roles.allowances(allowanceKey)).balance).to.equal(0);
-
-      // Fourth call fails (allowance exhausted)
-      await expect(invoke())
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance as root node
-          anyValue,
-        );
-    });
-  });
-
-  describe("violation context", () => {
-    it("reports the violating node index", async () => {
-      const { roles, member, testContractAddress, roleKey } =
-        await loadFixture(setupTestContract);
-
-      const iface = new Interface(["function doNothing()"]);
-      const fn = iface.getFunction("doNothing")!;
-      const allowanceKey = hexlify(randomBytes(32));
-
-      await setAllowance(roles, allowanceKey, 0); // No balance
-
-      const packed = await packConditions(
+      // nested in the field, it reports the field's offset (at the root, 0)
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(200n, 42n),
         roles,
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: defaultAbiCoder.encode(["bytes32"], [allowanceKey]),
-        }),
+        "ConditionViolation",
+        [ConditionViolationStatus.AllowanceExceeded, 4n, 36n],
       );
-      await roles.allowFunctionPacked(
-        roleKey,
-        testContractAddress,
-        fn.selector,
-        packed,
-        ExecutionOptions.None,
-      );
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, []),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          0, // CallWithinAllowance node (root)
-          anyValue,
-        );
-    });
-
-    it("reports the calldata range of the violation", async () => {
-      const { roles, member, testContractAddress, roleKey } =
-        await loadFixture(setupTestContract);
-
-      const iface = new Interface(["function doNothing()"]);
-      const fn = iface.getFunction("doNothing")!;
-      const allowanceKey = hexlify(randomBytes(32));
-
-      await setAllowance(roles, allowanceKey, 0); // No balance
-
-      const packed = await packConditions(
-        roles,
-        flattenCondition({
-          paramType: Encoding.None,
-          operator: Operator.CallWithinAllowance,
-          compValue: defaultAbiCoder.encode(["bytes32"], [allowanceKey]),
-        }),
-      );
-      await roles.allowFunctionPacked(
-        roleKey,
-        testContractAddress,
-        fn.selector,
-        packed,
-        ExecutionOptions.None,
-      );
-
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, []),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.AllowanceExceeded,
-          anyValue,
-          0, // payloadLocation: CallWithinAllowance has no payload
-        );
-    });
-  });
-
-  describe("integrity", () => {
-    describe("encoding", () => {
-      it("reverts UnsuitableParameterType for invalid encodings", async () => {
-        const { roles } = await loadFixture(setupTestContract);
-
-        const allowanceKey = hexlify(randomBytes(32));
-
-        for (const encoding of [
-          Encoding.Static,
-          Encoding.Dynamic,
-          Encoding.Tuple,
-          Encoding.Array,
-          Encoding.AbiEncoded,
-          Encoding.EtherValue,
-        ]) {
-          await expect(
-            packConditions(roles, [
-              {
-                parent: 0,
-                paramType: encoding,
-                operator: Operator.CallWithinAllowance,
-                compValue: allowanceKey,
-              },
-            ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-        }
-      });
-    });
-
-    describe("compValue", () => {
-      it("reverts UnsuitableCompValue when compValue is not 32 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
-
-        await expect(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: "0x" + "ab".repeat(31), // 31 bytes
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-
-      it("reverts UnsuitableCompValue when compValue is 33 bytes", async () => {
-        const { roles } = await loadFixture(setupTestContract);
-
-        await expect(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: "0x" + "ab".repeat(33), // 33 bytes
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-    });
-
-    describe("children", () => {
-      it("reverts LeafNodeCannotHaveChildren when CallWithinAllowance has children", async () => {
-        const { roles } = await loadFixture(setupTestContract);
-
-        const allowanceKey = hexlify(randomBytes(32));
-
-        await expect(
-          packConditions(roles, [
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: allowanceKey,
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
-      });
     });
   });
 });

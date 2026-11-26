@@ -6,12 +6,13 @@ import { findPrimaryType, parseType } from "../types/index"
 export function encodeTypedMessage({
   types,
   message,
+  primaryType = findPrimaryType({ types }),
 }: {
   types: TypedData
   message: Record<string, any>
+  /** The struct `message` is; inferred from `types` when omitted. */
+  primaryType?: string
 }): `0x${string}` {
-  const primaryType = findPrimaryType({ types })
-
   const fields = types[primaryType]
   return AbiCoder.defaultAbiCoder().encode(
     fields.map((field) => abiType(types, field.type)),

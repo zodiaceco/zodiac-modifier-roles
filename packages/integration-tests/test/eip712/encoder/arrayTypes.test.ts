@@ -1,9 +1,10 @@
+import { after, describe, it } from "node:test"
 import { network } from "hardhat"
 
-import { createCompareToEthersHashing } from "./compareToEthersHashing.js"
+import { createCompareToViemHashing } from "./compareToEthersHashing.js"
 
 const connection = await network.create()
-const compareToEthersHashing = createCompareToEthersHashing(connection)
+const compareToViemHashing = createCompareToViemHashing(connection)
 
 describe("EIP712Encoder", () => {
   after(async () => {
@@ -27,7 +28,7 @@ describe("EIP712Encoder", () => {
         scores: [85, 90, 95],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message,
@@ -50,7 +51,7 @@ describe("EIP712Encoder", () => {
         scores: [85, 90, 95],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message,
@@ -116,7 +117,7 @@ describe("EIP712Encoder", () => {
           },
         ],
       }
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message,
@@ -206,7 +207,7 @@ describe("EIP712Encoder", () => {
         publishDate: 1677596400,
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message,
@@ -322,7 +323,7 @@ describe("EIP712Encoder", () => {
         tags: ["documentation", "tutorial", "standards", "typed-data"],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message,

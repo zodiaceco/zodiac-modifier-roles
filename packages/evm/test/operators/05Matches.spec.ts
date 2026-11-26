@@ -1,8 +1,18 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, Interface, hexlify, randomBytes, concat } from "ethers";
-
+import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import {
+  concat,
+  encodeAbiParameters,
+  encodeFunctionData,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  toHex,
+  type Hex,
+} from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -13,13 +23,14 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupOneParam, setupTwoParams, setupDynamicParam } =
-  createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupOneParam = setupFn("function fn(uint256)");
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
+const setupDynamicParam = setupFn("function fn(bytes)");
+const setupTupleWithBytes = setupFn("function fn((bytes, uint256))");
 
 describe("Operator - Matches", () => {
   after(async () => {
@@ -46,7 +57,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -57,22 +71,29 @@ describe("Operator - Matches", () => {
 
       // Send payload with 10 bytes of random junk + encoded param
       // The junk should be skipped, not matched.
-      const junkHeader = hexlify(randomBytes(10));
-      const paramData = abiCoder.encode(["uint256"], [42]).slice(2); // remove 0x
-      const correctPayload = junkHeader + paramData;
+      const junkHeader = toHex(randomBytes(10));
+      const correctPayload = concat([
+        junkHeader,
+        encodeAbiParameters(parseAbiParameters("uint256"), [42n]),
+      ]);
 
-      await expect(invoke(correctPayload)).to.not.be.revert(ethers);
+      await invoke(correctPayload);
 
       // Ensure that actual logic checks the param (42)
-      const wrongParamPayload =
-        junkHeader + abiCoder.encode(["uint256"], [99]).slice(2);
-      await expect(invoke(wrongParamPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongParamPayload = concat([
+        junkHeader,
+        encodeAbiParameters(parseAbiParameters("uint256"), [99n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongParamPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo node
+          2n, // EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
   });
   describe("prefix validation", () => {
@@ -94,7 +115,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -104,20 +128,27 @@ describe("Operator - Matches", () => {
       );
 
       // Correct 4-byte prefix + valid param passes
-      const correctPayload =
-        "0xdeadbeef" + abiCoder.encode(["uint256"], [42]).slice(2);
-      await expect(invoke(correctPayload)).to.not.be.revert(ethers);
+      const correctPayload = concat([
+        "0xdeadbeef",
+        encodeAbiParameters(parseAbiParameters("uint256"), [42n]),
+      ]);
+      await invoke(correctPayload);
 
       // Wrong 4-byte prefix fails
-      const wrongPayload =
-        "0xcafebabe" + abiCoder.encode(["uint256"], [42]).slice(2);
-      await expect(invoke(wrongPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongPayload = concat([
+        "0xcafebabe",
+        encodeAbiParameters(parseAbiParameters("uint256"), [42n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.LeadingBytesNotAMatch,
-          1, // Matches node with prefix
+          1n, // Matches node with prefix
           anyValue,
-        );
+        ],
+      );
     });
 
     it("validates 4-byte prefix at the former 2^60 false-rejection boundary", async () => {
@@ -142,7 +173,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [bigValue]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [bigValue],
+                  ),
                 },
               ],
             },
@@ -152,20 +186,27 @@ describe("Operator - Matches", () => {
       );
 
       // Correct prefix + large param value passes
-      const payload =
-        "0xdeadbeef" + abiCoder.encode(["uint256"], [bigValue]).slice(2);
-      await expect(invoke(payload)).to.not.be.revert(ethers);
+      const payload = concat([
+        "0xdeadbeef",
+        encodeAbiParameters(parseAbiParameters("uint256"), [bigValue]),
+      ]);
+      await invoke(payload);
 
       // Wrong prefix still fails with LeadingBytesNotAMatch
-      const wrongPayload =
-        "0xcafebabe" + abiCoder.encode(["uint256"], [bigValue]).slice(2);
-      await expect(invoke(wrongPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongPayload = concat([
+        "0xcafebabe",
+        encodeAbiParameters(parseAbiParameters("uint256"), [bigValue]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.LeadingBytesNotAMatch,
-          1, // Matches node with prefix
+          1n, // Matches node with prefix
           anyValue,
-        );
+        ],
+      );
     });
 
     it("skips prefix check when compValue is empty (shift 0)", async () => {
@@ -186,7 +227,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -196,21 +240,26 @@ describe("Operator - Matches", () => {
       );
 
       // Wrong param value fails with ParameterNotAllowed, not LeadingBytesNotAMatch
-      const payload = abiCoder.encode(["uint256"], [999]);
-      await expect(invoke(payload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const payload = encodeAbiParameters(parseAbiParameters("uint256"), [
+        999n,
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(payload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo node
+          2n, // EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("validates 10-byte prefix (shift 10)", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupDynamicParam);
 
-      const prefix10 = hexlify(randomBytes(10));
+      const prefix10 = toHex(randomBytes(10));
 
       // Matches with 10-byte prefix
       await allowFunction(
@@ -226,7 +275,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [123]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [123n],
+                  ),
                 },
               ],
             },
@@ -236,39 +288,51 @@ describe("Operator - Matches", () => {
       );
 
       // Correct 10-byte prefix + valid param passes
-      const correctPayload =
-        prefix10 + abiCoder.encode(["uint256"], [123]).slice(2);
-      await expect(invoke(correctPayload)).to.not.be.revert(ethers);
+      const correctPayload = concat([
+        prefix10,
+        encodeAbiParameters(parseAbiParameters("uint256"), [123n]),
+      ]);
+      await invoke(correctPayload);
 
       // Wrong 10-byte prefix fails with LeadingBytesNotAMatch
-      const wrongPrefix10 = hexlify(randomBytes(10));
-      const wrongPrefixPayload =
-        wrongPrefix10 + abiCoder.encode(["uint256"], [123]).slice(2);
-      await expect(invoke(wrongPrefixPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongPrefix10 = toHex(randomBytes(10));
+      const wrongPrefixPayload = concat([
+        wrongPrefix10,
+        encodeAbiParameters(parseAbiParameters("uint256"), [123n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongPrefixPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.LeadingBytesNotAMatch,
-          1, // Matches node with prefix
+          1n, // Matches node with prefix
           anyValue,
-        );
+        ],
+      );
 
       // Correct prefix + wrong param fails with ParameterNotAllowed
-      const wrongParamPayload =
-        prefix10 + abiCoder.encode(["uint256"], [999]).slice(2);
-      await expect(invoke(wrongParamPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongParamPayload = concat([
+        prefix10,
+        encodeAbiParameters(parseAbiParameters("uint256"), [999n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongParamPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo node
+          2n, // EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("validates 31-byte prefix (shift 31)", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupDynamicParam);
 
-      const prefix31 = hexlify(randomBytes(31));
+      const prefix31 = toHex(randomBytes(31));
 
       // Matches with 31-byte prefix
       await allowFunction(
@@ -284,7 +348,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [456]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [456n],
+                  ),
                 },
               ],
             },
@@ -294,36 +361,43 @@ describe("Operator - Matches", () => {
       );
 
       // Correct 31-byte prefix + valid param passes
-      const correctPayload =
-        prefix31 + abiCoder.encode(["uint256"], [456]).slice(2);
-      await expect(invoke(correctPayload)).to.not.be.revert(ethers);
+      const correctPayload = concat([
+        prefix31,
+        encodeAbiParameters(parseAbiParameters("uint256"), [456n]),
+      ]);
+      await invoke(correctPayload);
 
       // Wrong 31-byte prefix fails
-      const wrongPrefix31 = hexlify(randomBytes(31));
-      const wrongPayload =
-        wrongPrefix31 + abiCoder.encode(["uint256"], [456]).slice(2);
-      await expect(invoke(wrongPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      const wrongPrefix31 = toHex(randomBytes(31));
+      const wrongPayload = concat([
+        wrongPrefix31,
+        encodeAbiParameters(parseAbiParameters("uint256"), [456n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongPayload),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.LeadingBytesNotAMatch,
-          1, // Matches node with prefix
+          1n, // Matches node with prefix
           anyValue,
-        );
+        ],
+      );
     });
   });
 
   describe("parameter routing", () => {
     it("routes decoded parameters to corresponding children", async () => {
-      const iface = new Interface(["function fn(uint256,uint256,uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256,uint256,uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
       // Matches routes each param to its corresponding child
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -331,88 +405,115 @@ describe("Operator - Matches", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [200]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                200n,
+              ]),
             },
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [300]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                300n,
+              ]),
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // All params match - passes
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [100, 200, 300]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [100n, 200n, 300n],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
 
       // First param wrong - fails
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [999n, 200n, 300n],
+            }),
             0,
-            iface.encodeFunctionData(fn, [999, 200, 300]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          1, // First EqualTo node
+          1n, // First EqualTo node
           anyValue,
-        );
+        ],
+      );
 
       // Second param wrong - fails
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [100n, 999n, 300n],
+            }),
             0,
-            iface.encodeFunctionData(fn, [100, 999, 300]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // Second EqualTo node
+          2n, // Second EqualTo node
           anyValue,
-        );
+        ],
+      );
 
       // Third param wrong - fails
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [100n, 200n, 999n],
+            }),
             0,
-            iface.encodeFunctionData(fn, [100, 200, 999]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          3, // Third EqualTo node
+          3n, // Third EqualTo node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("passes empty payload to non-structural children", async () => {
@@ -431,7 +532,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -439,7 +543,9 @@ describe("Operator - Matches", () => {
             {
               paramType: Encoding.EtherValue,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [100]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                100n,
+              ]),
             },
           ],
         }),
@@ -447,16 +553,19 @@ describe("Operator - Matches", () => {
       );
 
       // Correct param + correct ether
-      await expect(invoke(42, { value: 100 })).to.not.be.revert(ethers);
+      await invoke(42, { value: 100 });
 
       // Correct param + wrong ether
-      await expect(invoke(42, { value: 999 }))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(42, { value: 999 }),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EtherValue EqualTo node (BFS: And=0, Matches=1, EtherValue=2, Static=3)
+          2n, // EtherValue EqualTo node (BFS: And=0, Matches=1, EtherValue=2, Static=3)
           anyValue,
-        );
+        ],
+      );
     });
 
     it("accumulates consumptions across children", async () => {
@@ -464,10 +573,10 @@ describe("Operator - Matches", () => {
         await loadFixture(setupTwoParams);
 
       const allowanceKey =
-        "0x000000000000000000000000000000000000000000000000000000000000abcd";
+        "0x000000000000000000000000000000000000000000000000000000000000abcd" as const;
 
       // Set up allowance of 100
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       // Matches with two children consuming from same allowance
       await allowFunction(
@@ -491,20 +600,23 @@ describe("Operator - Matches", () => {
       );
 
       // First call: 30 + 20 = 50 consumed
-      await expect(invoke(30, 20)).to.not.be.revert(ethers);
+      await invoke(30, 20);
 
       // Verify consumption was accumulated
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(50);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 50n);
 
       // Second call: 30 + 30 = 60, but only 50 remaining
-      await expect(invoke(30, 30))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(30, 30),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.AllowanceExceeded,
-          2, // Second WithinAllowance node
+          2n, // Second WithinAllowance node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -525,19 +637,24 @@ describe("Operator - Matches", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [42]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                42n,
+              ]),
             },
           ],
         }),
       );
 
-      await expect(invoke(100, 99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(100, 99),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
-          2, // EqualTo child node at BFS index 2
+          2n, // EqualTo child node at BFS index 2
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -556,19 +673,24 @@ describe("Operator - Matches", () => {
             {
               paramType: Encoding.Static,
               operator: Operator.EqualTo,
-              compValue: abiCoder.encode(["uint256"], [42]),
+              compValue: encodeAbiParameters(parseAbiParameters("uint256"), [
+                42n,
+              ]),
             },
           ],
         }),
       );
 
-      await expect(invoke(100, 99))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(100, 99),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.ParameterNotAllowed,
           anyValue,
-          36, // payloadLocation: second param starts at byte 36 (4 + 32)
-        );
+          36n, // calldataOffset: second param starts at byte 36 (4 + 32)
+        ],
+      );
     });
   });
 
@@ -577,13 +699,13 @@ describe("Operator - Matches", () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn((uint256,uint256))"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn((uint256,uint256))"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -595,30 +717,39 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [[100, 200]]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [[100n, 200n]],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
     });
 
     it("reverts CalldataOverflow when tuple head is truncated", async () => {
@@ -627,7 +758,7 @@ describe("Operator - Matches", () => {
 
       const selector = "0xaabbccdd";
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
         selector,
@@ -642,34 +773,38 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Only 32 bytes but tuple needs 64
-      const truncatedData = selector + "00".repeat(32);
+      const truncatedData = (selector + "00".repeat(32)) as Hex;
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, truncatedData, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.CalldataOverflow,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, truncatedData, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, anyValue, anyValue],
+      );
     });
 
     it("reverts CalldataOverflow when inline element exceeds bounds", async () => {
@@ -678,7 +813,7 @@ describe("Operator - Matches", () => {
 
       const selector = "0xaabbccdd";
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
         selector,
@@ -693,47 +828,51 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // 48 bytes - first element OK, second element truncated
-      const truncatedData = selector + "00".repeat(48);
+      const truncatedData = (selector + "00".repeat(48)) as Hex;
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, truncatedData, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.CalldataOverflow,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, truncatedData, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, anyValue, anyValue],
+      );
     });
 
     it("reverts ParameterNotAllowed when tuple child value mismatches", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn((uint256,uint256))"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn((uint256,uint256))"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -745,36 +884,44 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[100n, 999n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [[100, 999]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAllowed,
-          anyValue,
-          anyValue,
-        );
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
     });
   });
 
@@ -785,7 +932,7 @@ describe("Operator - Matches", () => {
 
       const selector = "0xaabbccdd";
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
         selector,
@@ -803,25 +950,22 @@ describe("Operator - Matches", () => {
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Pointer to offset 32, but only 16 bytes at that location
-      const truncatedData =
-        selector +
+      const truncatedData = (selector +
         "0000000000000000000000000000000000000000000000000000000000000020" +
-        "00".repeat(16);
+        "00".repeat(16)) as Hex;
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, truncatedData, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.CalldataOverflow,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, truncatedData, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, anyValue, anyValue],
+      );
     });
 
     it("reverts CalldataOverflow when element exceeds bounds", async () => {
@@ -830,7 +974,7 @@ describe("Operator - Matches", () => {
 
       const selector = "0xaabbccdd";
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
         selector,
@@ -845,57 +989,63 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Array claims 3 elements but only 2 slots of data provided
-      const truncatedData =
-        selector +
+      const truncatedData = (selector +
         "0000000000000000000000000000000000000000000000000000000000000020" +
         "0000000000000000000000000000000000000000000000000000000000000003" +
-        "00".repeat(64);
+        "00".repeat(64)) as Hex;
 
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(testContractAddress, 0, truncatedData, 0),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.CalldataOverflow,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, truncatedData, 0],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, anyValue, anyValue],
+      );
     });
 
     it("reverts with ParameterNotAMatch when array shorter than expected", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn(uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
 
       // Condition expects exactly 2 elements
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -907,51 +1057,55 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Array with only 1 element - expects 2
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "fn", args: [[100n]] }),
             0,
-            iface.encodeFunctionData(fn, [[100]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAMatch,
-          anyValue,
-          anyValue,
-        );
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAMatch, anyValue, anyValue],
+      );
     });
 
     it("reverts with ParameterNotAMatch when array longer than expected", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn(uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
 
       // Condition expects exactly 2 elements
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -963,51 +1117,59 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Array with 3 elements - first two match, but third element exceeds condition count
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[100n, 200n, 300n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [[100, 200, 300]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAMatch,
-          anyValue,
-          anyValue,
-        );
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAMatch, anyValue, anyValue],
+      );
     });
 
     it("reverts with ParameterNotAllowed when one item does not match", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn(uint256[])"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
 
       // Condition expects exactly 2 elements with specific values
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -1019,33 +1181,45 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Array with correct length but wrong value for second element
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [[100n, 999n]],
+            }),
             0,
-            iface.encodeFunctionData(fn, [[100, 999]]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.ParameterNotAllowed, 3, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, 3n, anyValue],
+      );
     });
   });
 
@@ -1066,7 +1240,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -1075,9 +1252,11 @@ describe("Operator - Matches", () => {
         ExecutionOptions.Both,
       );
 
-      const payload =
-        "0xdeadbeef" + abiCoder.encode(["uint256"], [42]).slice(2);
-      await expect(invoke(payload)).to.not.be.revert(ethers);
+      const payload = concat([
+        "0xdeadbeef",
+        encodeAbiParameters(parseAbiParameters("uint256"), [42n]),
+      ]);
+      await invoke(payload);
     });
 
     it("reverts CalldataOverflow when nested payload is truncated", async () => {
@@ -1097,7 +1276,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [0]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [0n],
+                  ),
                 },
               ],
             },
@@ -1107,14 +1289,13 @@ describe("Operator - Matches", () => {
       );
 
       // 4-byte selector + only 16 bytes (need 32)
-      const truncatedPayload = "0xdeadbeef" + "00".repeat(16);
-      await expect(invoke(truncatedPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.CalldataOverflow,
-          anyValue,
-          anyValue,
-        );
+      const truncatedPayload = ("0xdeadbeef" + "00".repeat(16)) as Hex;
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(truncatedPayload),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.CalldataOverflow, anyValue, anyValue],
+      );
     });
 
     it("reverts LeadingBytesNotAMatch when prefix does not match", async () => {
@@ -1139,15 +1320,16 @@ describe("Operator - Matches", () => {
         ExecutionOptions.Both,
       );
 
-      const wrongPrefixPayload =
-        "0xcafebabe" + abiCoder.encode(["uint256"], [42]).slice(2);
-      await expect(invoke(wrongPrefixPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.LeadingBytesNotAMatch,
-          anyValue,
-          anyValue,
-        );
+      const wrongPrefixPayload = concat([
+        "0xcafebabe",
+        encodeAbiParameters(parseAbiParameters("uint256"), [42n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongPrefixPayload),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.LeadingBytesNotAMatch, anyValue, anyValue],
+      );
     });
 
     it("reverts ParameterNotAllowed when decoded child mismatches", async () => {
@@ -1167,7 +1349,10 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -1176,30 +1361,132 @@ describe("Operator - Matches", () => {
         ExecutionOptions.Both,
       );
 
-      const wrongValuePayload =
-        "0xdeadbeef" + abiCoder.encode(["uint256"], [999]).slice(2);
-      await expect(invoke(wrongValuePayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.ParameterNotAllowed,
-          anyValue,
-          anyValue,
-        );
+      const wrongValuePayload = concat([
+        "0xdeadbeef",
+        encodeAbiParameters(parseAbiParameters("uint256"), [999n]),
+      ]);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(wrongValuePayload),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
+    });
+
+    it("matches a nested call without parameters by its selector", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupDynamicParam);
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              compValue: "0x0004deadbeef",
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke("0xdeadbeef");
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xcafebabe"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.LeadingBytesNotAMatch, anyValue, anyValue],
+      );
+    });
+
+    it("compares a tuple holding nested calldata, described without children", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTupleWithBytes,
+      );
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            {
+              paramType: Encoding.Tuple,
+              operator: Operator.EqualTo,
+              compValue: encodeAbiParameters(
+                parseAbiParameters("(bytes, uint256)"),
+                [["0xdeadbeef", 5n]],
+              ),
+              children: [
+                { paramType: Encoding.AbiEncoded, operator: Operator.Pass },
+                { paramType: Encoding.Static, operator: Operator.Pass },
+              ],
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke(["0xdeadbeef", 5n]);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(["0xdeadbeef", 6n]),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
     });
   });
 
   describe("Or branches", () => {
+    it("allows functions without parameters by selector, on a target", async () => {
+      const { roles, member, testContractAddress, allowTarget } =
+        await loadFixture(setupTestContract);
+
+      const bySelector = (signature: string) => ({
+        paramType: Encoding.AbiEncoded,
+        operator: Operator.Matches,
+        compValue: concat(["0x0004", toFunctionSelector(signature)]),
+      });
+      await allowTarget(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.Or,
+          children: [bySelector("pause()"), bySelector("unpause()")],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      const exec = (signature: string) =>
+        roles.write.execTransactionFromModule(
+          [testContractAddress, 0n, toFunctionSelector(signature), 0],
+          { account: member.account },
+        );
+
+      await exec("pause()");
+      await exec("unpause()");
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        exec("kill()"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
+    });
+
     it("passes when one branch succeeds", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn(uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -1211,48 +1498,51 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // First branch matches
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [100]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({ abi, functionName: "fn", args: [100n] }),
+          0,
+        ],
+        { account: member.account },
+      );
 
       // Second branch matches
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            0,
-            iface.encodeFunctionData(fn, [200]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          0n,
+          encodeFunctionData({ abi, functionName: "fn", args: [200n] }),
+          0,
+        ],
+        { account: member.account },
+      );
     });
 
     it("passes when one branch overflows and other succeeds", async () => {
-      const { roles, allowFunction, invoke } =
-        await loadFixture(setupDynamicParam);
+      const { allowFunction, invoke } = await loadFixture(setupDynamicParam);
 
       await allowFunction(
         flattenCondition({
@@ -1290,21 +1580,21 @@ describe("Operator - Matches", () => {
       );
 
       // Single uint256 - first branch overflows, second succeeds
-      const payload = abiCoder.encode(["uint256"], [42]);
-      await expect(invoke(payload)).to.not.be.revert(ethers);
+      const payload = encodeAbiParameters(parseAbiParameters("uint256"), [42n]);
+      await invoke(payload);
     });
 
     it("reverts OrViolation when all branches fail validation", async () => {
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
-      const iface = new Interface(["function fn(uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
 
-      await roles.allowFunction(
+      await roles.write.allowFunction([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         flattenCondition({
           paramType: Encoding.AbiEncoded,
           operator: Operator.Matches,
@@ -1316,33 +1606,41 @@ describe("Operator - Matches", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [100]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [100n],
+                  ),
                 },
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [200]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [200n],
+                  ),
                 },
               ],
             },
           ],
         }),
         ExecutionOptions.Both,
-      );
+      ]);
 
       // Neither branch matches
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({ abi, functionName: "fn", args: [999n] }),
             0,
-            iface.encodeFunctionData(fn, [999]),
-            0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.OrViolation, anyValue, anyValue);
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
     });
 
     it("reverts OrViolation when all branches overflow", async () => {
@@ -1367,7 +1665,10 @@ describe("Operator - Matches", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [0]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [0n],
+                      ),
                     },
                   ],
                 },
@@ -1380,12 +1681,18 @@ describe("Operator - Matches", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [0]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [0n],
+                      ),
                     },
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [0]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [0n],
+                      ),
                     },
                   ],
                 },
@@ -1398,146 +1705,12 @@ describe("Operator - Matches", () => {
 
       // Empty bytes - both branches will overflow
       const emptyPayload = "0x";
-      await expect(invoke(emptyPayload))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.OrViolation, anyValue, anyValue);
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.None,
-        Encoding.Static,
-        Encoding.Dynamic,
-        Encoding.EtherValue,
-      ]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Matches,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    describe("compValue", () => {
-      it("only AbiEncoded accepts non-empty compValue", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        // All valid Matches encodings except AbiEncoded
-        for (const encoding of [Encoding.Tuple, Encoding.Array]) {
-          await expect(
-            allowTarget([
-              {
-                parent: 0,
-                paramType: encoding,
-                operator: Operator.Matches,
-                compValue: "0x".padEnd(66, "0"),
-              },
-              {
-                parent: 0,
-                paramType: Encoding.Static,
-                operator: Operator.Pass,
-                compValue: "0x",
-              },
-            ]),
-          ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-        }
-      });
-
-      it("reverts UnsuitableCompValue when AbiEncoded Matches has 1 byte compValue", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.AbiEncoded,
-              operator: Operator.Matches,
-              compValue: "0x04", // 1 byte - invalid (must be 0, 2, or 2+N)
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-
-      it("reverts UnsuitableCompValue when AbiEncoded Matches compValue exceeds 34 bytes", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        // 35 bytes = 2 + 33, but N must be <= 32
-        const compValue = "0x" + "00".repeat(35);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.AbiEncoded,
-              operator: Operator.Matches,
-              compValue,
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-      });
-    });
-
-    it("requires at least one structural child", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      const allowanceKey = hexlify(randomBytes(32));
-
-      // Tuple and Array require structural children (AbiEncoded does not)
-      for (const encoding of [
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-      ]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Matches,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Matches,
-              compValue: "0x",
-            },
-            {
-              // Non-structural child - should not count as structural
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: allowanceKey,
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-      }
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(emptyPayload),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
     });
   });
 });

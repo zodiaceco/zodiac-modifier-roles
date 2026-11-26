@@ -1,38 +1,32 @@
-import type { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/types"
-
-import { AbiCoder, ZeroAddress, ZeroHash, concat } from "ethers"
-
-import { iface } from "./deploy-mastercopies/safeMastercopy.js"
 import {
+  type Address,
+  type WalletClient,
+  concat,
+  encodeAbiParameters,
+  encodeFunctionData,
+  zeroAddress,
+  zeroHash,
+} from "viem"
+
+import {
+  type SafeCreation,
   calculateSafeAddress,
   populateSafeCreation,
 } from "./encodeSafeCreation.js"
+import { safeAbi } from "./safe-deployments/index.js"
 
+/** Creates a Safe (1.4.1 unless `version` says otherwise) and returns its address. */
 export async function deploySafe(
-  {
-    owners,
-    threshold,
-    creationNonce,
-  }: {
-    owners: string[]
-    threshold: number
-    creationNonce: bigint | number
-  },
-  relayer: HardhatEthersSigner
+  creation: SafeCreation,
+  relayer: WalletClient
 ) {
-  await relayer.sendTransaction(
-    populateSafeCreation({
-      owners,
-      threshold,
-      creationNonce: BigInt(creationNonce),
-    })
-  )
-
-  return calculateSafeAddress({
-    owners,
-    threshold,
-    creationNonce: BigInt(creationNonce),
+  await relayer.sendTransaction({
+    account: relayer.account!,
+    chain: relayer.chain,
+    ...populateSafeCreation(creation),
   })
+
+  return calculateSafeAddress(creation)
 }
 
 export async function enableModuleInSafe(
@@ -40,32 +34,42 @@ export async function enableModuleInSafe(
     safe,
     module,
   }: {
-    safe: string
-    module: string
+    safe: Address
+    module: Address
   },
-  signer: HardhatEthersSigner
+  signer: WalletClient
 ) {
   return signer.sendTransaction({
+    account: signer.account!,
+    chain: signer.chain,
     to: safe,
-    data: iface.encodeFunctionData("execTransaction", [
-      safe,
-      0n,
-      iface.encodeFunctionData("enableModule", [module]),
-      0,
-      0n,
-      0n,
-      0n,
-      ZeroAddress,
-      ZeroAddress,
-      createPreApprovedSignature(await signer.getAddress()),
-    ]),
+    data: encodeFunctionData({
+      abi: safeAbi,
+      functionName: "execTransaction",
+      args: [
+        safe,
+        0n,
+        encodeFunctionData({
+          abi: safeAbi,
+          functionName: "enableModule",
+          args: [module],
+        }),
+        0,
+        0n,
+        0n,
+        0n,
+        zeroAddress,
+        zeroAddress,
+        createPreApprovedSignature(signer.account!.address),
+      ],
+    }),
   })
 }
 
-const createPreApprovedSignature = (approver: string) => {
+const createPreApprovedSignature = (approver: Address) => {
   return concat([
-    AbiCoder.defaultAbiCoder().encode(["address"], [approver]),
-    ZeroHash,
+    encodeAbiParameters([{ type: "address" }], [approver]),
+    zeroHash,
     "0x01",
   ])
 }

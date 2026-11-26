@@ -1,7 +1,17 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-
-import { AbiCoder, Interface, solidityPacked, ZeroAddress } from "ethers";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
+import {
+  encodeAbiParameters,
+  encodeFunctionData,
+  encodePacked,
+  maxUint256,
+  parseAbi,
+  parseAbiParameters,
+  toFunctionSelector,
+  zeroAddress,
+  type Address,
+  type Hex,
+} from "viem";
 
 import { network } from "hardhat";
 
@@ -27,7 +37,7 @@ function pluck(index: number) {
 // WithinRatio is a sibling in an And wrapper
 function matchesWithRatio(
   plucks: ReturnType<typeof pluck>[],
-  withinRatioCompValue: string,
+  withinRatioCompValue: Hex,
 ) {
   return {
     paramType: Encoding.None,
@@ -48,9 +58,14 @@ function matchesWithRatio(
 }
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupTwoParams } = createSetup(connection);
+const { setupTestContract, setupFn } = createSetup(connection);
+const setupTwoParams = setupFn("function fn(uint256, uint256)");
+
+after(async () => {
+  await connection.close();
+});
 
 describe("Operator - WithinRatio", () => {
   describe("Core Functionality", () => {
@@ -74,7 +89,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // invoke(relative, reference): Ratio = 950/1000 = 95% == maxRatio → pass
-          await expect(invoke(950, 1000)).to.not.be.revert(ethers);
+          await invoke(950n, 1000n);
         });
 
         it("passes when ratio is below maxRatio", async () => {
@@ -94,7 +109,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // Ratio = 800/1000 = 80% < 95% → pass
-          await expect(invoke(1000, 800)).to.not.be.revert(ethers);
+          await invoke(1000n, 800n);
         });
 
         it("reverts with RatioAboveMax when ratio exceeds maxRatio", async () => {
@@ -119,13 +134,16 @@ describe("Operator - WithinRatio", () => {
 
           // invoke(relative, reference) since param0→relative, param1→reference
           // Ratio = 951/1000 = 95.1% > 95% → fail
-          await expect(invoke(951, 1000))
-            .to.be.revertedWithCustomError(roles, "ConditionViolation")
-            .withArgs(
+          await viem.assertions.revertWithCustomErrorWithArgs(
+            invoke(951n, 1000n),
+            roles,
+            "ConditionViolation",
+            [
               ConditionViolationStatus.RatioAboveMax,
-              2, // WithinRatio node
+              2n, // WithinRatio node
               anyValue,
-            );
+            ],
+          );
         });
 
         it("skips check when maxRatio is 0 (no upper bound)", async () => {
@@ -147,7 +165,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // Ratio = 5000/1000 = 500% → pass (no upper bound, above 10% min)
-          await expect(invoke(1000, 5000)).to.not.be.revert(ethers);
+          await invoke(1000n, 5000n);
         });
       });
 
@@ -172,7 +190,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // invoke(relative, reference): Ratio = 900/1000 = 90% == minRatio → pass
-          await expect(invoke(900, 1000)).to.not.be.revert(ethers);
+          await invoke(900n, 1000n);
         });
 
         it("passes when ratio is above minRatio", async () => {
@@ -193,7 +211,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // Ratio = 950/1000 = 95% > 90% → pass
-          await expect(invoke(950, 1000)).to.not.be.revert(ethers);
+          await invoke(950n, 1000n);
         });
 
         it("reverts with RatioBelowMin when ratio is below minRatio", async () => {
@@ -216,13 +234,16 @@ describe("Operator - WithinRatio", () => {
           );
 
           // Ratio = 850/1000 = 85% < 90% → fail
-          await expect(invoke(1000, 850))
-            .to.be.revertedWithCustomError(roles, "ConditionViolation")
-            .withArgs(
+          await viem.assertions.revertWithCustomErrorWithArgs(
+            invoke(1000n, 850n),
+            roles,
+            "ConditionViolation",
+            [
               ConditionViolationStatus.RatioBelowMin,
-              2, // WithinRatio node
+              2n, // WithinRatio node
               anyValue,
-            );
+            ],
+          );
         });
 
         it("skips check when minRatio is 0 (no lower bound)", async () => {
@@ -245,7 +266,7 @@ describe("Operator - WithinRatio", () => {
           );
 
           // invoke(relative, reference) → ratio = 10/1000 = 1% → pass (no lower bound)
-          await expect(invoke(10, 1000)).to.not.be.revert(ethers);
+          await invoke(10n, 1000n);
         });
       });
     });
@@ -258,11 +279,12 @@ describe("Operator - WithinRatio", () => {
         // param0→relative (USDC), param1→reference (ETH)
         // Reference: 18 decimals (ETH), Relative: 6 decimals (USDC)
         // Relative adapter: 1 USDC = 0.0005 ETH (price in 18 decimals)
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const usdcEthAdapter = await MockPricing.deploy(5n * 10n ** 14n); // 0.0005 ETH
+        const usdcEthAdapter = await viem.deployContract("MockPricing", [
+          5n * 10n ** 14n,
+        ]); // 0.0005 ETH
 
         const compValue = encodeWithinRatioCompValue({
-          relativeAdapter: await usdcEthAdapter.getAddress(),
+          relativeAdapter: usdcEthAdapter.address,
           referencePluckIndex: 9,
           referenceDecimals: 18,
           relativePluckIndex: 14,
@@ -279,23 +301,22 @@ describe("Operator - WithinRatio", () => {
         // Reference: 1 ETH (18 decimals)
         // Relative: 2000 USDC (6 decimals) × 0.0005 = 1 ETH equivalent
         // Ratio = 100%
-        await expect(
-          invoke(2000n * 10n ** 6n, 1n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(2000n * 10n ** 6n, 1n * 10n ** 18n);
 
         // Relative: 1980 USDC × 0.0005 = 0.99 ETH → 99% (boundary)
-        await expect(
-          invoke(1980n * 10n ** 6n, 1n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(1980n * 10n ** 6n, 1n * 10n ** 18n);
 
         // Relative: 1970 USDC × 0.0005 = 0.985 ETH → 98.5% < 99%
-        await expect(invoke(1970n * 10n ** 6n, 1n * 10n ** 18n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1970n * 10n ** 6n, 1n * 10n ** 18n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioBelowMin,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("normalizes when relative has more decimals (with reference adapter)", async () => {
@@ -305,11 +326,12 @@ describe("Operator - WithinRatio", () => {
         // Swapped: param0→pluckedValues[11]=relative, param1→pluckedValues[22]=reference
         // Reference: 8 decimals (WBTC), Relative: 18 decimals (ETH)
         // Reference adapter: 1 WBTC = 75 ETH (price in 18 decimals)
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const wbtcEthAdapter = await MockPricing.deploy(75n * 10n ** 18n);
+        const wbtcEthAdapter = await viem.deployContract("MockPricing", [
+          75n * 10n ** 18n,
+        ]);
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await wbtcEthAdapter.getAddress(),
+          referenceAdapter: wbtcEthAdapter.address,
           referencePluckIndex: 22,
           referenceDecimals: 8,
           relativePluckIndex: 11,
@@ -326,23 +348,22 @@ describe("Operator - WithinRatio", () => {
         // Reference: 1 WBTC (8 decimals) × 75 = 75 ETH equivalent
         // Relative: 75 ETH (18 decimals)
         // Ratio = 100%
-        await expect(invoke(75n * 10n ** 18n, 1n * 10n ** 8n)).to.not.be.revert(
-          ethers,
-        );
+        await invoke(75n * 10n ** 18n, 1n * 10n ** 8n);
 
         // Relative: 74.25 ETH → 99%
-        await expect(
-          invoke(7425n * 10n ** 16n, 1n * 10n ** 8n),
-        ).to.not.be.revert(ethers);
+        await invoke(7425n * 10n ** 16n, 1n * 10n ** 8n);
 
         // Relative: 76.01 ETH → 101.3% > 101%
-        await expect(invoke(7601n * 10n ** 16n, 1n * 10n ** 8n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(7601n * 10n ** 16n, 1n * 10n ** 8n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("handles maximum decimal difference with adapters (6 vs 27 decimals)", async () => {
@@ -352,13 +373,16 @@ describe("Operator - WithinRatio", () => {
         // Reference: USDC (6 decimals), Relative: ExoticToken (27 decimals)
         // Reference adapter: 1 USDC = 1 USD (stable)
         // Relative adapter: 1 ExoticToken = 0.5 USD
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const usdcUsdAdapter = await MockPricing.deploy(1n * 10n ** 18n);
-        const exoticUsdAdapter = await MockPricing.deploy(5n * 10n ** 17n); // 0.5 USD
+        const usdcUsdAdapter = await viem.deployContract("MockPricing", [
+          1n * 10n ** 18n,
+        ]);
+        const exoticUsdAdapter = await viem.deployContract("MockPricing", [
+          5n * 10n ** 17n,
+        ]); // 0.5 USD
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await usdcUsdAdapter.getAddress(),
-          relativeAdapter: await exoticUsdAdapter.getAddress(),
+          referenceAdapter: usdcUsdAdapter.address,
+          relativeAdapter: exoticUsdAdapter.address,
           referencePluckIndex: 77,
           referenceDecimals: 6,
           relativePluckIndex: 88,
@@ -374,23 +398,22 @@ describe("Operator - WithinRatio", () => {
         // Reference: 1000 USDC × 1 = 1000 USD
         // Relative: 2000 ExoticToken × 0.5 = 1000 USD
         // Ratio = 100%
-        await expect(
-          invoke(1000n * 10n ** 6n, 2000n * 10n ** 27n),
-        ).to.not.be.revert(ethers);
+        await invoke(1000n * 10n ** 6n, 2000n * 10n ** 27n);
 
         // Relative: 2020 ExoticToken × 0.5 = 1010 USD → 101%
-        await expect(
-          invoke(1000n * 10n ** 6n, 2020n * 10n ** 27n),
-        ).to.not.be.revert(ethers);
+        await invoke(1000n * 10n ** 6n, 2020n * 10n ** 27n);
 
         // Relative: 2030 ExoticToken × 0.5 = 1015 USD → 101.5% > 101%
-        await expect(invoke(1000n * 10n ** 6n, 2030n * 10n ** 27n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n * 10n ** 6n, 2030n * 10n ** 27n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
     });
 
@@ -401,11 +424,12 @@ describe("Operator - WithinRatio", () => {
 
         // Swapped: param0→relative (USD), param1→reference (token)
         // Reference adapter: 1 token = 2000 USD
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const refAdapter = await MockPricing.deploy(2000n * 10n ** 18n);
+        const refAdapter = await viem.deployContract("MockPricing", [
+          2000n * 10n ** 18n,
+        ]);
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await refAdapter.getAddress(),
+          referenceAdapter: refAdapter.address,
           referencePluckIndex: 44,
           referenceDecimals: 18,
           relativePluckIndex: 33,
@@ -422,18 +446,19 @@ describe("Operator - WithinRatio", () => {
         // Reference: 10 tokens × 2000 = 20,000 USD
         // Relative: 20,000 USD × 1 = 20,000 USD
         // Ratio = 100%
-        await expect(
-          invoke(20000n * 10n ** 18n, 10n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(20000n * 10n ** 18n, 10n * 10n ** 18n);
 
         // Relative: 19,700 USD → Ratio = 98.5% < 99%
-        await expect(invoke(19700n * 10n ** 18n, 10n * 10n ** 18n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(19700n * 10n ** 18n, 10n * 10n ** 18n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioBelowMin,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("applies single adapter to relative amount", async () => {
@@ -441,12 +466,13 @@ describe("Operator - WithinRatio", () => {
           await loadFixture(setupTwoParams);
 
         // Relative adapter: 1 token = 150,000 USD
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const relAdapter = await MockPricing.deploy(150000n * 10n ** 18n);
+        const relAdapter = await viem.deployContract("MockPricing", [
+          150000n * 10n ** 18n,
+        ]);
 
         // Swapped order: relative plucked before reference
         const compValue = encodeWithinRatioCompValue({
-          relativeAdapter: await relAdapter.getAddress(),
+          relativeAdapter: relAdapter.address,
           referencePluckIndex: 55,
           referenceDecimals: 18,
           relativePluckIndex: 17,
@@ -463,23 +489,22 @@ describe("Operator - WithinRatio", () => {
         // Relative: 0.3 WBTC × 150,000 = 45,000 USD
         // Reference: 45,000 USD × 1 = 45,000 USD
         // Ratio = 100%
-        await expect(
-          invoke(3n * 10n ** 7n, 45000n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(3n * 10n ** 7n, 45000n * 10n ** 18n);
 
         // Relative: 0.297 WBTC × 150,000 = 44,550 USD → Ratio = 99%
-        await expect(
-          invoke(297n * 10n ** 5n, 45000n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(297n * 10n ** 5n, 45000n * 10n ** 18n);
 
         // Relative: 0.2967 WBTC → Ratio ≈ 98.9% < 99%
-        await expect(invoke(2967n * 10n ** 4n, 45000n * 10n ** 18n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(2967n * 10n ** 4n, 45000n * 10n ** 18n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioBelowMin,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("applies adapters to both amounts (cross-asset)", async () => {
@@ -488,13 +513,16 @@ describe("Operator - WithinRatio", () => {
 
         // ETH/USD: 1 ETH = 2000 USD
         // BTC/USD: 1 BTC = 150,000 USD
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const ethUsdAdapter = await MockPricing.deploy(2000n * 10n ** 18n);
-        const btcUsdAdapter = await MockPricing.deploy(150000n * 10n ** 18n);
+        const ethUsdAdapter = await viem.deployContract("MockPricing", [
+          2000n * 10n ** 18n,
+        ]);
+        const btcUsdAdapter = await viem.deployContract("MockPricing", [
+          150000n * 10n ** 18n,
+        ]);
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await ethUsdAdapter.getAddress(),
-          relativeAdapter: await btcUsdAdapter.getAddress(),
+          referenceAdapter: ethUsdAdapter.address,
+          relativeAdapter: btcUsdAdapter.address,
           referencePluckIndex: 200,
           referenceDecimals: 18, // ETH
           relativePluckIndex: 150,
@@ -512,34 +540,34 @@ describe("Operator - WithinRatio", () => {
         // Reference: 22.5 ETH × 2000 = 45,000 USD
         // Relative: 0.3 BTC × 150,000 = 45,000 USD
         // Ratio = 100%
-        await expect(
-          invoke(225n * 10n ** 17n, 3n * 10n ** 7n),
-        ).to.not.be.revert(ethers);
+        await invoke(225n * 10n ** 17n, 3n * 10n ** 7n);
 
         // Relative: 0.2985 BTC → Ratio = 99.5%
-        await expect(
-          invoke(225n * 10n ** 17n, 2985n * 10n ** 4n),
-        ).to.not.be.revert(ethers);
+        await invoke(225n * 10n ** 17n, 2985n * 10n ** 4n);
 
         // Relative: 0.30225 BTC → Ratio = 100.75% > 100.5%
-        await expect(invoke(225n * 10n ** 17n, 30225n * 10n ** 4n))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(225n * 10n ** 17n, 30225n * 10n ** 4n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("applies reference adapter only (33-byte compValue)", async () => {
         const { allowFunction, invoke } = await loadFixture(setupTwoParams);
 
         // Reference adapter: 1 token = 2000 USD, no relative adapter
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const refAdapter = await MockPricing.deploy(2000n * 10n ** 18n);
+        const refAdapter = await viem.deployContract("MockPricing", [
+          2000n * 10n ** 18n,
+        ]);
 
         // 33-byte encoding: base(12) + refLen(1) + refAdapter(20)
-        const compValue = solidityPacked(
+        const compValue = encodePacked(
           [
             "uint8",
             "uint8",
@@ -558,7 +586,7 @@ describe("Operator - WithinRatio", () => {
             9900, // minRatio (99%)
             10100, // maxRatio (101%)
             20, // refBlobLen (address only, no params)
-            await refAdapter.getAddress(),
+            refAdapter.address,
           ],
         );
 
@@ -569,21 +597,19 @@ describe("Operator - WithinRatio", () => {
         // Reference: 10 tokens × 2000 = 20,000 USD
         // Relative: 20,000 USD × 1 (no adapter) = 20,000 USD
         // Ratio = 100%
-        await expect(
-          invoke(20000n * 10n ** 18n, 10n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(20000n * 10n ** 18n, 10n * 10n ** 18n);
       });
 
       it("applies relative adapter only (54-byte compValue)", async () => {
-        const { roles, allowFunction, invoke } =
-          await loadFixture(setupTwoParams);
+        const { allowFunction, invoke } = await loadFixture(setupTwoParams);
 
         // Relative adapter only: 1 WBTC = 150,000 USD
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const relAdapter = await MockPricing.deploy(150000n * 10n ** 18n);
+        const relAdapter = await viem.deployContract("MockPricing", [
+          150000n * 10n ** 18n,
+        ]);
 
         // 54-byte encoding: base(12) + refLen(1) + refAdapter(20) + relLen(1) + relAdapter(20)
-        const compValue = solidityPacked(
+        const compValue = encodePacked(
           [
             "uint8",
             "uint8",
@@ -604,9 +630,9 @@ describe("Operator - WithinRatio", () => {
             9900, // minRatio
             10100, // maxRatio
             20, // refBlobLen (address only, no params)
-            "0x0000000000000000000000000000000000000000", // no reference adapter
+            zeroAddress, // no reference adapter
             20, // relBlobLen (address only, no params)
-            await relAdapter.getAddress(),
+            relAdapter.address,
           ],
         );
 
@@ -617,9 +643,7 @@ describe("Operator - WithinRatio", () => {
         // Reference: 45,000 USD × 1 (no adapter) = 45,000 USD
         // Relative: 0.3 WBTC × 150,000 = 45,000 USD
         // Ratio = 100%
-        await expect(
-          invoke(3n * 10n ** 7n, 45000n * 10n ** 18n),
-        ).to.not.be.revert(ethers);
+        await invoke(3n * 10n ** 7n, 45000n * 10n ** 18n);
       });
     });
 
@@ -633,11 +657,12 @@ describe("Operator - WithinRatio", () => {
         // converting each side separately truncates 1.999... to 1, so it sees
         // 100% and wrongly accepts.
 
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const relativeAdapter = await MockPricing.deploy(2n * 10n ** 18n - 1n);
+        const relativeAdapter = await viem.deployContract("MockPricing", [
+          2n * 10n ** 18n - 1n,
+        ]);
 
         const compValue = encodeWithinRatioCompValue({
-          relativeAdapter: await relativeAdapter.getAddress(),
+          relativeAdapter: relativeAdapter.address,
           referencePluckIndex: 2,
           referenceDecimals: 0,
           relativePluckIndex: 1,
@@ -651,13 +676,16 @@ describe("Operator - WithinRatio", () => {
         );
 
         // Real ratio ~200% vs maxRatio 100% → must revert with RatioAboveMax
-        await expect(invoke(1, 1))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1n, 1n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("rejects a ratio less than one bps above max", async () => {
@@ -680,13 +708,16 @@ describe("Operator - WithinRatio", () => {
         // Real ratio 10002/10001 ≈ 100.00999...% — above max by less than one
         // bps. A rounded-down ratio would floor to exactly 100% and wrongly
         // accept.
-        await expect(invoke(10002, 10001))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(10002n, 10001n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("accepts a ratio less than one bps below max", async () => {
@@ -708,16 +739,19 @@ describe("Operator - WithinRatio", () => {
 
         // Real ratio 10000/10001 is below the max, despite its ceiled bps
         // representation being exactly 10000.
-        await expect(invoke(10000, 10001)).to.not.be.revert(ethers);
+        await invoke(10000n, 10001n);
 
         // reversing the amounts puts the ratio just above max.
-        await expect(invoke(10001, 10000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(10001n, 10000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("rejects a ratio less than one bps below min", async () => {
@@ -738,13 +772,16 @@ describe("Operator - WithinRatio", () => {
         );
 
         // Real ratio 99999/100000 is below the min by one tenth of a bps.
-        await expect(invoke(99999, 100000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(99999n, 100000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioBelowMin,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("handles extreme values, failing closed beyond uint256 headroom", async () => {
@@ -764,13 +801,11 @@ describe("Operator - WithinRatio", () => {
         );
 
         // Equal extreme values → ratio exactly 100%
-        await expect(invoke(10n ** 50n, 10n ** 50n)).to.not.be.revert(ethers);
+        await invoke(10n ** 50n, 10n ** 50n);
 
         // Beyond the supported magnitude the cross products overflow and the
         // check reverts rather than wrapping around
-        await expect(invoke(ethers.MaxUint256, ethers.MaxUint256)).to.be.revert(
-          ethers,
-        );
+        await viem.assertions.revert(invoke(maxUint256, maxUint256));
       });
     });
 
@@ -793,13 +828,16 @@ describe("Operator - WithinRatio", () => {
         );
 
         // Any nonzero relative amount exceeds a max bound on a zero reference
-        await expect(invoke(1, 0))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1n, 0n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.RatioAboveMax,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("passes when both amounts are zero", async () => {
@@ -818,7 +856,7 @@ describe("Operator - WithinRatio", () => {
           flattenCondition(matchesWithRatio([pluck(1), pluck(2)], compValue)),
         );
 
-        await expect(invoke(0, 0)).to.not.be.revert(ethers);
+        await invoke(0n, 0n);
       });
 
       it("passes a zero reference when only a min bound is set", async () => {
@@ -838,7 +876,7 @@ describe("Operator - WithinRatio", () => {
         );
 
         // min bound is vacuous against a zero reference
-        await expect(invoke(5, 0)).to.not.be.revert(ethers);
+        await invoke(5n, 0n);
       });
     });
 
@@ -847,10 +885,10 @@ describe("Operator - WithinRatio", () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const [, , randomEOA] = await ethers.getSigners();
+        const [, , randomEOA] = await viem.getWalletClients();
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: randomEOA.address,
+          referenceAdapter: randomEOA.account.address,
           referencePluckIndex: 41,
           referenceDecimals: 18,
           relativePluckIndex: 82,
@@ -863,24 +901,27 @@ describe("Operator - WithinRatio", () => {
           flattenCondition(matchesWithRatio([pluck(41), pluck(82)], compValue)),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterNotAContract,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("reverts with PricingAdapterNotAContract when relative adapter not deployed", async () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const [, , randomEOA] = await ethers.getSigners();
+        const [, , randomEOA] = await viem.getWalletClients();
 
         // Swapped order: relative plucked before reference
         const compValue = encodeWithinRatioCompValue({
-          relativeAdapter: randomEOA.address,
+          relativeAdapter: randomEOA.account.address,
           referencePluckIndex: 99,
           referenceDecimals: 18,
           relativePluckIndex: 13,
@@ -893,26 +934,28 @@ describe("Operator - WithinRatio", () => {
           flattenCondition(matchesWithRatio([pluck(13), pluck(99)], compValue)),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterNotAContract,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("reverts with PricingAdapterReverted when adapter has no getPrice function", async () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const MockPricingNoInterface = await ethers.getContractFactory(
+        const noInterfaceAdapter = await viem.deployContract(
           "MockPricingNoInterface",
         );
-        const noInterfaceAdapter = await MockPricingNoInterface.deploy();
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await noInterfaceAdapter.getAddress(),
+          referenceAdapter: noInterfaceAdapter.address,
           referencePluckIndex: 63,
           referenceDecimals: 18,
           relativePluckIndex: 27,
@@ -925,27 +968,29 @@ describe("Operator - WithinRatio", () => {
           flattenCondition(matchesWithRatio([pluck(63), pluck(27)], compValue)),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterReverted,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("reverts with PricingAdapterReverted when adapter reverts", async () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const MockPricingReverting = await ethers.getContractFactory(
+        const revertingAdapter = await viem.deployContract(
           "MockPricingReverting",
         );
-        const revertingAdapter = await MockPricingReverting.deploy();
 
         // Swapped order: relative plucked before reference
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await revertingAdapter.getAddress(),
+          referenceAdapter: revertingAdapter.address,
           referencePluckIndex: 180,
           referenceDecimals: 18,
           relativePluckIndex: 45,
@@ -960,26 +1005,28 @@ describe("Operator - WithinRatio", () => {
           ),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterReverted,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("reverts with PricingAdapterInvalidResult when adapter returns wrong type", async () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const MockPricingWrongReturn = await ethers.getContractFactory(
+        const wrongReturnAdapter = await viem.deployContract(
           "MockPricingWrongReturn",
         );
-        const wrongReturnAdapter = await MockPricingWrongReturn.deploy();
 
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await wrongReturnAdapter.getAddress(),
+          referenceAdapter: wrongReturnAdapter.address,
           referencePluckIndex: 72,
           referenceDecimals: 18,
           relativePluckIndex: 108,
@@ -994,25 +1041,27 @@ describe("Operator - WithinRatio", () => {
           ),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterInvalidResult,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
 
       it("reverts with PricingAdapterZeroPrice when adapter returns zero", async () => {
         const { roles, allowFunction, invoke } =
           await loadFixture(setupTwoParams);
 
-        const MockPricing = await ethers.getContractFactory("MockPricing");
-        const zeroAdapter = await MockPricing.deploy(0);
+        const zeroAdapter = await viem.deployContract("MockPricing", [0n]);
 
         // Swapped order: relative plucked before reference
         const compValue = encodeWithinRatioCompValue({
-          referenceAdapter: await zeroAdapter.getAddress(),
+          referenceAdapter: zeroAdapter.address,
           referencePluckIndex: 56,
           referenceDecimals: 18,
           relativePluckIndex: 23,
@@ -1025,13 +1074,16 @@ describe("Operator - WithinRatio", () => {
           flattenCondition(matchesWithRatio([pluck(23), pluck(56)], compValue)),
         );
 
-        await expect(invoke(1000, 1000))
-          .to.be.revertedWithCustomError(roles, "ConditionViolation")
-          .withArgs(
+        await viem.assertions.revertWithCustomErrorWithArgs(
+          invoke(1000n, 1000n),
+          roles,
+          "ConditionViolation",
+          [
             ConditionViolationStatus.PricingAdapterZeroPrice,
-            2, // WithinRatio node
+            2n, // WithinRatio node
             anyValue,
-          );
+          ],
+        );
       });
     });
   });
@@ -1041,17 +1093,14 @@ describe("Operator - WithinRatio", () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupTwoParams);
 
-      const MockPricingParameterized = await ethers.getContractFactory(
-        "MockPricingParameterized",
-      );
-      const refAdapter = await MockPricingParameterized.deploy();
-      const relAdapter = await MockPricingParameterized.deploy();
+      const refAdapter = await viem.deployContract("MockPricingParameterized");
+      const relAdapter = await viem.deployContract("MockPricingParameterized");
 
       const refParams = "0xaaaa";
       const relParams = "0xbbbbcccc";
 
-      await refAdapter.setPrice(refParams, 2000n * 10n ** 18n);
-      await relAdapter.setPrice(relParams, 1n * 10n ** 18n);
+      await refAdapter.write.setPrice([refParams, 2000n * 10n ** 18n]);
+      await relAdapter.write.setPrice([relParams, 1n * 10n ** 18n]);
 
       // counterfactual: wrong rel params → adapter reverts
       const wrongCompValue = encodeWithinRatioCompValue({
@@ -1061,8 +1110,8 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        referenceAdapter: await refAdapter.getAddress(),
-        relativeAdapter: await relAdapter.getAddress(),
+        referenceAdapter: refAdapter.address,
+        relativeAdapter: relAdapter.address,
         referenceParams: refParams,
         relativeParams: "0xffff",
       });
@@ -1071,9 +1120,12 @@ describe("Operator - WithinRatio", () => {
           matchesWithRatio([pluck(3), pluck(7)], wrongCompValue),
         ),
       );
-      await expect(invoke(1, 2000))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.PricingAdapterReverted, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1n, 2000n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.PricingAdapterReverted, 2n, anyValue],
+      );
 
       // correct params
       const compValue = encodeWithinRatioCompValue({
@@ -1083,8 +1135,8 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        referenceAdapter: await refAdapter.getAddress(),
-        relativeAdapter: await relAdapter.getAddress(),
+        referenceAdapter: refAdapter.address,
+        relativeAdapter: relAdapter.address,
         referenceParams: refParams,
         relativeParams: relParams,
       });
@@ -1093,29 +1145,29 @@ describe("Operator - WithinRatio", () => {
       );
 
       // ref=1 * 2000 = 2000, rel=2000 * 1 = 2000, ratio=10000 (100%) → pass
-      await expect(invoke(1, 2000)).to.not.be.revert(ethers);
+      await invoke(1n, 2000n);
 
       // ref=1 * 2000 = 2000, rel=1600 * 1 = 1600, ratio=8000 (80%) < 90% → fail
-      await expect(invoke(1, 1600))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.RatioBelowMin, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1n, 1600n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.RatioBelowMin, 2n, anyValue],
+      );
     });
 
     it("ref with adapter no params, rel with params", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupTwoParams);
 
-      const MockPricingParameterized = await ethers.getContractFactory(
-        "MockPricingParameterized",
-      );
-      const relAdapter = await MockPricingParameterized.deploy();
+      const relAdapter = await viem.deployContract("MockPricingParameterized");
       const relParams = "0xdeadbeef";
-      await relAdapter.setPrice(relParams, 3n * 10n ** 18n); // 3x
+      await relAdapter.write.setPrice([relParams, 3n * 10n ** 18n]); // 3x
 
       // ref adapter requires empty params
-      const refAdapter = await (
-        await ethers.getContractFactory("MockPricingEmptyParams")
-      ).deploy(2n * 10n ** 18n); // 2x
+      const refAdapter = await viem.deployContract("MockPricingEmptyParams", [
+        2n * 10n ** 18n,
+      ]); // 2x
 
       // counterfactual: wrong rel params → adapter reverts
       const wrongCompValue = encodeWithinRatioCompValue({
@@ -1125,8 +1177,8 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        referenceAdapter: await refAdapter.getAddress(),
-        relativeAdapter: await relAdapter.getAddress(),
+        referenceAdapter: refAdapter.address,
+        relativeAdapter: relAdapter.address,
         relativeParams: "0xcafebabe",
       });
       await allowFunction(
@@ -1134,9 +1186,12 @@ describe("Operator - WithinRatio", () => {
           matchesWithRatio([pluck(3), pluck(7)], wrongCompValue),
         ),
       );
-      await expect(invoke(100, 60))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.PricingAdapterReverted, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(100n, 60n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.PricingAdapterReverted, 2n, anyValue],
+      );
 
       // correct params
       const compValue = encodeWithinRatioCompValue({
@@ -1146,8 +1201,8 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        referenceAdapter: await refAdapter.getAddress(),
-        relativeAdapter: await relAdapter.getAddress(),
+        referenceAdapter: refAdapter.address,
+        relativeAdapter: relAdapter.address,
         relativeParams: relParams,
       });
       await allowFunction(
@@ -1155,19 +1210,16 @@ describe("Operator - WithinRatio", () => {
       );
 
       // ref=100 * 2 = 200, rel=60 * 3 = 180, ratio=9000 (90%) → pass
-      await expect(invoke(100, 60)).to.not.be.revert(ethers);
+      await invoke(100n, 60n);
     });
 
     it("ref without adapter, rel with params", async () => {
       const { roles, allowFunction, invoke } =
         await loadFixture(setupTwoParams);
 
-      const MockPricingParameterized = await ethers.getContractFactory(
-        "MockPricingParameterized",
-      );
-      const relAdapter = await MockPricingParameterized.deploy();
+      const relAdapter = await viem.deployContract("MockPricingParameterized");
       const relParams = "0xdeadbeef";
-      await relAdapter.setPrice(relParams, 2n * 10n ** 18n); // 2x
+      await relAdapter.write.setPrice([relParams, 2n * 10n ** 18n]); // 2x
 
       // counterfactual: wrong rel params → adapter reverts
       const wrongCompValue = encodeWithinRatioCompValue({
@@ -1177,7 +1229,7 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        relativeAdapter: await relAdapter.getAddress(),
+        relativeAdapter: relAdapter.address,
         relativeParams: "0xcafebabe",
       });
       await allowFunction(
@@ -1185,9 +1237,12 @@ describe("Operator - WithinRatio", () => {
           matchesWithRatio([pluck(3), pluck(7)], wrongCompValue),
         ),
       );
-      await expect(invoke(1000, 500))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.PricingAdapterReverted, 2, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1000n, 500n),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.PricingAdapterReverted, 2n, anyValue],
+      );
 
       // correct params, ref blobLen=0 (no adapter)
       const compValue = encodeWithinRatioCompValue({
@@ -1197,7 +1252,7 @@ describe("Operator - WithinRatio", () => {
         relativeDecimals: 0,
         minRatio: 9000,
         maxRatio: 11000,
-        relativeAdapter: await relAdapter.getAddress(),
+        relativeAdapter: relAdapter.address,
         relativeParams: relParams,
       });
       await allowFunction(
@@ -1205,7 +1260,7 @@ describe("Operator - WithinRatio", () => {
       );
 
       // ref=1000 * 1 = 1000, rel=500 * 2 = 1000, ratio=10000 → pass
-      await expect(invoke(1000, 500)).to.not.be.revert(ethers);
+      await invoke(1000n, 500n);
     });
   });
 
@@ -1215,13 +1270,14 @@ describe("Operator - WithinRatio", () => {
         await loadFixture(setupTwoParams);
 
       // ETH/USD: 1 ETH = 2000 USD
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const ethUsdAdapter = await MockPricing.deploy(2000n * 10n ** 18n);
+      const ethUsdAdapter = await viem.deployContract("MockPricing", [
+        2000n * 10n ** 18n,
+      ]);
 
       // Swapped order: relative (USD output) plucked before reference (ETH input)
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: await ethUsdAdapter.getAddress(),
-        relativeAdapter: ZeroAddress,
+        referenceAdapter: ethUsdAdapter.address,
+        relativeAdapter: zeroAddress,
         referencePluckIndex: 19,
         referenceDecimals: 18, // ETH
         relativePluckIndex: 7,
@@ -1236,27 +1292,31 @@ describe("Operator - WithinRatio", () => {
 
       // invoke(relative, reference) since param0→relative (USD), param1→reference (ETH)
       // Selling 10 ETH for 20,000 USD → exactly 100%
-      await expect(
-        invoke(20000n * 10n ** 18n, 10n * 10n ** 18n),
-      ).to.not.be.revert(ethers);
+      await invoke(20000n * 10n ** 18n, 10n * 10n ** 18n);
 
       // Selling 10 ETH for 19,880 USD → 99.4% < 99.5%
-      await expect(invoke(19880n * 10n ** 18n, 10n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(19880n * 10n ** 18n, 10n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
 
       // Selling 10 ETH for 20,120 USD → 100.6% > 100.5%
-      await expect(invoke(20120n * 10n ** 18n, 10n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(20120n * 10n ** 18n, 10n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("WBTC/ETH swap - cross-asset with different decimals", async () => {
@@ -1266,13 +1326,16 @@ describe("Operator - WithinRatio", () => {
       // Swapped: param0→relative (WBTC), param1→reference (ETH)
       // ETH/USD: 1 ETH = 2000 USD
       // BTC/USD: 1 BTC = 150,000 USD
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const ethUsdAdapter = await MockPricing.deploy(2000n * 10n ** 18n);
-      const btcUsdAdapter = await MockPricing.deploy(150000n * 10n ** 18n);
+      const ethUsdAdapter = await viem.deployContract("MockPricing", [
+        2000n * 10n ** 18n,
+      ]);
+      const btcUsdAdapter = await viem.deployContract("MockPricing", [
+        150000n * 10n ** 18n,
+      ]);
 
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: await ethUsdAdapter.getAddress(),
-        relativeAdapter: await btcUsdAdapter.getAddress(),
+        referenceAdapter: ethUsdAdapter.address,
+        relativeAdapter: btcUsdAdapter.address,
         referencePluckIndex: 91,
         referenceDecimals: 18, // ETH
         relativePluckIndex: 42,
@@ -1287,27 +1350,31 @@ describe("Operator - WithinRatio", () => {
 
       // invoke(relative, reference)
       // Selling 75 ETH ($150,000) for 1 BTC ($150,000) → 100%
-      await expect(invoke(1n * 10n ** 8n, 75n * 10n ** 18n)).to.not.be.revert(
-        ethers,
-      );
+      await invoke(1n * 10n ** 8n, 75n * 10n ** 18n);
 
       // Selling 75 ETH for 0.94 BTC → 94% < 95%
-      await expect(invoke(94n * 10n ** 6n, 75n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(94n * 10n ** 6n, 75n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
 
       // Selling 75 ETH for 1.06 BTC → 106% > 105%
-      await expect(invoke(106n * 10n ** 6n, 75n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(106n * 10n ** 6n, 75n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("USDC/exotic token swap - maximum decimal difference", async () => {
@@ -1315,13 +1382,14 @@ describe("Operator - WithinRatio", () => {
         await loadFixture(setupTwoParams);
 
       // ExoticToken/USDC: 1 ExoticToken = 2 USDC
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const exoticUsdcAdapter = await MockPricing.deploy(2n * 10n ** 18n);
+      const exoticUsdcAdapter = await viem.deployContract("MockPricing", [
+        2n * 10n ** 18n,
+      ]);
 
       // Swapped: param0→pluckedValues[61]=relative (ExoticToken), param1→pluckedValues[83]=reference (USDC)
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: ZeroAddress,
-        relativeAdapter: await exoticUsdcAdapter.getAddress(),
+        referenceAdapter: zeroAddress,
+        relativeAdapter: exoticUsdcAdapter.address,
         referencePluckIndex: 83,
         referenceDecimals: 6, // USDC
         relativePluckIndex: 61,
@@ -1336,18 +1404,19 @@ describe("Operator - WithinRatio", () => {
 
       // invoke(relative, reference) since param0→relative (ExoticToken), param1→reference (USDC)
       // Selling 1000 USDC for 500 ExoticToken → (500 × 2) / 1000 = 100%
-      await expect(
-        invoke(500n * 10n ** 27n, 1000n * 10n ** 6n),
-      ).to.not.be.revert(ethers);
+      await invoke(500n * 10n ** 27n, 1000n * 10n ** 6n);
 
       // Selling 1000 USDC for 498.7 ExoticToken → 99.74% < 99.75%
-      await expect(invoke(4987n * 10n ** 24n, 1000n * 10n ** 6n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(4987n * 10n ** 24n, 1000n * 10n ** 6n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("no adapters - enforces min 25% ratio", async () => {
@@ -1369,23 +1438,22 @@ describe("Operator - WithinRatio", () => {
       );
 
       // 249 / 1000 = 24.9% < 25% → fail
-      await expect(invoke(1000n * 10n ** 18n, 249n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1000n * 10n ** 18n, 249n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
 
       // 250 / 1000 = 25% → pass
-      await expect(
-        invoke(1000n * 10n ** 18n, 250n * 10n ** 18n),
-      ).to.not.be.revert(ethers);
+      await invoke(1000n * 10n ** 18n, 250n * 10n ** 18n);
 
       // 300 / 1000 = 30% → pass
-      await expect(
-        invoke(1000n * 10n ** 18n, 300n * 10n ** 18n),
-      ).to.not.be.revert(ethers);
+      await invoke(1000n * 10n ** 18n, 300n * 10n ** 18n);
     });
 
     it("no adapters - enforces max 500% ratio", async () => {
@@ -1408,23 +1476,22 @@ describe("Operator - WithinRatio", () => {
 
       // invoke(relative, reference)
       // 4900 / 1000 = 490% → pass
-      await expect(
-        invoke(4900n * 10n ** 18n, 1000n * 10n ** 18n),
-      ).to.not.be.revert(ethers);
+      await invoke(4900n * 10n ** 18n, 1000n * 10n ** 18n);
 
       // 5000 / 1000 = 500% → pass (boundary)
-      await expect(
-        invoke(5000n * 10n ** 18n, 1000n * 10n ** 18n),
-      ).to.not.be.revert(ethers);
+      await invoke(5000n * 10n ** 18n, 1000n * 10n ** 18n);
 
       // 5001 / 1000 = 500.1% → fail
-      await expect(invoke(5001n * 10n ** 18n, 1000n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(5001n * 10n ** 18n, 1000n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("USD/WBTC swap - WBTC converts to USD base via relative adapter", async () => {
@@ -1432,12 +1499,13 @@ describe("Operator - WithinRatio", () => {
         await loadFixture(setupTwoParams);
 
       // WBTC/USD adapter: 1 WBTC = 150,000 USD
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const wbtcUsdAdapter = await MockPricing.deploy(150000n * 10n ** 18n);
+      const wbtcUsdAdapter = await viem.deployContract("MockPricing", [
+        150000n * 10n ** 18n,
+      ]);
 
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: ZeroAddress, // USD stablecoin is the base (no conversion)
-        relativeAdapter: await wbtcUsdAdapter.getAddress(),
+        referenceAdapter: zeroAddress, // USD stablecoin is the base (no conversion)
+        relativeAdapter: wbtcUsdAdapter.address,
         referencePluckIndex: 71,
         referenceDecimals: 18, // USD stablecoin
         relativePluckIndex: 18,
@@ -1451,23 +1519,22 @@ describe("Operator - WithinRatio", () => {
       );
 
       // Reference: 45,000 USD, Relative: 0.3 WBTC × 150,000 = 45,000 USD → 100%
-      await expect(
-        invoke(45000n * 10n ** 18n, 3n * 10n ** 7n),
-      ).to.not.be.revert(ethers);
+      await invoke(45000n * 10n ** 18n, 3n * 10n ** 7n);
 
       // Relative: 0.297 WBTC → 44,550 / 45,000 = 99% → pass
-      await expect(
-        invoke(45000n * 10n ** 18n, 297n * 10n ** 5n),
-      ).to.not.be.revert(ethers);
+      await invoke(45000n * 10n ** 18n, 297n * 10n ** 5n);
 
       // Relative: 0.2967 WBTC → 44,505 / 45,000 = 98.9% → fail
-      await expect(invoke(45000n * 10n ** 18n, 2967n * 10n ** 4n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(45000n * 10n ** 18n, 2967n * 10n ** 4n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("ETH/WBTC swap - converts to ETH base via relative adapter", async () => {
@@ -1476,12 +1543,13 @@ describe("Operator - WithinRatio", () => {
 
       // Swapped: param0→relative (WBTC), param1→reference (ETH)
       // WBTC/ETH adapter: 1 WBTC = 75 ETH
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const wbtcEthAdapter = await MockPricing.deploy(75n * 10n ** 18n);
+      const wbtcEthAdapter = await viem.deployContract("MockPricing", [
+        75n * 10n ** 18n,
+      ]);
 
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: ZeroAddress, // ETH is the base
-        relativeAdapter: await wbtcEthAdapter.getAddress(),
+        referenceAdapter: zeroAddress, // ETH is the base
+        relativeAdapter: wbtcEthAdapter.address,
         referencePluckIndex: 95,
         referenceDecimals: 18, // ETH
         relativePluckIndex: 33,
@@ -1496,32 +1564,34 @@ describe("Operator - WithinRatio", () => {
 
       // invoke(relative, reference)
       // Reference: 75 ETH, Relative: 1 WBTC × 75 = 75 ETH → 100%
-      await expect(invoke(1n * 10n ** 8n, 75n * 10n ** 18n)).to.not.be.revert(
-        ethers,
-      );
+      await invoke(1n * 10n ** 8n, 75n * 10n ** 18n);
 
       // Relative: 0.95 WBTC → 71.25 / 75 = 95% → pass
-      await expect(invoke(95n * 10n ** 6n, 75n * 10n ** 18n)).to.not.be.revert(
-        ethers,
-      );
+      await invoke(95n * 10n ** 6n, 75n * 10n ** 18n);
 
       // Relative: 0.949 WBTC → 71.175 / 75 = 94.9% → fail
-      await expect(invoke(949n * 10n ** 5n, 75n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(949n * 10n ** 5n, 75n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
 
       // Relative: 1.051 WBTC → 78.825 / 75 = 105.1% → fail
-      await expect(invoke(1051n * 10n ** 5n, 75n * 10n ** 18n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1051n * 10n ** 5n, 75n * 10n ** 18n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
     it("handles WBTC (8 decimals) vs FunkyToken (27 decimals) both with adapters", async () => {
       const { roles, allowFunction, invoke } =
@@ -1529,13 +1599,16 @@ describe("Operator - WithinRatio", () => {
 
       // Reference: WBTC (8 decimals), price = $100,000
       // Relative: FunkyToken (27 decimals), price = $2
-      const MockPricing = await ethers.getContractFactory("MockPricing");
-      const wbtcAdapter = await MockPricing.deploy(100000n * 10n ** 18n);
-      const funkyAdapter = await MockPricing.deploy(2n * 10n ** 18n);
+      const wbtcAdapter = await viem.deployContract("MockPricing", [
+        100000n * 10n ** 18n,
+      ]);
+      const funkyAdapter = await viem.deployContract("MockPricing", [
+        2n * 10n ** 18n,
+      ]);
 
       const compValue = encodeWithinRatioCompValue({
-        referenceAdapter: await wbtcAdapter.getAddress(),
-        relativeAdapter: await funkyAdapter.getAddress(),
+        referenceAdapter: wbtcAdapter.address,
+        relativeAdapter: funkyAdapter.address,
         referencePluckIndex: 3,
         referenceDecimals: 8,
         relativePluckIndex: 7,
@@ -1551,41 +1624,41 @@ describe("Operator - WithinRatio", () => {
       // Reference: 1 WBTC × $100,000 = $100,000
       // Relative: 50,000 FunkyToken × $2 = $100,000
       // Ratio = 100%
-      await expect(
-        invoke(1n * 10n ** 8n, 50000n * 10n ** 27n),
-      ).to.not.be.revert(ethers);
+      await invoke(1n * 10n ** 8n, 50000n * 10n ** 27n);
 
       // Relative: 49,500 FunkyToken × $2 = $99,000 → 99%
-      await expect(
-        invoke(1n * 10n ** 8n, 49500n * 10n ** 27n),
-      ).to.not.be.revert(ethers);
+      await invoke(1n * 10n ** 8n, 49500n * 10n ** 27n);
 
       // Relative: 49,400 FunkyToken × $2 = $98,800 → 98.8% < 99%
-      await expect(invoke(1n * 10n ** 8n, 49400n * 10n ** 27n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1n * 10n ** 8n, 49400n * 10n ** 27n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
 
       // Relative: 50,600 FunkyToken × $2 = $101,200 → 101.2% > 101%
-      await expect(invoke(1n * 10n ** 8n, 50600n * 10n ** 27n))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1n * 10n ** 8n, 50600n * 10n ** 27n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node
+          2n, // WithinRatio node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
   describe("Parameter Extraction", () => {
     it("extracts values from AbiEncoded params", async () => {
-      const iface = new Interface([
-        "function mixedParams(uint256, bytes, uint256)",
-      ]);
-      const fn = iface.getFunction("mixedParams")!;
+      const abi = parseAbi(["function mixedParams(uint256, bytes, uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -1621,40 +1694,48 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
-      const invoke = (a: number, b: number) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const invoke = (a: bigint, b: bigint) =>
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "mixedParams",
+              args: [a, "0xaabbcc", b],
+            }),
             0,
-            iface.encodeFunctionData(fn, [a, "0xaabbcc", b]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // 1200 / 1000 = 120% → pass
-      await expect(invoke(1000, 1200)).to.not.be.revert(ethers);
+      await invoke(1000n, 1200n);
 
       // 1201 / 1000 = 120.1% > 120% → fail
-      await expect(invoke(1000, 1201))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1000n, 1201n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node (And=0, Matches=1, WithinRatio=2)
+          2n, // WithinRatio node (And=0, Matches=1, WithinRatio=2)
           anyValue,
-        );
+        ],
+      );
     });
 
     it("extracts values from nested AbiEncoded", async () => {
-      const iface = new Interface(["function dynamic(bytes)"]);
-      const fn = iface.getFunction("dynamic")!;
+      const abi = parseAbi(["function dynamic(bytes)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -1697,52 +1778,58 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
-      const abiCoder = AbiCoder.defaultAbiCoder();
-
-      const invoke = (encoded: string) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const invoke = (encoded: Hex) =>
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "dynamic",
+              args: [encoded],
+            }),
             0,
-            iface.encodeFunctionData(fn, [encoded]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // 800 / 1000 = 80% → pass
-      const encoded = abiCoder.encode(
-        ["uint256", "uint256", "uint256"],
-        [1000, 500, 800],
+      const encoded = encodeAbiParameters(
+        parseAbiParameters("uint256, uint256, uint256"),
+        [1000n, 500n, 800n],
       );
-      await expect(invoke(encoded)).to.not.be.revert(ethers);
+      await invoke(encoded);
 
       // 801 / 1000 = 80.1% > 80% → fail
-      const encodedFail = abiCoder.encode(
-        ["uint256", "uint256", "uint256"],
-        [1000, 500, 801],
+      const encodedFail = encodeAbiParameters(
+        parseAbiParameters("uint256, uint256, uint256"),
+        [1000n, 500n, 801n],
       );
-      await expect(invoke(encodedFail))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(encodedFail),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
+          2n, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
           anyValue,
-        );
+        ],
+      );
     });
 
     it("extracts values from Tuple", async () => {
-      const iface = new Interface([
+      const abi = parseAbi([
         "function mixedTuple((uint256 amount, uint256 second, uint256 limit, uint256 fourth))",
       ]);
-      const fn = iface.getFunction("mixedTuple")!;
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -1785,47 +1872,53 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
       const invoke = (
-        amount: number,
-        second: number,
-        limit: number,
-        fourth: number,
+        amount: bigint,
+        second: bigint,
+        limit: bigint,
+        fourth: bigint,
       ) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "mixedTuple",
+              args: [{ amount, second, limit, fourth }],
+            }),
             0,
-            iface.encodeFunctionData(fn, [[amount, second, limit, fourth]]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // 1500 / 1000 = 150% → pass
-      await expect(invoke(500, 1000, 800, 1500)).to.not.be.revert(ethers);
+      await invoke(500n, 1000n, 800n, 1500n);
 
       // 1501 / 1000 = 150.1% > 150% → fail
-      await expect(invoke(500, 1000, 800, 1501))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(500n, 1000n, 800n, 1501n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
+          2n, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
           anyValue,
-        );
+        ],
+      );
     });
 
     it("WithinRatio inside And as tuple field - Tuple(Static, And(WithinRatio, Static))", async () => {
-      const iface = new Interface([
-        "function twoParams(uint256 reference, uint256 relative)",
-      ]);
-      const fn = iface.getFunction("twoParams")!;
+      const abi = parseAbi(["function twoParams(uint256 ref, uint256 rel)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -1870,40 +1963,48 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
-      const invoke = (reference: number, relative: number) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const invoke = (reference: bigint, relative: bigint) =>
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "twoParams",
+              args: [reference, relative],
+            }),
             0,
-            iface.encodeFunctionData(fn, [reference, relative]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // 1500 / 1000 = 150% → pass
-      await expect(invoke(1000, 1500)).to.not.be.revert(ethers);
+      await invoke(1000n, 1500n);
 
       // 1501 / 1000 = 150.1% > 150% → fail
-      await expect(invoke(1000, 1501))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(1000n, 1501n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          4, // WithinRatio: Matches[0] -> Pluck[1], And[2] -> Pluck[3], WithinRatio[4]
+          4n, // WithinRatio: Matches[0] -> Pluck[1], And[2] -> Pluck[3], WithinRatio[4]
           anyValue,
-        );
+        ],
+      );
     });
 
     it("extracts values from Array", async () => {
-      const iface = new Interface(["function uint256ArrayStatic(uint256[])"]);
-      const fn = iface.getFunction("uint256ArrayStatic")!;
+      const abi = parseAbi(["function uint256ArrayStatic(uint256[])"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -1945,46 +2046,54 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
-      const invoke = (arr: number[]) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const invoke = (arr: bigint[]) =>
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "uint256ArrayStatic",
+              args: [arr],
+            }),
             0,
-            iface.encodeFunctionData(fn, [arr]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // 1200 / 1000 = 120% → pass
-      await expect(invoke([1000, 500, 1200])).to.not.be.revert(ethers);
+      await invoke([1000n, 500n, 1200n]);
 
       // 1201 / 1000 = 120.1% > 120% → fail
-      await expect(invoke([1000, 500, 1201]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1000n, 500n, 1201n]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          2, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
+          2n, // WithinRatio node: And[0] -> Matches[1], WithinRatio[2]
           anyValue,
-        );
+        ],
+      );
     });
 
     it("extracts sliced values from bytes parameter", async () => {
-      const iface = new Interface(["function dynamicParam(bytes)"]);
-      const fn = iface.getFunction("dynamicParam")!;
+      const abi = parseAbi(["function dynamicParam(bytes)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
       // Slice compValue: 2 bytes shift + 1 byte size
       const sliceCompValue = (shift: number, size: number) =>
-        solidityPacked(["uint16", "uint8"], [shift, size]);
+        encodePacked(["uint16", "uint8"], [shift, size]);
 
       const compValue = encodeWithinRatioCompValue({
         referencePluckIndex: 0,
@@ -2050,46 +2159,57 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.None,
-      );
+      ]);
 
-      const invoke = (bytesData: string) =>
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      const invoke = (bytesData: Hex) =>
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
+            0n,
+            encodeFunctionData({
+              abi,
+              functionName: "dynamicParam",
+              args: [bytesData],
+            }),
             0,
-            iface.encodeFunctionData(fn, [bytesData]),
-            0,
-          );
+          ],
+          { account: member.account },
+        );
 
       // bytes: [reference: 4 bytes][relative: 4 bytes]
       // reference = 0x000003e8 (1000), relative = 0x000003e8 (1000) → 100%
-      await expect(invoke("0x000003e8000003e8")).to.not.be.revert(ethers);
+      await invoke("0x000003e8000003e8");
 
       // reference = 0x000003e8 (1000), relative = 0x00000384 (900) → 90%
-      await expect(invoke("0x000003e800000384")).to.not.be.revert(ethers);
+      await invoke("0x000003e800000384");
 
       // reference = 0x000003e8 (1000), relative = 0x00000379 (889) → 88.9% < 90%
-      await expect(invoke("0x000003e800000379"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.RatioBelowMin, anyValue, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x000003e800000379"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.RatioBelowMin, anyValue, anyValue],
+      );
 
       // reference = 0x000003e8 (1000), relative = 0x00000451 (1105) → 110.5% > 110%
-      await expect(invoke("0x000003e800000451"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(ConditionViolationStatus.RatioAboveMax, anyValue, anyValue);
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0x000003e800000451"),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.RatioAboveMax, anyValue, anyValue],
+      );
     });
 
     it("extracts EtherValue", async () => {
       // Different pattern - uses single param + ether value, keep inline
-      const iface = new Interface(["function fn(uint256)"]);
-      const fn = iface.getFunction("fn")!;
+      const abi = parseAbi(["function fn(uint256)"]);
+      const selector = toFunctionSelector(abi[0]);
       const { roles, member, testContractAddress, roleKey } =
         await loadFixture(setupTestContract);
 
@@ -2128,55 +2248,67 @@ describe("Operator - WithinRatio", () => {
           ],
         }),
       );
-      await roles.allowFunctionPacked(
+      await roles.write.allowFunctionPacked([
         roleKey,
         testContractAddress,
-        fn.selector,
+        selector,
         packed,
         ExecutionOptions.Send,
-      );
+      ]);
 
       // 2 ETH / 1 ETH = 200% → pass
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            10n ** 18n,
-            iface.encodeFunctionData(fn, [2n * 10n ** 18n]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          10n ** 18n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [2n * 10n ** 18n],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
 
       // 1 ETH / 1 ETH = 100% → pass
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
-            testContractAddress,
-            10n ** 18n,
-            iface.encodeFunctionData(fn, [1n * 10n ** 18n]),
-            0,
-          ),
-      ).to.not.be.revert(ethers);
+      await roles.write.execTransactionFromModule(
+        [
+          testContractAddress,
+          10n ** 18n,
+          encodeFunctionData({
+            abi,
+            functionName: "fn",
+            args: [1n * 10n ** 18n],
+          }),
+          0,
+        ],
+        { account: member.account },
+      );
 
       // 2.1 ETH / 1 ETH = 210% > 200% → fail
-      await expect(
-        roles
-          .connect(member)
-          .execTransactionFromModule(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        roles.write.execTransactionFromModule(
+          [
             testContractAddress,
             10n ** 18n,
-            iface.encodeFunctionData(fn, [21n * 10n ** 17n]),
+            encodeFunctionData({
+              abi,
+              functionName: "fn",
+              args: [21n * 10n ** 17n],
+            }),
             0,
-          ),
-      )
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+          ],
+          { account: member.account },
+        ),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
-          3, // WithinRatio node: And[0] -> Matches[1], Pluck[2], WithinRatio[3]
+          3n, // WithinRatio node: And[0] -> Matches[1], Pluck[2], WithinRatio[3]
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -2199,13 +2331,16 @@ describe("Operator - WithinRatio", () => {
       );
 
       // 850 / 1000 = 85% < 90% → fail
-      await expect(invoke(850, 1000))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(850n, 1000n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioBelowMin,
-          2, // WithinRatio node at BFS index 3
+          2n, // WithinRatio node at BFS index 3
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -2226,13 +2361,16 @@ describe("Operator - WithinRatio", () => {
       );
 
       // 950 / 1000 = 95% > 90% → fail
-      await expect(invoke(950, 1000))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(950n, 1000n),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.RatioAboveMax,
           anyValue,
-          0, // payloadLocation: WithinRatio uses plucked values, no direct payload
-        );
+          0n, // calldataOffset: WithinRatio uses plucked values, no direct payload
+        ],
+      );
     });
   });
 });
@@ -2253,18 +2391,18 @@ function encodeWithinRatioCompValue({
   referenceParams,
   relativeParams,
 }: {
-  referenceAdapter?: string;
-  relativeAdapter?: string;
+  referenceAdapter?: Address;
+  relativeAdapter?: Address;
   referencePluckIndex: number;
   referenceDecimals: number;
   relativePluckIndex: number;
   relativeDecimals: number;
   minRatio: number;
   maxRatio: number;
-  referenceParams?: string;
-  relativeParams?: string;
-}): string {
-  const base = solidityPacked(
+  referenceParams?: Hex;
+  relativeParams?: Hex;
+}): Hex {
+  const base = encodePacked(
     ["uint8", "uint8", "uint8", "uint8", "uint32", "uint32"],
     [
       referencePluckIndex,
@@ -2284,20 +2422,20 @@ function encodeWithinRatioCompValue({
     const refParamsBytes = referenceParams || "0x";
     const refParamsLen = (refParamsBytes.length - 2) / 2;
     // ref blob: blobLen(1) + address(20) + params(blobLen - 20)
-    result = solidityPacked(
+    result = encodePacked(
       ["bytes", "uint8", "address", "bytes"],
       [result, 20 + refParamsLen, referenceAdapter, refParamsBytes],
     );
   } else {
     // blobLen=0: no ref adapter
-    result = solidityPacked(["bytes", "uint8"], [result, 0]);
+    result = encodePacked(["bytes", "uint8"], [result, 0]);
   }
 
   if (relativeAdapter) {
     const relParamsBytes = relativeParams || "0x";
     const relParamsLen = (relParamsBytes.length - 2) / 2;
     // rel blob: blobLen(1) + address(20) + params(blobLen - 20)
-    result = solidityPacked(
+    result = encodePacked(
       ["bytes", "uint8", "address", "bytes"],
       [result, 20 + relParamsLen, relativeAdapter, relParamsBytes],
     );
@@ -2305,491 +2443,3 @@ function encodeWithinRatioCompValue({
 
   return result;
 }
-
-describe("integrity", () => {
-  after(async () => {
-    await connection.close();
-  });
-
-  it("reverts UnsuitableParameterType for invalid encodings", async () => {
-    const { roles } = await loadFixture(setupTestContract);
-
-    const compValue = encodeWithinRatioCompValue({
-      referencePluckIndex: 0,
-      referenceDecimals: 0,
-      relativePluckIndex: 1,
-      relativeDecimals: 0,
-      minRatio: 9000,
-      maxRatio: 11000,
-    });
-
-    for (const encoding of [
-      Encoding.AbiEncoded,
-      Encoding.Array,
-      Encoding.Dynamic,
-      Encoding.EtherValue,
-      Encoding.Static,
-      Encoding.Tuple,
-    ]) {
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: encoding,
-            operator: Operator.WithinRatio,
-            compValue,
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-    }
-  });
-
-  describe("compValue", () => {
-    it("accepts 12-byte compValue (no adapters)", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      // 12 bytes: referencePluckIndex(1) + referenceDecimals(1) + relativePluckIndex(1) + relativeDecimals(1) + minRatio(4) + maxRatio(4)
-      const compValue12 = solidityPacked(
-        ["uint8", "uint8", "uint8", "uint8", "uint32", "uint32"],
-        [0, 0, 1, 0, 9000, 11000],
-      );
-
-      // Should succeed without reverting
-      await roles.packConditions([
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.And,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.WithinRatio,
-          compValue: compValue12,
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x00",
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x01",
-        },
-      ]);
-    });
-
-    it("accepts 33-byte compValue (one adapter, no params)", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      // 33 bytes: 12 base + refLen(1) + refAdapter(20)
-      const compValue33 = solidityPacked(
-        [
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint32",
-          "uint32",
-          "uint8",
-          "address",
-        ],
-        [0, 0, 1, 0, 9000, 11000, 20, ZeroAddress],
-      );
-
-      // Should succeed without reverting
-      await roles.packConditions([
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.And,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.WithinRatio,
-          compValue: compValue33,
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x00",
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x01",
-        },
-      ]);
-    });
-
-    it("accepts 54-byte compValue (two adapters, no params)", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      // 54 bytes: 12 base + refLen(1) + refAdapter(20) + relLen(1) + relAdapter(20)
-      const compValue54 = solidityPacked(
-        [
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint32",
-          "uint32",
-          "uint8",
-          "address",
-          "uint8",
-          "address",
-        ],
-        [0, 0, 1, 0, 9000, 11000, 20, ZeroAddress, 20, ZeroAddress],
-      );
-
-      // Should succeed without reverting
-      await roles.packConditions([
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.And,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.WithinRatio,
-          compValue: compValue54,
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x00",
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x01",
-        },
-      ]);
-    });
-
-    it("reverts UnsuitableCompValue when compValue is less than 12 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue: "0x" + "ab".repeat(11), // 11 bytes
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
-
-    it("reverts UnsuitableCompValue when compValue is between 12 and 33 bytes", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue: "0x" + "ab".repeat(20), // 20 bytes - invalid
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
-
-    it("reverts AllowanceDecimalsExceedMax when referenceDecimals exceeds 27", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-      const compValue = encodeWithinRatioCompValue({
-        referencePluckIndex: 0,
-        referenceDecimals: 28,
-        relativePluckIndex: 1,
-        relativeDecimals: 18,
-        minRatio: 9000,
-        maxRatio: 11000,
-      });
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue,
-          },
-        ]),
-      )
-        .to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax")
-        .withArgs(0);
-    });
-
-    it("reverts AllowanceDecimalsExceedMax when relativeDecimals exceeds 27", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-      const compValue = encodeWithinRatioCompValue({
-        referencePluckIndex: 0,
-        referenceDecimals: 18,
-        relativePluckIndex: 1,
-        relativeDecimals: 28,
-        minRatio: 9000,
-        maxRatio: 11000,
-      });
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue,
-          },
-        ]),
-      )
-        .to.be.revertedWithCustomError(roles, "AllowanceDecimalsExceedMax")
-        .withArgs(0);
-    });
-
-    it("accepts compValue with adapter params", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      // 12 base + refBlobLen(1) + refAdapter(20) + refParams(2)
-      //        + relBlobLen(1) + relAdapter(20) + relParams(2) = 58
-      const compValue = solidityPacked(
-        [
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint8",
-          "uint32",
-          "uint32",
-          "uint8",
-          "address",
-          "bytes",
-          "uint8",
-          "address",
-          "bytes",
-        ],
-        [
-          0,
-          0,
-          1,
-          0,
-          9000,
-          11000,
-          22, // blobLen = 20 (address) + 2 (params)
-          "0x0000000000000000000000000000000000000001",
-          "0xaabb",
-          22, // blobLen = 20 (address) + 2 (params)
-          "0x0000000000000000000000000000000000000002",
-          "0xccdd",
-        ],
-      );
-
-      // Should succeed without reverting
-      await roles.packConditions([
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.And,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.WithinRatio,
-          compValue,
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x00",
-        },
-        {
-          parent: 1,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x01",
-        },
-      ]);
-    });
-
-    it("reverts WithinRatioNoRatioProvided when both minRatio and maxRatio are zero", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      const compValue = encodeWithinRatioCompValue({
-        referencePluckIndex: 3,
-        referenceDecimals: 0,
-        relativePluckIndex: 7,
-        relativeDecimals: 0,
-        minRatio: 0,
-        maxRatio: 0, // Both zero is invalid
-      });
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.And,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue,
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pluck,
-            compValue: "0x03",
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pluck,
-            compValue: "0x07",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "WithinRatioNoRatioProvided");
-    });
-
-    it("reverts WithinRatioMinExceedsMax when minRatio is greater than maxRatio", async () => {
-      const { roles } = await loadFixture(setupTestContract);
-
-      const compValue = encodeWithinRatioCompValue({
-        referencePluckIndex: 3,
-        referenceDecimals: 0,
-        relativePluckIndex: 7,
-        relativeDecimals: 0,
-        minRatio: 11000,
-        maxRatio: 9000, // min > max is invalid
-      });
-
-      await expect(
-        packConditions(roles, [
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.And,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.WithinRatio,
-            compValue,
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pluck,
-            compValue: "0x03",
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pluck,
-            compValue: "0x07",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "WithinRatioMinExceedsMax");
-    });
-  });
-
-  it("reverts LeafNodeCannotHaveChildren when WithinRatio has children", async () => {
-    const { roles } = await loadFixture(setupTestContract);
-
-    const compValue = encodeWithinRatioCompValue({
-      referencePluckIndex: 3,
-      referenceDecimals: 0,
-      relativePluckIndex: 7,
-      relativeDecimals: 0,
-      minRatio: 9000,
-      maxRatio: 11000,
-    });
-
-    await expect(
-      packConditions(roles, [
-        {
-          parent: 0,
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
-          compValue: "0x",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x03",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.Static,
-          operator: Operator.Pluck,
-          compValue: "0x07",
-        },
-        {
-          parent: 0,
-          paramType: Encoding.None,
-          operator: Operator.WithinRatio,
-          compValue,
-        },
-        {
-          parent: 3,
-          paramType: Encoding.Static,
-          operator: Operator.Pass,
-          compValue: "0x",
-        },
-      ]),
-    ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
-  });
-});

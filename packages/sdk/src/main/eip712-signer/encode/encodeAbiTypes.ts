@@ -6,11 +6,13 @@ import { toAbiTypes } from "./toAbiTypes"
 export function encodeAbiTypes({
   domain,
   types,
+  primaryType,
 }: {
   domain?: TypedDataDomain
   types: TypedData
+  primaryType?: string
 }) {
-  const nodes = toAbiTypes({ domain, types })
+  const nodes = toAbiTypes({ domain, types, primaryType })
   return AbiCoder.defaultAbiCoder().encode(
     ["tuple(uint256,uint8,bytes32)[]"],
     [nodes.map((n) => [n.parent, n.encoding, n.typeHash])]

@@ -4,33 +4,21 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.21 <0.9.0;
 
-import {Encoding} from "../../types/Condition.sol";
+import {Encoding} from "../../evaluator/types/EvaluatorTypes.sol";
 
 /**
- * @dev EIP-712 has two recursive layers:
- *
- *      1. Type recursion
- *         `typeHash(T)` is derived from the canonical type string of `T`,
- *         which includes every referenced struct reachable from `T`.
- *         That dependency expansion happens off-chain in the SDK, so this
- *         contract receives each struct's precomputed `typeHash`.
- *
- *      2. Value recursion
- *         `hashStruct(value)` walks the concrete value tree bottom-up:
- *         - static fields contribute their ABI word directly
- *         - `string` / `bytes` contribute `keccak256(contents)`
- *         - nested structs contribute `hashStruct(nestedValue)`
- *         - arrays contribute `keccak256(encoded element hashes)`
- *
- *      This encoder implements the second part directly over ABI locations.
+ * @dev Flat node in a parent-ordered EIP-712 type tree:
+ *      - `parent`: parent index in `types`
+ *      - `encoding`: `Static`, `Dynamic`, `Tuple` or `Array`
+ *      - `typeHash`: EIP-712 `typeHash` for structs, `bytes32(0)` otherwise
  */
-
 struct TypeNodeFlat {
     uint256 parent;
     Encoding encoding;
     bytes32 typeHash;
 }
 
+/// @dev Materialized node of a `TypeNodeFlat[]` tree.
 struct TypeNode {
     Encoding encoding;
     TypeNode[] children;
@@ -38,28 +26,26 @@ struct TypeNode {
 }
 
 /**
- * @title EIP712Encoder - Encodes and hashes EIP-712 typed structured data
- *
- * @author gnosisguild
+ * @title EIP712Encoder
+ * @notice Hashes EIP-712 structured data directly over ABI-encoded calldata.
  */
 library EIP712Encoder {
     error InvalidEIP712Encoding();
 
     /**
-     * @dev Computes the hash of an EIP-712 message.
-     * @param domain  The encoded domain data.
-     * @param message The encoded message data.
-     * @param types   Flattened type nodes for domain and message.
+     * @dev Computes the hash of an EIP-712 message:
+     *      `keccak256("\x19\x01" || domainSeparator || messageHash)`.
+     * @param domain  ABI-encoded `EIP712Domain` tuple body.
+     * @param message ABI-encoded primary message tuple body.
+     * @param types   Flattened type tree (`types[0]` = domain, `types[1]` = message).
      */
     function hashTypedMessage(
         bytes calldata domain,
         bytes calldata message,
         TypeNodeFlat[] calldata types
     ) internal pure returns (bytes32 result) {
-        (bytes32 domainSeparator, bytes32 messageHash) = (
-            _hashStruct(domain, types, 0),
-            _hashStruct(message, types, 1)
-        );
+        bytes32 domainSeparator = _hashStruct(domain, types, 0);
+        bytes32 messageHash = _hashStruct(message, types, 1);
 
         assembly {
             let ptr := mload(0x40)
@@ -71,9 +57,9 @@ library EIP712Encoder {
     }
 
     /**
-     * @dev Computes the hash of an EIP-712 domain.
-     * @param data  The encoded domain data.
-     * @param types Type nodes for the domain.
+     * @dev Computes the EIP-712 domain separator `hashStruct(EIP712Domain)`.
+     * @param data  ABI-encoded `EIP712Domain` tuple body.
+     * @param types Flattened type tree (`types[0]` = domain).
      */
     function hashTypedDomain(
         bytes calldata data,
@@ -83,18 +69,18 @@ library EIP712Encoder {
     }
 
     /**
-     * @dev Struct hashing entrypoint. `data` is the root tuple block itself,
-     *      so hashing starts from ABI location 0 on the root struct node.
-     *
-     * @param data  Encoded structure data.
-     * @param types Type nodes.
-     * @param index Type definition entrypoint.
+     * @dev Hashes the root struct at `types[index]` over `data` from offset 0.
+     *      Requires `types[index]` to be a struct (`Tuple` with non-zero `typeHash`).
      */
     function _hashStruct(
         bytes calldata data,
         TypeNodeFlat[] calldata types,
         uint256 index
-    ) private pure returns (bytes32 result) {
+    ) private pure returns (bytes32) {
+        if (index >= types.length) {
+            revert InvalidEIP712Encoding();
+        }
+
         TypeNode memory root = _toTree(types, index);
         if (root.encoding != Encoding.Tuple || root.typeHash == bytes32(0)) {
             revert InvalidEIP712Encoding();
@@ -104,22 +90,16 @@ library EIP712Encoder {
     }
 
     /**
-     * @dev EIP-712 field encoder:
-     *      - static fields are read directly from ABI encoding
-     *      - string/bytes fields are keccak256(content)
-     *      - structs hash as keccak256(typeHash || encoded fields)
-     *      - arrays hash as keccak256(encoded elements)
-     *
-     * @param data     Encoded input data.
-     * @param layout   The type node for the field.
-     * @param location Absolute ABI location of the field value.
+     * @dev Encodes and hashes the value of `node` at byte offset `location` in `data`.
+     *      `location` points to the 32-byte word (`Static`), length word (`Dynamic`),
+     *      count word (`Array`), or head block (`Tuple`).
      */
     function _hashField(
         bytes calldata data,
-        TypeNode memory layout,
+        TypeNode memory node,
         uint256 location
     ) private pure returns (bytes32) {
-        Encoding encoding = layout.encoding;
+        Encoding encoding = node.encoding;
 
         if (encoding == Encoding.Static) {
             return _word(data, location);
@@ -137,46 +117,42 @@ library EIP712Encoder {
         }
 
         if (encoding == Encoding.Array) {
+            // arrays hash as the concatenation of element encodings,
+            // so a non-zero typeHash would yield a non-standard digest
+            if (node.typeHash != bytes32(0)) {
+                revert InvalidEIP712Encoding();
+            }
+
             return
                 _hashBlock(
                     data,
-                    layout,
+                    node,
                     location + 32,
-                    uint256(_word(data, location)),
-                    true
+                    uint256(_word(data, location))
                 );
         }
 
         if (encoding == Encoding.Tuple) {
-            return
-                _hashBlock(
-                    data,
-                    layout,
-                    location,
-                    layout.children.length,
-                    false
-                );
+            return _hashBlock(data, node, location, node.children.length);
         }
 
         revert InvalidEIP712Encoding();
     }
 
     /**
-     * @dev Hashes a tuple-style block.
-     *
-     *      Structs and fixed-length arrays are both encoded as tuple blocks.
-     *      Dynamic arrays also use the same head/tail layout once the leading
-     *      length word has been skipped. `isArray` only controls whether a
-     *      single child layout is repeated for every element.
+     * @dev Hashes a head/tail ABI block starting at `blockLocation`.
+     *      Dynamic child offsets are resolved relative to `blockLocation`.
+     *      For `Array`, `node.children[0]` is repeated `childCount` times;
+     *      for structs (`node.typeHash != 0`), `typeHash` is prepended.
      */
     function _hashBlock(
         bytes calldata data,
-        TypeNode memory layout,
+        TypeNode memory node,
         uint256 blockLocation,
-        uint256 childCount,
-        bool isArray
+        uint256 childCount
     ) private pure returns (bytes32) {
-        if (isArray && layout.children.length != 1) {
+        bool isArray = node.encoding == Encoding.Array;
+        if (isArray && node.children.length != 1) {
             revert InvalidEIP712Encoding();
         }
 
@@ -184,7 +160,7 @@ library EIP712Encoder {
         uint256 headOffset;
 
         for (uint256 i = 0; i < childCount; ++i) {
-            TypeNode memory child = layout.children[isArray ? 0 : i];
+            TypeNode memory child = node.children[isArray ? 0 : i];
             (uint256 childLocation, uint256 childInlineSize) = _childLocation(
                 data,
                 blockLocation,
@@ -198,16 +174,15 @@ library EIP712Encoder {
 
         return
             keccak256(
-                layout.typeHash != bytes32(0)
-                    ? abi.encodePacked(layout.typeHash, result)
+                node.typeHash != bytes32(0)
+                    ? abi.encodePacked(node.typeHash, result)
                     : abi.encodePacked(result)
             );
     }
 
     /**
-     * @dev Resolves the absolute location of a child within a tuple/array
-     *      block. Static children are inlined in the head; dynamic children
-     *      store a relative offset into the tail.
+     * @dev Resolves a child's byte offset in `data` and its inline width (`0` if
+     *      referenced via a 32-byte head offset relative to `blockLocation`).
      */
     function _childLocation(
         bytes calldata data,
@@ -220,35 +195,22 @@ library EIP712Encoder {
         childInlineSize = _inlineSize(child);
 
         if (childInlineSize > 0) {
-            if (headLocation + 32 > data.length) {
-                revert InvalidEIP712Encoding();
-            }
             return (headLocation, childInlineSize);
         }
 
-        if (headLocation + 32 > data.length) {
-            revert InvalidEIP712Encoding();
-        }
-
+        // The offset must point past its own head slot
         uint256 tailOffset = uint256(_word(data, headLocation));
-        if (tailOffset <= headOffset) {
+        if (tailOffset < headOffset + 32) {
             revert InvalidEIP712Encoding();
         }
 
-        childLocation = blockLocation + tailOffset;
-        if (childLocation + 32 > data.length) {
-            revert InvalidEIP712Encoding();
-        }
-
-        return (childLocation, 0);
+        return (blockLocation + tailOffset, 0);
     }
 
     /**
-     * @dev Computes how a node occupies a parent ABI head slot.
-     *      `0` means the value is represented by a 32-byte offset.
-     *      Non-zero means the value is inlined and occupies that many bytes.
-     *
-     *      Empty tuples are rejected so `0` remains an unambiguous sentinel.
+     * @dev Returns a child node's inline byte width in its parent head, or `0`
+     *      if it is dynamic. Empty nested tuples are rejected so `0` remains
+     *      an unambiguous sentinel.
      */
     function _inlineSize(
         TypeNode memory node
@@ -263,17 +225,12 @@ library EIP712Encoder {
             return 32;
         }
 
-        if (encoding != Encoding.Tuple) {
-            revert InvalidEIP712Encoding();
-        }
-
-        if (node.children.length == 0) {
+        if (encoding != Encoding.Tuple || node.children.length == 0) {
             revert InvalidEIP712Encoding();
         }
 
         for (uint256 i = 0; i < node.children.length; ++i) {
-            TypeNode memory child = node.children[i];
-            uint256 childInlineSize = _inlineSize(child);
+            uint256 childInlineSize = _inlineSize(node.children[i]);
             if (childInlineSize == 0) {
                 return 0;
             }
@@ -282,14 +239,15 @@ library EIP712Encoder {
     }
 
     /**
-     * @dev Builds a TypeNode tree from TypeNodeFlat array.
+     * @dev Materializes the subtree rooted at `types[index]`.
+     *      Children must appear after their parent (`i > index`)
      */
     function _toTree(
         TypeNodeFlat[] calldata types,
         uint256 index
-    ) private pure returns (TypeNode memory layout) {
-        layout.encoding = types[index].encoding;
-        layout.typeHash = types[index].typeHash;
+    ) private pure returns (TypeNode memory node) {
+        node.encoding = types[index].encoding;
+        node.typeHash = types[index].typeHash;
 
         // Count children (nodes where parent == index)
         uint256 childCount = 0;
@@ -301,19 +259,17 @@ library EIP712Encoder {
         }
 
         if (childCount > 0) {
-            layout.children = new TypeNode[](childCount);
+            node.children = new TypeNode[](childCount);
             uint256 childIndex = 0;
             for (uint256 i = index + 1; childIndex < childCount; ++i) {
                 if (types[i].parent == index) {
-                    layout.children[childIndex++] = _toTree(types, i);
+                    node.children[childIndex++] = _toTree(types, i);
                 }
             }
         }
     }
 
-    /**
-     * @dev Loads a single 32-byte ABI word from calldata.
-     */
+    /// @dev Loads the 32-byte word at `location` in `data`
     function _word(
         bytes calldata data,
         uint256 location

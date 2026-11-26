@@ -1,30 +1,39 @@
-import { expect } from "chai"
+import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
+import { after, describe, it } from "node:test"
 import type { TypedData, TypedDataDomain } from "abitype"
 import {
-  AbiCoder,
-  Interface,
-  TypedDataEncoder,
-  ZeroAddress,
-  ZeroHash,
+  type Address,
+  type Hex,
+  type WalletClient,
   concat,
-  randomBytes,
-} from "ethers"
-import type { Signer } from "ethers"
+  encodeAbiParameters,
+  encodeFunctionData,
+  hashTypedData,
+  parseAbi,
+  toHex,
+  zeroAddress,
+  zeroHash,
+} from "viem"
 import { network } from "hardhat"
-import { encodeSignTypedMessage, __integration } from "zodiac-roles-sdk"
+import { encodeSignTypedMessage } from "zodiac-roles-sdk"
 
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
-import { iface as ifaceFallback } from "./setup/deploy-mastercopies/fallbackHandler.js"
-import { iface as ifaceSafe } from "./setup/deploy-mastercopies/safeMastercopy.js"
+import { safeAbi } from "./setup/safe-deployments/index.js"
 
 import { deploySafe } from "./setup/safe.js"
 
 const connection = await network.create()
-const { ethers, networkHelpers, provider } = connection
+const { viem, networkHelpers } = connection
 const { loadFixture } = networkHelpers
 
 const EIP712_MAGIC_VALUE = "0x1626ba7e"
 const EIP712_MAGIC_VALUE_OLD = "0x20c13b0b"
+
+const isValidSignatureBytesAbi = parseAbi([
+  "function isValidSignature(bytes _data, bytes _signature) view returns (bytes4)",
+])
+const signMessageAbi = parseAbi(["function signMessage(bytes message)"])
 
 describe("SignTypedMessageLib", () => {
   after(async () => {
@@ -32,26 +41,25 @@ describe("SignTypedMessageLib", () => {
   })
 
   async function setup() {
-    await deployMastercopies(ethers)
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
+    await deployMastercopies(viem)
+    const lib = await viem.deployContract("SignTypedMessageLib")
 
-    const [owner, relayer] = await ethers.getSigners()
+    const [owner, relayer] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
 
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
         creationNonce: BigInt(randomHash()),
       },
       owner
     )
 
-    return { owner, relayer, safe, lib: await lib.getAddress() }
+    return { owner, relayer, publicClient, safe, lib: lib.address }
   }
   it("signMessage()", async () => {
-    const { owner, relayer, safe, lib } = await loadFixture(setup)
+    const { owner, publicClient, safe, lib } = await loadFixture(setup)
 
     const message = "0xbadfed"
 
@@ -59,23 +67,17 @@ describe("SignTypedMessageLib", () => {
       await _encodeSignMessage({ owner, safe, lib, message })
     )
 
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData("isValidSignature(bytes,bytes)", [
-        message,
-        "0x",
-      ]),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytesAbi,
+      functionName: "isValidSignature",
+      args: [message, "0x"],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes,bytes)",
-      resultData
-    )
-
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE_OLD])
+    assert.equal(result, EIP712_MAGIC_VALUE_OLD)
   })
   it("signTypedMessage()", async () => {
-    const { owner, relayer, safe, lib } = await loadFixture(setup)
+    const { owner, publicClient, safe, lib } = await loadFixture(setup)
 
     const domain = {
       version: "1",
@@ -105,24 +107,26 @@ describe("SignTypedMessageLib", () => {
       })
     )
 
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData("isValidSignature(bytes,bytes)", [
-        TypedDataEncoder.hash(domain, types, message),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytesAbi,
+      functionName: "isValidSignature",
+      args: [
+        hashTypedData({
+          domain,
+          types,
+          primaryType: "Message",
+          message,
+        }),
         "0x",
-      ]),
+      ],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes,bytes)",
-      resultData
-    )
-
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE_OLD])
+    assert.equal(result, EIP712_MAGIC_VALUE_OLD)
   })
 
   it("signTypedMessage() via fallback", async () => {
-    const { owner, relayer, safe, lib } = await loadFixture(setup)
+    const { owner, publicClient, safe, lib } = await loadFixture(setup)
 
     const types = {
       Order: [
@@ -148,7 +152,7 @@ describe("SignTypedMessageLib", () => {
       version: "1.0",
       chainId: 137,
       verifyingContract:
-        "0xABABABababABababABababABababABababABaBab".toLowerCase(),
+        "0xABABABababABababABababABababABababABaBab".toLowerCase() as Address,
     }
     const message = {
       maker: {
@@ -168,7 +172,12 @@ describe("SignTypedMessageLib", () => {
       expiry: 1710000000,
     }
 
-    const hashFromEthers = TypedDataEncoder.hash(domain, types, message)
+    const hashFromViem = hashTypedData({
+      domain,
+      types,
+      primaryType: "Order",
+      message,
+    })
 
     const tx = await _encodeSignTypedMessageFallback({
       owner,
@@ -181,20 +190,113 @@ describe("SignTypedMessageLib", () => {
 
     await owner.sendTransaction(tx)
 
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData("isValidSignature(bytes,bytes)", [
-        hashFromEthers,
-        "0x",
-      ]),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytesAbi,
+      functionName: "isValidSignature",
+      args: [hashFromViem, "0x"],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes,bytes)",
-      resultData
+    assert.equal(result, EIP712_MAGIC_VALUE_OLD)
+  })
+  it("fallback - rejects arguments that do not lie within calldata", async () => {
+    const { relayer, lib } = await loadFixture(setup)
+    const contract = await viem.getContractAt("SignTypedMessageLib", lib)
+
+    const types = { Message: [{ name: "amount", type: "uint256" }] } as const
+    const encoded = encodeSignTypedMessage({
+      domain: { version: "1", chainId: 1 },
+      message: { amount: 100n },
+      types,
+    })
+    const data = `0x11223344${encoded.slice(10)}` as Hex
+    const size = (data.length - 2) / 2
+
+    // the word at byte `position` of data
+    const read = (position: number) =>
+      Number(BigInt(`0x${data.slice(2 + position * 2, 66 + position * 2)}`))
+    // data with the word at byte `position` replaced
+    const write = (position: number, value: bigint): Hex =>
+      (data.slice(0, 2 + position * 2) +
+        value.toString(16).padStart(64, "0") +
+        data.slice(66 + position * 2)) as Hex
+
+    const max = 2n ** 256n - 1n
+    const [domainLength, messageLength, typesLength] = [
+      read(0x04) + 4,
+      read(0x24) + 4,
+      read(0x44) + 4,
+    ]
+
+    // well formed: decoded, and then refused for not being a delegatecall
+    await viem.assertions.revertWithCustomError(
+      relayer.sendTransaction({ to: lib, data }),
+      contract,
+      "OnlyDelegateCall"
     )
 
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE_OLD])
+    const malformed = {
+      "selector only": data.slice(0, 10) as Hex,
+      "shorter than the head": data.slice(0, 2 + 0x63 * 2) as Hex,
+      "truncated by one byte": data.slice(0, -2) as Hex,
+      "truncated by one type node": data.slice(0, -0x60 * 2) as Hex,
+      "domain offset wraps": write(0x04, max - 3n),
+      "message offset wraps": write(0x24, max - 3n),
+      "types offset wraps": write(0x44, max - 3n),
+      "domain offset wraps to its own content": write(0x04, max - 0x23n),
+      "domain offset at the end": write(0x04, BigInt(size - 4)),
+      "types offset past the end": write(0x44, BigInt(size)),
+      "domain length past the end": write(
+        domainLength,
+        BigInt(size - domainLength - 0x20 + 1)
+      ),
+      "domain length wraps": write(domainLength, max),
+      "message length past the end": write(
+        messageLength,
+        BigInt(size - messageLength - 0x20 + 1)
+      ),
+      "types length past the end": write(
+        typesLength,
+        BigInt(read(typesLength) + 1)
+      ),
+      "types length wraps": write(typesLength, max / 0x60n + 2n),
+    }
+
+    for (const [name, malformedData] of Object.entries(malformed)) {
+      try {
+        await viem.assertions.revertWithCustomError(
+          relayer.sendTransaction({ to: lib, data: malformedData }),
+          contract,
+          "InvalidCalldata"
+        )
+      } catch (error) {
+        throw new Error(
+          `${name}: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+    }
+  })
+  it("reverts when called directly", async () => {
+    const { relayer, lib } = await loadFixture(setup)
+    const contract = await viem.getContractAt("SignTypedMessageLib", lib)
+
+    await viem.assertions.revertWithCustomError(
+      contract.write.signMessage(["0xbadfed"], { account: relayer.account }),
+      contract,
+      "OnlyDelegateCall"
+    )
+    await viem.assertions.revertWithCustomError(
+      contract.write.personalSign(["0xbadfed"], { account: relayer.account }),
+      contract,
+      "OnlyDelegateCall"
+    )
+    await viem.assertions.revertWithCustomError(
+      contract.write.signTypedMessage(["0x", "0x", []], {
+        account: relayer.account,
+      }),
+      contract,
+      "OnlyDelegateCall"
+    )
   })
 })
 
@@ -204,27 +306,35 @@ async function _encodeSignMessage({
   lib,
   message,
 }: {
-  owner: Signer
-  safe: string
-  lib: string
-  message: string
+  owner: WalletClient
+  safe: Address
+  lib: Address
+  message: Hex
 }) {
-  const iface = Interface.from(["function signMessage(bytes message)"])
-
-  const data = ifaceSafe.encodeFunctionData("execTransaction", [
-    lib,
-    0,
-    iface.encodeFunctionData("signMessage", [message]),
-    1, //Delegatecall,
-    0n,
-    0n,
-    0n,
-    ZeroAddress,
-    ZeroAddress,
-    createPreApprovedSignature(await owner.getAddress()),
-  ])
+  const data = encodeFunctionData({
+    abi: safeAbi,
+    functionName: "execTransaction",
+    args: [
+      lib,
+      0n,
+      encodeFunctionData({
+        abi: signMessageAbi,
+        functionName: "signMessage",
+        args: [message],
+      }),
+      1, //Delegatecall,
+      0n,
+      0n,
+      0n,
+      zeroAddress,
+      zeroAddress,
+      createPreApprovedSignature(owner.account!.address),
+    ],
+  })
 
   return {
+    account: owner.account!,
+    chain: owner.chain,
     to: safe,
     data,
     value: 0n,
@@ -239,26 +349,32 @@ async function _encodeSignTypedMessage({
   message,
   types,
 }: {
-  owner: Signer
-  safe: string
-  lib: string
+  owner: WalletClient
+  safe: Address
+  lib: Address
   domain: TypedDataDomain
   message: Record<string, any>
   types: TypedData
 }) {
-  const data = ifaceSafe.encodeFunctionData("execTransaction", [
-    lib,
-    0,
-    encodeSignTypedMessage({ domain, message, types }),
-    1, //Delegatecall,
-    0n,
-    0n,
-    0n,
-    ZeroAddress,
-    ZeroAddress,
-    createPreApprovedSignature(await owner.getAddress()),
-  ])
+  const data = encodeFunctionData({
+    abi: safeAbi,
+    functionName: "execTransaction",
+    args: [
+      lib,
+      0n,
+      encodeSignTypedMessage({ domain, message, types }) as Hex,
+      1, //Delegatecall,
+      0n,
+      0n,
+      0n,
+      zeroAddress,
+      zeroAddress,
+      createPreApprovedSignature(owner.account!.address),
+    ],
+  })
   return {
+    account: owner.account!,
+    chain: owner.chain,
     to: safe,
     data,
     value: 0n,
@@ -273,46 +389,47 @@ async function _encodeSignTypedMessageFallback({
   message,
   types,
 }: {
-  owner: Signer
-  safe: string
-  lib: string
+  owner: WalletClient
+  safe: Address
+  lib: Address
   domain: any
   message: any
   types: any
 }) {
-  const data = ifaceSafe.encodeFunctionData("execTransaction", [
-    lib,
-    0,
-    `0x11223344${encodeSignTypedMessage({ domain, message, types }).slice(10)}`,
-    1, //Delegatecall,
-    0n,
-    0n,
-    0n,
-    ZeroAddress,
-    ZeroAddress,
-    createPreApprovedSignature(await owner.getAddress()),
-  ])
+  const data = encodeFunctionData({
+    abi: safeAbi,
+    functionName: "execTransaction",
+    args: [
+      lib,
+      0n,
+      `0x11223344${encodeSignTypedMessage({ domain, message, types }).slice(10)}` as Hex,
+      1, //Delegatecall,
+      0n,
+      0n,
+      0n,
+      zeroAddress,
+      zeroAddress,
+      createPreApprovedSignature(owner.account!.address),
+    ],
+  })
 
   return {
+    account: owner.account!,
+    chain: owner.chain,
     to: safe,
     data,
     value: 0n,
   }
 }
 
-const createPreApprovedSignature = (approver: string) => {
+const createPreApprovedSignature = (approver: Address) => {
   return concat([
-    AbiCoder.defaultAbiCoder().encode(["address"], [approver]),
-    ZeroHash,
+    encodeAbiParameters([{ type: "address" }], [approver]),
+    zeroHash,
     "0x01",
   ])
 }
 
-function randomHash(): string {
-  return (
-    "0x" +
-    Array.from(randomBytes(32))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  )
+function randomHash(): Hex {
+  return toHex(randomBytes(32))
 }

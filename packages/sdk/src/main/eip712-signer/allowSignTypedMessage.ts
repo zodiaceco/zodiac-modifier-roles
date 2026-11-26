@@ -6,8 +6,8 @@ import { SIGN_TYPED_MESSAGE_LIB_ADDRESS } from "../addresses"
 import { c } from "../target/authoring"
 import { StructScoping } from "../target/authoring/types"
 import { encodeAbiTypes, toAbiTypes } from "./encode"
-import { findPrimaryType, parseType } from "./types"
-import { DomainStructOf, MessageStructOf } from "./typedDataTypes"
+import { findPrimaryType, parseType, selectTypes } from "./types"
+import { DomainStructOf, MessageStructOf, PrimaryType } from "./typedDataTypes"
 
 /**
  * Returns a permission allowing the role to sign EIP-712 typed messages
@@ -21,6 +21,9 @@ import { DomainStructOf, MessageStructOf } from "./typedDataTypes"
  * @param params.types - EIP-712 type definitions, including `EIP712Domain` and
  *   the primary message struct. Should be declared `as const` so TypeScript
  *   can narrow field types and infer the primary type.
+ * @param params.primaryType - The primary message struct, as the signing
+ *   request names it. May be omitted when it is the one struct no other
+ *   struct references. Types it does not reach are dropped.
  * @param params.domain - Struct scoping over the `EIP712Domain` fields. Field
  *   names, primitive types, and nested struct shapes are inferred from
  *   `params.types`. Omitted fields are unconstrained; the whole struct may
@@ -30,17 +33,22 @@ import { DomainStructOf, MessageStructOf } from "./typedDataTypes"
  * @returns A permission targeting `SignTypedMessageLib` with the right
  *   selector, delegatecall flag, and condition tree wired up.
  */
-export function allowSignTypedMessage<const T extends TypedData>({
-  types,
+export function allowSignTypedMessage<
+  const T extends TypedData,
+  P extends keyof T & string = PrimaryType<T> & string,
+>({
+  types: declared,
+  primaryType: declaredPrimaryType,
   domain,
   message,
 }: {
   types: T
+  primaryType?: P extends "EIP712Domain" ? never : P
   domain: DomainStructOf<T> extends Record<string, any>
     ? StructScoping<DomainStructOf<T>>
     : never
-  message: MessageStructOf<T> extends Record<string, any>
-    ? StructScoping<MessageStructOf<T>>
+  message: MessageStructOf<T, P> extends Record<string, any>
+    ? StructScoping<MessageStructOf<T, P>>
     : never
 }): {
   targetAddress: `0x${string}`
@@ -48,13 +56,15 @@ export function allowSignTypedMessage<const T extends TypedData>({
   delegatecall: true
   condition: Condition
 } {
-  if (!types["EIP712Domain"]) {
+  if (!declared["EIP712Domain"]) {
     throw new Error("TypedData does not include EIP712Domain")
   }
 
-  const primaryType = findPrimaryType({ types })
+  const primaryType: string =
+    declaredPrimaryType ?? findPrimaryType({ types: declared })
+  const types = selectTypes({ types: declared, primaryType })
 
-  const selector = keccak256(encodeAbiTypes({ types })).slice(
+  const selector = keccak256(encodeAbiTypes({ types, primaryType })).slice(
     0,
     10
   ) as `0x${string}`
@@ -69,7 +79,7 @@ export function allowSignTypedMessage<const T extends TypedData>({
       children: [
         toAbiEncodedCondition(types, "EIP712Domain", domain),
         toAbiEncodedCondition(types, primaryType, message),
-        typesCondition(types),
+        typesCondition(types, primaryType),
       ],
     },
   }
@@ -125,8 +135,8 @@ function buildAbiType(types: TypedData, typeStr: string): string {
   return typeStr
 }
 
-function typesCondition(types: TypedData): Condition {
-  const nodes = toAbiTypes({ types })
+function typesCondition(types: TypedData, primaryType: string): Condition {
+  const nodes = toAbiTypes({ types, primaryType })
   const compValue = AbiCoder.defaultAbiCoder().encode(
     ["tuple(uint256,uint8,bytes32)[]"],
     [nodes.map((n) => [n.parent, n.encoding, n.typeHash])]

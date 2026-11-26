@@ -1,19 +1,17 @@
 import { defineConfig } from "hardhat/config";
-import hardhatEthers from "@nomicfoundation/hardhat-ethers";
-import hardhatEthersChaiMatchers from "@nomicfoundation/hardhat-ethers-chai-matchers";
-import hardhatMocha from "@nomicfoundation/hardhat-mocha";
 import hardhatNetworkHelpers from "@nomicfoundation/hardhat-network-helpers";
-import hardhatTypechain from "@nomicfoundation/hardhat-typechain";
+import hardhatNodeTestRunner from "@nomicfoundation/hardhat-node-test-runner";
+import hardhatViem from "@nomicfoundation/hardhat-viem";
+import hardhatViemAssertions from "@nomicfoundation/hardhat-viem-assertions";
 
 import { compiler } from "../evm/solidity.config.js";
 
 export default defineConfig({
   plugins: [
-    hardhatEthers,
-    hardhatEthersChaiMatchers,
-    hardhatMocha,
+    hardhatViem,
+    hardhatViemAssertions,
+    hardhatNodeTestRunner,
     hardhatNetworkHelpers,
-    hardhatTypechain,
   ],
   // Hardhat v3 no longer honors `paths.root` from user config (it's always the
   // directory containing this file). Keep artifacts/cache local so this package
@@ -30,9 +28,8 @@ export default defineConfig({
     npmFilesToBuild: [
       "@gnosis-guild/zodiac-core/contracts/factory/ModuleProxyFactory.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/Roles.sol",
-      "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/evaluate/WithinRatioChecker.sol",
-      "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/serialize/ConditionStorer.sol",
-      "@gnosis-guild/zodiac-core-modifier-roles/contracts/core/evaluate/CustomConditionChecker.sol",
+      "@gnosis-guild/zodiac-core-modifier-roles/contracts/evaluator/Evaluator.sol",
+      "@gnosis-guild/zodiac-core-modifier-roles/contracts/evaluator/Integrity.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/signing/SignTypedMessageLib.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/periphery/unwrappers/MultiSendUnwrapper.sol",
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/__test__/fixtures/MultiSend.sol",
@@ -40,19 +37,10 @@ export default defineConfig({
       "@gnosis-guild/zodiac-core-modifier-roles/contracts/__test__/mocks/MockEIP712Encoder.sol",
     ],
   },
-  typechain: {
-    outDir: "build/typechain-types",
-    tsNocheck: true,
-  },
   networks: {
     default: {
       type: "edr-simulated",
       allowUnlimitedContractSize: true,
-    },
-  },
-  test: {
-    mocha: {
-      timeout: 2000000,
     },
   },
 });

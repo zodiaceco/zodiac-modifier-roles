@@ -65,7 +65,7 @@ This layer also provides [condition helper functions](/sdk/conditions#condition-
 On the highest layer of abstraction, users can generate _kits_ for contracts they want to define permission for.
 A kit is a typed SDK tailored to a specific set of contracts that allows defining permissions on these in a convenient syntax and fully supported by the type system.
 
-Users just provide the addresses of contracts. Powered by [eth-sdk](https://github.com/gnosisguild/eth-sdk) and [TypeChain](https://github.com/gnosisguild/TypeChain), ABIs will be automatically downloaded from Etherscan to generate type-safe functions for granting permissions.
+Users just provide the addresses of contracts. The [Zodiac SDK](https://github.com/gnosisguild/zodiac-sdk) generates the kit: `zodiac pull` downloads the ABIs of the contracts listed in `zodiac.config.ts` and generates type-safe functions for granting permissions.
 
 **Example:**
 

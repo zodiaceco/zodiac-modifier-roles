@@ -19,9 +19,12 @@ interface LayoutNode {
 export function toAbiTypes({
   domain,
   types = {},
+  primaryType,
 }: {
   domain?: TypedDataDomain
   types?: TypedData
+  /** The message struct; inferred from `types` when omitted. */
+  primaryType?: string
 }) {
   if (domain) {
     types = {
@@ -30,7 +33,15 @@ export function toAbiTypes({
     } as any
   }
 
-  const rootTypes = findRootTypes({ types })
+  if (primaryType !== undefined && !types[primaryType]) {
+    throw new Error(`primaryType ${primaryType} is not declared in types`)
+  }
+
+  const rootTypes = primaryType
+    ? primaryType === "EIP712Domain"
+      ? ["EIP712Domain"]
+      : [...(types.EIP712Domain ? ["EIP712Domain"] : []), primaryType]
+    : findRootTypes({ types })
   assertNotRecursive(types, rootTypes)
   const result: LayoutNode[] = []
 

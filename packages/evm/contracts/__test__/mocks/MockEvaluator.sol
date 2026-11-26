@@ -4,19 +4,34 @@
 // Converts to LGPL-3.0-or-later on 2030-03-01
 pragma solidity >=0.8.17 <0.9.0;
 
-import "../../core/evaluate/ConditionEvaluator.sol";
-import "../../core/serialize/Integrity.sol";
-import "../../core/serialize/ConditionPacker.sol";
-import "../../core/serialize/ConditionUnpacker.sol";
-import "../../types/Types.sol";
-import {ALLOWANCES_SLOT} from "../../core/StorageSlots.sol";
+import {Operation} from "@gnosis-guild/zodiac-core/contracts/core/Operation.sol";
+
+import "../../IEvaluator.sol";
+import "../../evaluator/AbiLocation.sol";
+import "../../evaluator/Engine.sol";
+import "../../evaluator/Integrity.sol";
+import "../../evaluator/serialize/Packer.sol";
+import "../../evaluator/serialize/Unpacker.sol";
+import "../../evaluator/types/EvaluatorError.sol";
+import "../../evaluator/types/EvaluatorTypes.sol";
 
 /**
  * @dev Runs a full condition tree (Integrity → pack → unpack → evaluate) on
- *      calldata, without storage or allowances. Used by the formal-model
- *      tests to check `evaluate` against the ABI spec end to end.
+ *      calldata, without storage or allowances.
  */
-contract MockEvaluator {
+contract MockEvaluator is IRolesCore, IEvaluatorError {
+    mapping(bytes32 => uint128) private _balances;
+
+    function avatar() external pure override returns (address) {
+        return address(0);
+    }
+
+    function accruedAllowance(
+        bytes32 allowanceKey
+    ) external view override returns (uint128 balance, uint64 timestamp) {
+        return (_balances[allowanceKey], type(uint64).max);
+    }
+
     function evaluate(
         bytes calldata data,
         ConditionFlat[] memory conditions
@@ -25,10 +40,6 @@ contract MockEvaluator {
         return evaluateUnchecked(data, conditions);
     }
 
-    /// @dev For the Lean model of `evaluate` (test/formal/integrity-gaps.spec.ts,
-    ///      `GAP_EVAL`): sets allowance balances (no refill), then runs
-    ///      Integrity → pack → unpack → evaluate with `msg.value` = `value`.
-    ///      Call it with `staticCall`.
     function evaluateWith(
         bytes calldata data,
         ConditionFlat[] memory conditions,
@@ -40,16 +51,13 @@ contract MockEvaluator {
         return
             evaluatePackedWith(
                 data,
-                ConditionPacker.pack(conditions),
+                Packer.pack(conditions),
                 value,
                 keys,
                 balances
             );
     }
 
-    /// @dev As `evaluateWith`, on a buffer packed off-chain (the SDK's
-    ///      `packConditions`) and without Integrity, the way the `...Packed`
-    ///      setters store it.
     function evaluatePackedWith(
         bytes calldata data,
         bytes memory packed,
@@ -58,37 +66,28 @@ contract MockEvaluator {
         uint128[] memory balances
     ) public returns (Status, Consumption[] memory) {
         for (uint256 i; i < keys.length; ++i) {
-            bytes32 key = keys[i];
-            // word2: timestamp (max, so nothing accrues) | balance | period 0
-            uint256 word2 = (uint256(type(uint64).max) << 192) |
-                (uint256(balances[i]) << 64);
-            assembly {
-                mstore(0x00, key)
-                mstore(0x20, ALLOWANCES_SLOT)
-                let slot := keccak256(0x00, 0x40)
-                sstore(slot, 0)
-                sstore(add(slot, 1), word2)
-            }
+            _balances[keys[i]] = balances[i];
         }
 
-        (Condition memory root, uint256 maxPluck) = ConditionUnpacker.unpack(
-            packed
+        (Condition memory root, uint256 maxPluck) = Unpacker.unpack(
+            packed,
+            address(this)
         );
         Context memory context = Context({
+            core: address(this),
             to: address(this),
             value: value,
+            data: AbiLocation.toSpan(data),
             operation: Operation.Call,
             pluckedValues: new bytes32[](maxPluck),
-            pluckedLocations: new uint256[](maxPluck)
+            pluckedLocations: new Span[](maxPluck)
         });
-        Result memory result = ConditionEvaluator.evaluate(
-            data,
-            0,
+        Result memory result = Engine.evaluate(
             root,
             new Consumption[](0),
             context
         );
-        return (result.status, result.consumptions);
+        return (Status(result.status), result.consumptions);
     }
 
     /// @dev Reverts with Integrity's error if it rejects `conditions`.
@@ -102,22 +101,23 @@ contract MockEvaluator {
         bytes calldata data,
         ConditionFlat[] memory conditions
     ) public view returns (Status) {
-        bytes memory packed = ConditionPacker.pack(conditions);
-        (Condition memory root, uint256 maxPluck) = ConditionUnpacker.unpack(
-            packed
+        bytes memory packed = Packer.pack(conditions);
+        (Condition memory root, uint256 maxPluck) = Unpacker.unpack(
+            packed,
+            address(this)
         );
 
         Context memory context = Context({
+            core: address(this),
             to: address(this),
             value: 0,
+            data: AbiLocation.toSpan(data),
             operation: Operation.Call,
             pluckedValues: new bytes32[](maxPluck),
-            pluckedLocations: new uint256[](maxPluck)
+            pluckedLocations: new Span[](maxPluck)
         });
 
         return
-            ConditionEvaluator
-                .evaluate(data, 0, root, new Consumption[](0), context)
-                .status;
+            Status(Engine.evaluate(root, new Consumption[](0), context).status);
     }
 }

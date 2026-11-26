@@ -1,9 +1,10 @@
+import { after, describe, it } from "node:test"
 import { network } from "hardhat"
 
-import { createCompareToEthersHashing } from "./compareToEthersHashing.js"
+import { createCompareToViemHashing } from "./compareToEthersHashing.js"
 
 const connection = await network.create()
-const compareToEthersHashing = createCompareToEthersHashing(connection)
+const compareToViemHashing = createCompareToViemHashing(connection)
 
 describe("EIP712Encoder", () => {
   after(async () => {
@@ -26,7 +27,7 @@ describe("EIP712Encoder", () => {
         ParentStruct: [{ name: "items", type: "NestedStruct[]" }],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -37,7 +38,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -67,7 +68,7 @@ describe("EIP712Encoder", () => {
         ParentStruct: [{ name: "item", type: "NestedStruct" }],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -75,7 +76,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -85,7 +86,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -112,7 +113,7 @@ describe("EIP712Encoder", () => {
         ParentStruct: [{ name: "items", type: "NestedStruct[]" }],
       }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -123,7 +124,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: {
@@ -134,7 +135,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: { items: [] },

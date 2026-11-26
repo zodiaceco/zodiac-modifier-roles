@@ -1,17 +1,24 @@
-import { expect } from "chai"
+import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
+import { after, describe, it } from "node:test"
 import {
-  AbiCoder,
+  type Address,
+  type Hex,
   concat,
+  encodeAbiParameters,
   hashMessage,
   keccak256,
-  randomBytes,
-  toUtf8Bytes,
-} from "ethers"
+  parseAbi,
+  toBytes,
+  toHex,
+} from "viem"
 import { network } from "hardhat"
-import { allowPersonalSign, encodePersonalSign } from "zodiac-roles-sdk"
-import { ExecutionOptions } from "zodiac-roles-sdk"
+import {
+  allowPersonalSign,
+  encodePersonalSign,
+  ExecutionOptions,
+} from "zodiac-roles-sdk"
 
-import { iface as ifaceFallback } from "./setup/deploy-mastercopies/fallbackHandler.js"
 import {
   connectRolesSafeAndMember,
   deployRoles,
@@ -21,12 +28,20 @@ import {
 } from "./setup/roles.js"
 import { deploySafe } from "./setup/safe.js"
 import deployMastercopies from "./setup/deploy-mastercopies/index.js"
+import { rolesModMastercopy } from "./setup/deploy-mastercopies/rolesMastercopy.js"
 
 const connection = await network.create()
-const { ethers, networkHelpers } = connection
+const { viem, networkHelpers } = connection
 const { loadFixture } = networkHelpers
 
 const EIP712_MAGIC_VALUE = "0x20c13b0b"
+
+const isValidSignatureBytesAbi = parseAbi([
+  "function isValidSignature(bytes _data, bytes _signature) view returns (bytes4)",
+])
+const isValidSignatureBytes32Abi = parseAbi([
+  "function isValidSignature(bytes32 _dataHash, bytes _signature) view returns (bytes4)",
+])
 
 describe("allowPersonalSign()", () => {
   after(async () => {
@@ -34,17 +49,16 @@ describe("allowPersonalSign()", () => {
   })
 
   async function setup() {
-    await deployMastercopies(ethers)
+    await deployMastercopies(viem)
 
-    const lib = await (
-      await ethers.getContractFactory("SignTypedMessageLib")
-    ).deploy()
+    const lib = await viem.deployContract("SignTypedMessageLib")
 
-    const [owner, member, relayer] = await ethers.getSigners()
+    const [owner, member, relayer] = await viem.getWalletClients()
+    const publicClient = await viem.getPublicClient()
 
     const safe = await deploySafe(
       {
-        owners: [await owner.getAddress()],
+        owners: [owner.account.address],
         threshold: 1,
         creationNonce: BigInt(randomHash()),
       },
@@ -52,22 +66,23 @@ describe("allowPersonalSign()", () => {
     )
 
     const roles = await deployRoles(
-      { avatar: safe, target: safe, owner: await owner.getAddress() },
-      relayer
+      { avatar: safe, target: safe, owner: owner.account.address },
+      relayer,
+      publicClient
     )
 
     const { roleKey } = await connectRolesSafeAndMember({
       owner,
       safe,
       roles,
-      member: await member.getAddress(),
+      member: member.account.address,
     })
 
     await scopeTarget({
       owner,
       roles,
       roleKey,
-      target: await lib.getAddress(),
+      target: lib.address,
     })
 
     const startsWith = "example.com wants you to sign in"
@@ -78,25 +93,26 @@ describe("allowPersonalSign()", () => {
       owner,
       roles,
       roleKey,
-      target: await lib.getAddress(),
-      selector,
+      target: lib.address,
+      selector: selector as Hex,
       condition,
       executionOptions: ExecutionOptions.Both,
     })
 
     return {
       relayer,
+      publicClient,
       safe,
       roles,
-      lib: await lib.getAddress(),
+      lib: lib.address,
       startsWith,
       execTransactionFromRoles: ({
         to,
         data,
         operation,
       }: {
-        to: string
-        data: string
+        to: Address
+        data: Hex
         operation: number
       }) =>
         execTransactionWithRole({
@@ -116,26 +132,22 @@ describe("allowPersonalSign()", () => {
 
     const message = startsWith + " with nonce 12345"
 
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodePersonalSign({ message }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodePersonalSign({ message }) as Hex,
+      operation: 1,
+    })
   })
 
   it("allows signing a message that exactly matches the prefix", async () => {
     const { lib, startsWith, execTransactionFromRoles } =
       await loadFixture(setup)
 
-    await expect(
-      execTransactionFromRoles({
-        to: lib,
-        data: encodePersonalSign({ message: startsWith }),
-        operation: 1,
-      })
-    ).to.not.be.revert(ethers)
+    await execTransactionFromRoles({
+      to: lib,
+      data: encodePersonalSign({ message: startsWith }) as Hex,
+      operation: 1,
+    })
   })
 
   it("rejects signing a message that does not start with the allowed prefix", async () => {
@@ -143,17 +155,19 @@ describe("allowPersonalSign()", () => {
 
     const message = "malicious.com wants you to sign in with nonce 12345"
 
-    await expect(
+    await viem.assertions.revertWithCustomError(
       execTransactionFromRoles({
         to: lib,
-        data: encodePersonalSign({ message }),
+        data: encodePersonalSign({ message }) as Hex,
         operation: 1,
-      })
-    ).to.be.revert(ethers)
+      }),
+      rolesModMastercopy,
+      "ConditionViolation"
+    )
   })
 
   it("signs a message through roles and verifies via isValidSignature", async () => {
-    const { relayer, lib, safe, startsWith, execTransactionFromRoles } =
+    const { publicClient, lib, safe, startsWith, execTransactionFromRoles } =
       await loadFixture(setup)
 
     const message = startsWith + " with session abc"
@@ -161,100 +175,83 @@ describe("allowPersonalSign()", () => {
     // The CompatibilityFallbackHandler bridges isValidSignature(bytes32,bytes)
     // to isValidSignature(bytes,bytes) by passing abi.encode(dataHash) as data.
     // So for the legacy bytes path, we pass abi.encode(keccak256(eip191Preimage))
-    const messageBytes = toUtf8Bytes(message)
+    const messageBytes = toBytes(message)
     const eip191Preimage = concat([
-      toUtf8Bytes("\x19Ethereum Signed Message:\n"),
-      toUtf8Bytes(String(messageBytes.length)),
+      toBytes("\x19Ethereum Signed Message:\n"),
+      toBytes(String(messageBytes.length)),
       messageBytes,
     ])
-    const messageData = AbiCoder.defaultAbiCoder().encode(
-      ["bytes32"],
+    const messageData = encodeAbiParameters(
+      [{ type: "bytes32" }],
       [keccak256(eip191Preimage)]
     )
 
     // Before signing, isValidSignature should revert
-    await expect(
-      relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes,bytes)",
-          [messageData, "0x"]
-        ),
-      })
-    ).to.be.revertedWith("Hash not approved")
+    await viem.assertions.revertWith(
+      publicClient.readContract({
+        address: safe,
+        abi: isValidSignatureBytesAbi,
+        functionName: "isValidSignature",
+        args: [messageData, "0x"],
+      }),
+      "Hash not approved"
+    )
 
     // Sign the message through roles
     await execTransactionFromRoles({
       to: lib,
-      data: encodePersonalSign({ message }),
+      data: encodePersonalSign({ message }) as Hex,
       operation: 1,
     })
 
     // After signing, isValidSignature should return magic value
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData("isValidSignature(bytes,bytes)", [
-        messageData,
-        "0x",
-      ]),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytesAbi,
+      functionName: "isValidSignature",
+      args: [messageData, "0x"],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes,bytes)",
-      resultData
-    )
-
-    expect(result).to.deep.equal([EIP712_MAGIC_VALUE])
+    assert.equal(result, EIP712_MAGIC_VALUE)
   })
 
   it("signs a message and verifies via isValidSignature(bytes32,bytes)", async () => {
-    const { relayer, lib, safe, startsWith, execTransactionFromRoles } =
+    const { publicClient, lib, safe, startsWith, execTransactionFromRoles } =
       await loadFixture(setup)
 
     const message = startsWith + " with session abc"
     const messageHash = hashMessage(message)
 
     // Before signing, isValidSignature(bytes32,bytes) should revert
-    await expect(
-      relayer.call({
-        to: safe,
-        data: ifaceFallback.encodeFunctionData(
-          "isValidSignature(bytes32,bytes)",
-          [messageHash, "0x"]
-        ),
-      })
-    ).to.be.revertedWith("Hash not approved")
+    await viem.assertions.revertWith(
+      publicClient.readContract({
+        address: safe,
+        abi: isValidSignatureBytes32Abi,
+        functionName: "isValidSignature",
+        args: [messageHash, "0x"],
+      }),
+      "Hash not approved"
+    )
 
     // Sign the message through roles
     await execTransactionFromRoles({
       to: lib,
-      data: encodePersonalSign({ message }),
+      data: encodePersonalSign({ message }) as Hex,
       operation: 1,
     })
 
     // After signing, isValidSignature(bytes32,bytes) should return magic value
-    const resultData = await relayer.call({
-      to: safe,
-      data: ifaceFallback.encodeFunctionData(
-        "isValidSignature(bytes32,bytes)",
-        [messageHash, "0x"]
-      ),
+    const result = await publicClient.readContract({
+      address: safe,
+      abi: isValidSignatureBytes32Abi,
+      functionName: "isValidSignature",
+      args: [messageHash, "0x"],
     })
 
-    const result = ifaceFallback.decodeFunctionResult(
-      "isValidSignature(bytes32,bytes)",
-      resultData
-    )
-
-    expect(result).to.deep.equal(["0x1626ba7e"])
+    assert.equal(result, "0x1626ba7e")
   })
 })
 
-function randomHash(): string {
-  return (
-    "0x" +
-    Array.from(randomBytes(32))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-  )
+function randomHash(): Hex {
+  return toHex(randomBytes(32))
 }

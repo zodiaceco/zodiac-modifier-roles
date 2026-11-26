@@ -1,8 +1,7 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder } from "ethers";
-
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import { encodeAbiParameters, encodePacked, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -13,17 +12,36 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const {
-  setupTwoArrayParams,
-  setupThreeArrayParams,
-  setupTwoTupleArrayParams,
-  setupTestContract,
-} = createSetup(connection);
+const { setupFn } = createSetup(connection);
+const setupTwoArrayParams = setupFn("function fn(uint256[], uint256[])");
+const setupThreeBytesArrayParams = setupFn(
+  "function fn(bytes[], bytes[], bytes[])",
+);
+const setupThreeDefaultArrayParams = setupFn(
+  "function fn(uint256[], uint256[], uint256[])",
+);
+const setupTwoTupleArrayParams = setupFn(
+  "function fn((uint256, uint256)[], (uint256, uint256)[])",
+);
+const setupTwoNestedArrayParams = setupFn(
+  "function fn(uint256[][], uint256[][])",
+);
+const setupOneArray = setupFn("function fn(uint256[])");
+const setupOneArrayOneWord = setupFn("function fn(uint256[], uint256)");
+const setupTwoArraysOneWord = setupFn(
+  "function fn(uint256[], uint256[], uint256)",
+);
+const setupTwoArraysTwoWords = setupFn(
+  "function fn(uint256[], uint256[], uint256, uint256)",
+);
+const setupTwoBytesArraysTwoWords = setupFn(
+  "function fn(bytes[], bytes[], uint256, uint256)",
+);
+
+type Condition = Parameters<typeof flattenCondition>[0];
 
 function pluckArray(index: number) {
   return {
@@ -56,12 +74,41 @@ function encodeCompValue(...indices: number[]) {
   return "0x" + indices.map((i) => i.toString(16).padStart(2, "0")).join("");
 }
 
-function setupThreeBytesArrayParams() {
-  return setupThreeArrayParams("bytes");
+function pluckWord(index: number) {
+  return {
+    paramType: Encoding.Static,
+    operator: Operator.Pluck,
+    compValue: encodeCompValue(index),
+  };
 }
 
-function setupThreeDefaultArrayParams() {
-  return setupThreeArrayParams();
+function eq(value: bigint) {
+  return {
+    paramType: Encoding.Static,
+    operator: Operator.EqualTo,
+    compValue: encodeAbiParameters(parseAbiParameters("uint256"), [value]),
+  };
+}
+
+// The Tuple child of a Zip: one field per zipped array
+function fields(...children: Condition[]) {
+  return { paramType: Encoding.Tuple, operator: Operator.Matches, children };
+}
+
+function and(...children: Condition[]) {
+  return { paramType: Encoding.None, operator: Operator.And, children };
+}
+
+// relative / reference, both read from slots, bounds in bps
+function ratio(reference: number, relative: number, min: number, max: number) {
+  return {
+    paramType: Encoding.None,
+    operator: Operator.WithinRatio,
+    compValue: encodePacked(
+      ["uint8", "uint8", "uint8", "uint8", "uint32", "uint32"],
+      [reference, 0, relative, 0, min, max],
+    ),
+  };
 }
 
 describe("Operator - Zip (ZipSome & ZipEvery)", () => {
@@ -75,11 +122,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -100,13 +150,12 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       ExecutionOptions.Both,
     );
 
-    await expect(invoke([1, 2, 3], [1, 2]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.ZippedArrayLengthMismatch,
-        anyValue,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke([1, 2, 3], [1, 2]),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.ZippedArrayLengthMismatch, anyValue, anyValue],
+    );
   });
 
   it("evaluates arrays of tuples with nested navigation", async () => {
@@ -117,11 +166,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
     // Pluck two (uint256,uint256)[] arrays, zip them, require first fields equal
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckTupleArray(0),
-          pluckTupleArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckTupleArray(0), pluckTupleArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -138,7 +190,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                       {
                         paramType: Encoding.Static,
                         operator: Operator.EqualTo,
-                        compValue: abiCoder.encode(["uint256"], [100]),
+                        compValue: encodeAbiParameters(
+                          parseAbiParameters("uint256"),
+                          [100n],
+                        ),
                       },
                       { paramType: Encoding.Static, operator: Operator.Pass },
                     ],
@@ -161,15 +216,18 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
     );
 
     // First field of left tuple must be 100
-    await expect(invoke([[100, 1]], [[200, 2]])).to.not.be.revert(ethers);
+    await invoke([[100, 1]], [[200, 2]]);
 
-    await expect(invoke([[99, 1]], [[200, 2]]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke([[99, 1]], [[200, 2]]),
+      roles,
+      "ConditionViolation",
+      [
         ConditionViolationStatus.NotEveryZippedElementPasses,
         anyValue,
         anyValue,
-      );
+      ],
+    );
   });
 
   it("passes with single element arrays", async () => {
@@ -178,11 +236,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -195,7 +256,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                   {
                     paramType: Encoding.Static,
                     operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["uint256"], [42]),
+                    compValue: encodeAbiParameters(
+                      parseAbiParameters("uint256"),
+                      [42n],
+                    ),
                   },
                   { paramType: Encoding.Static, operator: Operator.Pass },
                 ],
@@ -207,15 +271,18 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       ExecutionOptions.Both,
     );
 
-    await expect(invoke([42], [100])).to.not.be.revert(ethers);
+    await invoke([42], [100]);
 
-    await expect(invoke([100], [42]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke([100], [42]),
+      roles,
+      "ConditionViolation",
+      [
         ConditionViolationStatus.NotEveryZippedElementPasses,
         anyValue,
         anyValue,
-      );
+      ],
+    );
   });
 
   it("fails with single element arrays", async () => {
@@ -224,11 +291,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipEvery,
@@ -241,7 +311,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                   {
                     paramType: Encoding.Static,
                     operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["uint256"], [42]),
+                    compValue: encodeAbiParameters(
+                      parseAbiParameters("uint256"),
+                      [42n],
+                    ),
                   },
                   { paramType: Encoding.Static, operator: Operator.Pass },
                 ],
@@ -253,13 +326,16 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       ExecutionOptions.Both,
     );
 
-    await expect(invoke([99], [100]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke([99], [100]),
+      roles,
+      "ConditionViolation",
+      [
         ConditionViolationStatus.NotEveryZippedElementPasses,
         anyValue,
         anyValue,
-      );
+      ],
+    );
   });
 
   it("zips three arrays", async () => {
@@ -269,12 +345,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
     await allowFunction(
       flattenCondition({
-        paramType: Encoding.AbiEncoded,
-        operator: Operator.Matches,
+        paramType: Encoding.None,
+        operator: Operator.And,
         children: [
-          pluckArray(0),
-          pluckArray(1),
-          pluckArray(2),
+          {
+            paramType: Encoding.AbiEncoded,
+            operator: Operator.Matches,
+            children: [pluckArray(0), pluckArray(1), pluckArray(2)],
+          },
           {
             paramType: Encoding.None,
             operator: Operator.ZipSome,
@@ -287,17 +365,26 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                   {
                     paramType: Encoding.Static,
                     operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["uint256"], [1]),
+                    compValue: encodeAbiParameters(
+                      parseAbiParameters("uint256"),
+                      [1n],
+                    ),
                   },
                   {
                     paramType: Encoding.Static,
                     operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["uint256"], [2]),
+                    compValue: encodeAbiParameters(
+                      parseAbiParameters("uint256"),
+                      [2n],
+                    ),
                   },
                   {
                     paramType: Encoding.Static,
                     operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["uint256"], [3]),
+                    compValue: encodeAbiParameters(
+                      parseAbiParameters("uint256"),
+                      [3n],
+                    ),
                   },
                 ],
               },
@@ -308,103 +395,13 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       ExecutionOptions.Both,
     );
 
-    await expect(invoke([3, 1, 9], [4, 2, 9], [5, 3, 9])).to.not.be.revert(
-      ethers,
+    await invoke([3, 1, 9], [4, 2, 9], [5, 3, 9]);
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke([3, 1, 9], [4, 2, 9], [5, 0, 9]),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.NoZippedElementPasses, anyValue, anyValue],
     );
-    await expect(invoke([3, 1, 9], [4, 2, 9], [5, 0, 9]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.NoZippedElementPasses,
-        anyValue,
-        anyValue,
-      );
-  });
-
-  it("supports variant on the nth pluck", async () => {
-    const { roles, allowFunction, invoke } = await loadFixture(
-      setupThreeBytesArrayParams,
-    );
-
-    // First pluck is bytes[] (Dynamic elements), second pluck is variant
-    // array with children of different type trees (Dynamic, AbiEncoded(Static, Static))
-    await allowFunction(
-      flattenCondition({
-        paramType: Encoding.None,
-        operator: Operator.And,
-        children: [
-          {
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              {
-                paramType: Encoding.Array,
-                operator: Operator.Pluck,
-                compValue: "0x00",
-                children: [
-                  { paramType: Encoding.Dynamic, operator: Operator.Pass },
-                ],
-              },
-              {
-                paramType: Encoding.Array,
-                operator: Operator.Pluck,
-                compValue: "0x01",
-                children: [
-                  { paramType: Encoding.Dynamic, operator: Operator.Pass },
-                  {
-                    paramType: Encoding.AbiEncoded,
-                    operator: Operator.Pass,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-              {
-                paramType: Encoding.Array,
-                operator: Operator.Pass,
-                children: [
-                  { paramType: Encoding.Dynamic, operator: Operator.Pass },
-                ],
-              },
-            ],
-          },
-          {
-            paramType: Encoding.None,
-            operator: Operator.ZipEvery,
-            compValue: encodeCompValue(0, 1),
-            children: [
-              {
-                paramType: Encoding.Tuple,
-                operator: Operator.Matches,
-                children: [
-                  { paramType: Encoding.Dynamic, operator: Operator.Pass },
-                  {
-                    paramType: Encoding.Dynamic,
-                    operator: Operator.EqualTo,
-                    compValue: abiCoder.encode(["bytes"], ["0xdeadbeef"]),
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      }),
-      ExecutionOptions.Both,
-    );
-
-    await expect(
-      invoke(["0xaa", "0xbb"], ["0xdeadbeef", "0xdeadbeef"], ["0x", "0x"]),
-    ).to.not.be.revert(ethers);
-    await expect(
-      invoke(["0xaa", "0xbb"], ["0xdeadbeef", "0xcafebabe"], ["0x", "0x"]),
-    )
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.NotEveryZippedElementPasses,
-        anyValue,
-        anyValue,
-      );
   });
 
   it("supports variant on the nth field", async () => {
@@ -471,19 +468,28 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                           {
                             paramType: Encoding.Static,
                             operator: Operator.EqualTo,
-                            compValue: abiCoder.encode(["uint256"], [1]),
+                            compValue: encodeAbiParameters(
+                              parseAbiParameters("uint256"),
+                              [1n],
+                            ),
                           },
                           {
                             paramType: Encoding.Static,
                             operator: Operator.EqualTo,
-                            compValue: abiCoder.encode(["uint256"], [2]),
+                            compValue: encodeAbiParameters(
+                              parseAbiParameters("uint256"),
+                              [2n],
+                            ),
                           },
                         ],
                       },
                       {
                         paramType: Encoding.Dynamic,
                         operator: Operator.EqualTo,
-                        compValue: abiCoder.encode(["bytes"], [targetBytes]),
+                        compValue: encodeAbiParameters(
+                          parseAbiParameters("bytes"),
+                          [targetBytes],
+                        ),
                       },
                     ],
                   },
@@ -497,18 +503,15 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
     );
 
     // Passes via second Or branch: right element equals targetBytes
-    await expect(invoke(["0xaa"], [targetBytes], ["0x"])).to.not.be.revert(
-      ethers,
-    );
+    await invoke(["0xaa"], [targetBytes], ["0x"]);
 
     // Fails: right element doesn't match either branch
-    await expect(invoke(["0xaa"], ["0xcafebabe"], ["0x"]))
-      .to.be.revertedWithCustomError(roles, "ConditionViolation")
-      .withArgs(
-        ConditionViolationStatus.NoZippedElementPasses,
-        anyValue,
-        anyValue,
-      );
+    await viem.assertions.revertWithCustomErrorWithArgs(
+      invoke(["0xaa"], ["0xcafebabe"], ["0x"]),
+      roles,
+      "ConditionViolation",
+      [ConditionViolationStatus.NoZippedElementPasses, anyValue, anyValue],
+    );
   });
 
   describe("ZipSome", () => {
@@ -518,11 +521,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -535,7 +541,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [42]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [42n],
+                      ),
                     },
                     { paramType: Encoding.Static, operator: Operator.Pass },
                   ],
@@ -548,16 +557,15 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       );
 
       // Second position matches (left == 42)
-      await expect(invoke([1, 42, 3], [10, 20, 30])).to.not.be.revert(ethers);
+      await invoke([1, 42, 3], [10, 20, 30]);
 
       // reversed arrays fail (no position has left == 42)
-      await expect(invoke([10, 20, 30], [1, 42, 3]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.NoZippedElementPasses,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 20, 30], [1, 42, 3]),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.NoZippedElementPasses, anyValue, anyValue],
+      );
     });
 
     it("fails when no position matches", async () => {
@@ -566,11 +574,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -583,7 +594,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [42]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [42n],
+                      ),
                     },
                     { paramType: Encoding.Static, operator: Operator.Pass },
                   ],
@@ -595,13 +609,12 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke([1, 2, 3], [10, 20, 30]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.NoZippedElementPasses,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1, 2, 3], [10, 20, 30]),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.NoZippedElementPasses, anyValue, anyValue],
+      );
     });
 
     it("fails when both arrays are empty", async () => {
@@ -610,11 +623,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipSome,
@@ -635,13 +651,12 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke([], []))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
-          ConditionViolationStatus.NoZippedElementPasses,
-          anyValue,
-          anyValue,
-        );
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([], []),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.NoZippedElementPasses, anyValue, anyValue],
+      );
     });
   });
 
@@ -651,11 +666,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -668,7 +686,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.GreaterThan,
-                      compValue: abiCoder.encode(["uint256"], [0]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [0n],
+                      ),
                     },
                     { paramType: Encoding.Static, operator: Operator.Pass },
                   ],
@@ -680,7 +701,7 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke([1, 2, 3], [10, 20, 30])).to.not.be.revert(ethers);
+      await invoke([1, 2, 3], [10, 20, 30]);
     });
 
     it("fails when all positions mismatch", async () => {
@@ -689,11 +710,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -706,7 +730,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [42]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [42n],
+                      ),
                     },
                     { paramType: Encoding.Static, operator: Operator.Pass },
                   ],
@@ -719,13 +746,16 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
       );
 
       // First position fails (left != 42)
-      await expect(invoke([42, 2], [10, 20]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([42, 2], [10, 20]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NotEveryZippedElementPasses,
           anyValue,
           anyValue,
-        );
+        ],
+      );
     });
 
     it("passes when both arrays are empty (vacuously true)", async () => {
@@ -733,11 +763,14 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
 
       await allowFunction(
         flattenCondition({
-          paramType: Encoding.AbiEncoded,
-          operator: Operator.Matches,
+          paramType: Encoding.None,
+          operator: Operator.And,
           children: [
-            pluckArray(0),
-            pluckArray(1),
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
             {
               paramType: Encoding.None,
               operator: Operator.ZipEvery,
@@ -750,7 +783,10 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.EqualTo,
-                      compValue: abiCoder.encode(["uint256"], [42]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [42n],
+                      ),
                     },
                     { paramType: Encoding.Static, operator: Operator.Pass },
                   ],
@@ -762,339 +798,513 @@ describe("Operator - Zip (ZipSome & ZipEvery)", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke([], [])).to.not.be.revert(ethers);
+      await invoke([], []);
     });
   });
 
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for non-None encoding", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+  describe("with other checks", () => {
+    it("sits before the word it is next to, without shifting later parameters", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoArraysTwoWords,
+      );
 
-      for (const encoding of [
-        Encoding.Static,
-        Encoding.Dynamic,
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-      ]) {
-        await expect(
-          allowTarget([
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            pluckArray(0),
+            pluckArray(1),
             {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.ZipSome,
-              compValue: "0x0001",
+              paramType: Encoding.None,
+              operator: Operator.And,
+              children: [
+                {
+                  paramType: Encoding.None,
+                  operator: Operator.ZipEvery,
+                  compValue: encodeCompValue(0, 1),
+                  children: [
+                    fields(
+                      { paramType: Encoding.Static, operator: Operator.Pass },
+                      { paramType: Encoding.Static, operator: Operator.Pass },
+                    ),
+                  ],
+                },
+                eq(1n),
+              ],
             },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
+            eq(2n),
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([1], [1], 1, 2);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1], [1], 1, 3),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
     });
 
-    it("reverts UnsuitableCompValue when compValue is shorter than 2 bytes", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+    it("zips bytes arrays next to a word, without shifting later parameters", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoBytesArraysTwoWords,
+      );
 
-      // 0 bytes
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.ZipSome,
-            compValue: "0x",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      const pluckBytesArray = (index: number) => ({
+        ...pluckArray(index),
+        children: [{ paramType: Encoding.Dynamic, operator: Operator.Pass }],
+      });
 
-      // 1 byte
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.ZipSome,
-            compValue: "0x00",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.AbiEncoded,
+          operator: Operator.Matches,
+          children: [
+            pluckBytesArray(0),
+            pluckBytesArray(1),
+            {
+              paramType: Encoding.None,
+              operator: Operator.And,
+              children: [
+                eq(1n),
+                {
+                  paramType: Encoding.None,
+                  operator: Operator.ZipEvery,
+                  compValue: encodeCompValue(0, 1),
+                  children: [
+                    fields(
+                      { paramType: Encoding.Dynamic, operator: Operator.Pass },
+                      { paramType: Encoding.Dynamic, operator: Operator.Pass },
+                    ),
+                  ],
+                },
+              ],
+            },
+            eq(2n),
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke(["0x01"], ["0x02"], 1, 2);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(["0x01"], ["0x02"], 1, 3),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.ParameterNotAllowed, anyValue, anyValue],
+      );
     });
 
-    it("reverts UnsuitableCompValue when compValue length does not match tuple field count", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+    it("branches between two Zips in an Or", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupTwoArrayParams);
 
-      // compValue has 2 bytes but tuple has 3 fields
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
+      const zipSome = (value: bigint) => ({
+        paramType: Encoding.None,
+        operator: Operator.ZipSome,
+        compValue: encodeCompValue(0, 1),
+        children: [fields(eq(value), eq(value))],
+      });
+
+      await allowFunction(
+        flattenCondition({
+          paramType: Encoding.None,
+          operator: Operator.And,
+          children: [
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckArray(1)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.Or,
+              children: [zipSome(1n), zipSome(2n)],
+            },
+          ],
+        }),
+        ExecutionOptions.Both,
+      );
+
+      await invoke([9, 2], [9, 2]);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([9, 2], [9, 3]),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.OrViolation, anyValue, anyValue],
+      );
+    });
+  });
+
+  describe("plucking from the fields", () => {
+    const calldata = (...children: Condition[]) => ({
+      paramType: Encoding.AbiEncoded,
+      operator: Operator.Matches,
+      children,
+    });
+    const zip = (
+      operator: Operator,
+      slots: [number, number],
+      left: Condition,
+      right: Condition,
+    ) => ({
+      paramType: Encoding.None,
+      operator,
+      compValue: encodeCompValue(...slots),
+      children: [fields(left, right)],
+    });
+
+    it("compares the two sides of every pair", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupTwoArrayParams);
+
+      // every right[i] is within 10% of left[i]
+      await allowFunction(
+        flattenCondition(
+          and(
+            calldata(pluckArray(0), pluckArray(1)),
+            zip(
+              Operator.ZipEvery,
+              [0, 1],
+              pluckWord(2),
+              and(pluckWord(3), ratio(2, 3, 9000, 11000)),
+            ),
+          ),
+        ),
+        ExecutionOptions.Both,
+      );
+
+      // 95/100 and 210/200 are both within 10%
+      await invoke([100, 200], [95, 210]);
+
+      // step 0 passes, step 1 does not: 100/200 is 50%
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([100, 200], [95, 100]),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+    });
+
+    it("compares every pair with a word plucked outside the Zip", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoArraysOneWord,
+      );
+
+      // every left[i] is at most half of the third parameter
+      await allowFunction(
+        flattenCondition(
+          and(
+            calldata(pluckArray(0), pluckArray(1), pluckWord(2)),
+            zip(
+              Operator.ZipEvery,
+              [0, 1],
+              and(pluckWord(3), ratio(2, 3, 0, 5000)),
+              { paramType: Encoding.Static, operator: Operator.Pass },
+            ),
+          ),
+        ),
+        ExecutionOptions.Both,
+      );
+
+      // 10/100 and 50/100
+      await invoke([10, 50], [0, 0], 100);
+
+      // 60/100 is above half
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 60], [0, 0], 100),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+    });
+
+    it("compares members of paired structs", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoTupleArrayParams,
+      );
+
+      const member = (...children: Condition[]) => ({
+        paramType: Encoding.Tuple,
+        operator: Operator.Matches,
+        children,
+      });
+
+      // (id, amount) on both sides: same id, amount within 10%
+      await allowFunction(
+        flattenCondition(
+          and(
+            calldata(pluckTupleArray(0), pluckTupleArray(1)),
+            zip(
+              Operator.ZipEvery,
+              [0, 1],
+              member(pluckWord(2), pluckWord(3)),
+              member(
+                and(pluckWord(4), ratio(2, 4, 10000, 10000)),
+                and(pluckWord(5), ratio(3, 5, 9000, 11000)),
+              ),
+            ),
+          ),
+        ),
+        ExecutionOptions.Both,
+      );
+
+      await invoke(
+        [
+          [7, 100],
+          [8, 200],
+        ],
+        [
+          [7, 95],
+          [8, 210],
+        ],
+      );
+
+      // the second pair has different ids
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(
+          [
+            [7, 100],
+            [8, 200],
+          ],
+          [
+            [7, 95],
+            [9, 210],
+          ],
+        ),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+
+      // the second pair has amounts 50% apart
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke(
+          [
+            [7, 100],
+            [8, 200],
+          ],
+          [
+            [7, 95],
+            [8, 100],
+          ],
+        ),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+    });
+
+    it("zips the arrays it plucks, in a Zip of arrays of arrays", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoNestedArrayParams,
+      );
+
+      const pluckNestedArray = (index: number) => ({
+        paramType: Encoding.Array,
+        operator: Operator.Pluck,
+        compValue: encodeCompValue(index),
+        children: [
+          {
+            paramType: Encoding.Array,
+            operator: Operator.Pass,
+            children: [{ paramType: Encoding.Static, operator: Operator.Pass }],
+          },
+        ],
+      });
+
+      // the outer Zip plucks left[i] and right[i], the inner one pairs
+      // them: every right[i][j] equals left[i][j]
+      await allowFunction(
+        flattenCondition(
+          and(
+            calldata(pluckNestedArray(0), pluckNestedArray(1)),
+            zip(
+              Operator.ZipEvery,
+              [0, 1],
               pluckArray(2),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
+              and(
+                pluckArray(3),
+                zip(
+                  Operator.ZipEvery,
+                  [2, 3],
+                  pluckWord(4),
+                  and(pluckWord(5), ratio(4, 5, 10000, 10000)),
+                ),
+              ),
+            ),
+          ),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ExecutionOptions.Both,
+      );
+
+      await invoke([[1, 2], [3]], [[1, 2], [3]]);
+
+      // right[1][0] differs
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([[1, 2], [3]], [[1, 2], [4]]),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
+
+      // right[0] is shorter than left[0]
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([[1, 2], [3]], [[1], [3]]),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
     });
 
-    it("reverts UnsuitableCompValue when pluck indices repeat", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+    it("keeps what the passing ZipSome step plucked, for a check after the Zip", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupTwoArraysOneWord,
+      );
 
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 0),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
+      // the left of the pair whose right is 1 equals the third parameter
+      await allowFunction(
+        flattenCondition(
+          and(
+            calldata(pluckArray(0), pluckArray(1), pluckWord(2)),
+            zip(Operator.ZipSome, [0, 1], pluckWord(3), eq(1n)),
+            ratio(2, 3, 10000, 10000),
+          ),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ExecutionOptions.Both,
+      );
+
+      // step 1 passes (right is 1) and plucks 7 on the left
+      await invoke([5, 7], [0, 1], 7);
+
+      // step 0 plucked 5 before it failed: step 1 overwrites it
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([5, 7], [0, 1], 5),
+        roles,
+        "ConditionViolation",
+        [ConditionViolationStatus.RatioAboveMax, anyValue, anyValue],
+      );
+    });
+  });
+
+  describe("slots", () => {
+    const compare = (operator: Operator, value: bigint) => ({
+      ...eq(value),
+      operator,
     });
 
-    it("reverts UnsuitableCompValue when pluck index not found", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+    it("zips a single array, against a word that comes after it", async () => {
+      const { roles, allowFunction, invoke } = await loadFixture(
+        setupOneArrayOneWord,
+      );
 
-      // Reference pluck index 5 which doesn't exist
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 5),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
+      // every element is at most half of the second parameter, which is
+      // plucked after the array: an ArrayEvery would run before it
+      await allowFunction(
+        flattenCondition(
+          and(
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0), pluckWord(1)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.ZipEvery,
+              compValue: encodeCompValue(0),
+              children: [fields(and(pluckWord(2), ratio(1, 2, 0, 5000)))],
+            },
+          ),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
+        ExecutionOptions.Both,
+      );
+
+      await invoke([10, 50], 100);
+
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([10, 60], 100),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
     });
 
-    it("reverts UnsuitableCompValue when pluck is not Array encoding", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+    it("zips an array with itself", async () => {
+      const { roles, allowFunction, invoke } =
+        await loadFixture(setupOneArray);
 
-      // Pluck index 1 is Static, not Array
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              {
-                paramType: Encoding.Static,
-                operator: Operator.Pluck,
-                compValue: "0x01",
-              },
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
+      // both fields see the same element: every element is above 1 and
+      // below 10
+      await allowFunction(
+        flattenCondition(
+          and(
+            {
+              paramType: Encoding.AbiEncoded,
+              operator: Operator.Matches,
+              children: [pluckArray(0)],
+            },
+            {
+              paramType: Encoding.None,
+              operator: Operator.ZipEvery,
+              compValue: encodeCompValue(0, 0),
+              children: [
+                fields(
+                  compare(Operator.GreaterThan, 1n),
+                  compare(Operator.LessThan, 10n),
+                ),
+              ],
+            },
+          ),
         ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
+        ExecutionOptions.Both,
+      );
 
-    it("reverts UnsuitableChildTypeTree when child does not resolve to a Tuple", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
+      await invoke([2, 3]);
 
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Static,
-                    operator: Operator.Pass,
-                  },
-                ],
-              },
-            ],
-          }),
-        ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildTypeTree");
-    });
-
-    it("reverts UnsuitableChildTypeTree when field type does not match pluck array element type", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      // Pluck 0 has Static elements, but zip tuple field 0 is Tuple
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      {
-                        paramType: Encoding.Tuple,
-                        operator: Operator.Pass,
-                        children: [
-                          {
-                            paramType: Encoding.Static,
-                            operator: Operator.Pass,
-                          },
-                        ],
-                      },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
-        ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildTypeTree");
-    });
-
-    it("reverts UnsupportedOperator when descendant uses Pluck", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Matches,
-                    children: [
-                      {
-                        paramType: Encoding.Static,
-                        operator: Operator.Pluck,
-                        compValue: "0x02",
-                      },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
-        ),
-      ).to.be.revertedWithCustomError(roles, "UnsupportedOperator");
-    });
-
-    it("reverts UnsuitableChildCount when tuple child has a non-structural child", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      // TypeTree counts only structural children (2) when matching against
-      // compValue length, but the evaluator iterates the raw child list (3)
-      // and would read compValue out of bounds. Must be rejected at setup.
-      await expect(
-        allowTarget(
-          flattenCondition({
-            paramType: Encoding.AbiEncoded,
-            operator: Operator.Matches,
-            children: [
-              pluckArray(0),
-              pluckArray(1),
-              {
-                paramType: Encoding.None,
-                operator: Operator.ZipEvery,
-                compValue: encodeCompValue(0, 1),
-                children: [
-                  {
-                    paramType: Encoding.Tuple,
-                    operator: Operator.Pass,
-                    children: [
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.Static, operator: Operator.Pass },
-                      { paramType: Encoding.None, operator: Operator.Pass },
-                    ],
-                  },
-                ],
-              },
-            ],
-          }),
-        ),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([2, 30]),
+        roles,
+        "ConditionViolation",
+        [
+          ConditionViolationStatus.NotEveryZippedElementPasses,
+          anyValue,
+          anyValue,
+        ],
+      );
     });
   });
 });

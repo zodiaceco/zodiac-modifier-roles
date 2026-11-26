@@ -1,40 +1,27 @@
-import assert from "assert";
-import { solidityPacked } from "ethers";
-import type { BigNumberish } from "ethers";
-import type {
-  ConditionFlatStruct,
-  Roles,
-} from "../typechain-types/contracts/Roles.js";
+import assert from "node:assert/strict";
+import { encodePacked, isAddressEqual, parseEventLogs } from "viem";
+import type { Abi, Address, Hex } from "viem";
+import type { NetworkConnection } from "hardhat/types/network";
+import type { GetContractReturnType } from "@nomicfoundation/hardhat-viem/types";
+import type { ArtifactMap } from "hardhat/types/artifacts";
 
-export const logGas = async (
-  message: string,
-  tx: Promise<any>,
-): Promise<any> => {
-  return tx.then(async (result) => {
-    const receipt = await result.wait();
-    console.log(
-      "           Used",
-      receipt.gasUsed.toNumber(),
-      `gas for >${message}<`,
-    );
-    return result;
-  });
+export type RolesContract = GetContractReturnType<ArtifactMap["Roles"]["abi"]>;
+
+export type ConditionFlat = {
+  parent: number;
+  paramType: number;
+  operator: number;
+  compValue: Hex;
 };
 
-export interface MetaTransaction {
-  to: string;
-  value: BigNumberish;
-  data: string;
-  operation: number;
-}
+export const maxUint64 = 2n ** 64n - 1n;
+export const maxUint128 = 2n ** 128n - 1n;
 
-export interface SafeTransaction extends MetaTransaction {
-  safeTxGas: string | number;
-  baseGas: string | number;
-  gasPrice: string | number;
-  gasToken: string;
-  refundReceiver: string;
-  nonce: string | number;
+export interface MetaTransaction {
+  to: Address;
+  value: bigint | number;
+  data: Hex;
+  operation: number;
 }
 
 export enum Encoding {
@@ -164,26 +151,23 @@ export enum ConditionViolationStatus {
   NotEveryZippedElementPasses,
 }
 
-export function removeTrailingOffset(data: string) {
-  return `0x${data.substring(66)}`;
-}
-
-export const encodeMultisendPayload = (txs: MetaTransaction[]): string => {
-  return (
-    "0x" +
+export const encodeMultisendPayload = (txs: MetaTransaction[]): Hex => {
+  return ("0x" +
     txs
       .map((tx) =>
-        solidityPacked(
+        encodePacked(
           ["uint8", "address", "uint256", "uint256", "bytes"],
-          [tx.operation, tx.to, tx.value, (tx.data.length - 2) / 2, tx.data],
+          [
+            tx.operation,
+            tx.to,
+            BigInt(tx.value),
+            BigInt((tx.data.length - 2) / 2),
+            tx.data,
+          ],
         ).slice(2),
       )
-      .join("")
-  );
+      .join("")) as Hex;
 };
-
-export const BYTES32_ZERO =
-  "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 interface Condition {
   paramType: Encoding;
@@ -192,13 +176,13 @@ interface Condition {
   children?: Condition[];
 }
 
-export function flattenCondition(root: Condition): ConditionFlatStruct[] {
+export function flattenCondition(root: Condition): ConditionFlat[] {
   let queue = [{ node: root, parent: 0 }];
-  let result: ConditionFlatStruct[] = [];
+  let result: ConditionFlat[] = [];
 
   for (let bfsOrder = 0; queue.length > 0; bfsOrder++) {
     const entry = queue.shift();
-    assert(entry);
+    assert.ok(entry);
 
     const { node, parent } = entry;
 
@@ -208,7 +192,7 @@ export function flattenCondition(root: Condition): ConditionFlatStruct[] {
         parent,
         operator: node.operator || Operator.Pass,
         paramType: node.paramType,
-        compValue: node.compValue || "0x",
+        compValue: (node.compValue || "0x") as Hex,
       },
     ];
 
@@ -229,9 +213,67 @@ export function flattenCondition(root: Condition): ConditionFlatStruct[] {
  * Returns "0x" for empty conditions (the contract will use Pass condition).
  */
 export async function packConditions(
-  roles: Roles,
-  conditions: ConditionFlatStruct[],
-): Promise<string> {
+  roles: RolesContract,
+  conditions: ConditionFlat[],
+): Promise<Hex> {
   if (conditions.length === 0) return "0x";
-  return roles.packConditions(conditions);
+  return roles.read.packConditions([conditions]);
+}
+
+export function extractRevertData(error: unknown): Hex | undefined {
+  let dataReason: Hex | undefined;
+  let current: unknown = error;
+  while (current && typeof current === "object") {
+    const err = current as { data?: unknown; cause?: unknown };
+    if (typeof err.data === "string" && err.data.startsWith("0x")) {
+      dataReason = err.data as Hex;
+    } else if (
+      err.data &&
+      typeof err.data === "object" &&
+      "data" in err.data &&
+      typeof (err.data as { data?: unknown }).data === "string" &&
+      (err.data as { data: string }).data.startsWith("0x")
+    ) {
+      dataReason = (err.data as { data: string }).data as Hex;
+    }
+    current = err.cause;
+  }
+  return dataReason;
+}
+
+export async function assertRevertedWithoutReason(
+  promise: Promise<unknown>,
+): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    const data = extractRevertData(error);
+    assert.equal(
+      data,
+      "0x",
+      `Expected revert without reason (0x), got ${data ?? String(error)}`,
+    );
+    return;
+  }
+  assert.fail("Expected call to revert without reason, but it succeeded");
+}
+
+/** Asserts that the transaction emitted no `eventName` from `contract`. */
+export async function assertNotEmitted(
+  viem: NetworkConnection["viem"],
+  txHash: Hex | Promise<Hex>,
+  contract: { address: Address; abi: Abi },
+  eventName: string,
+): Promise<void> {
+  const hash = await txHash;
+  const publicClient = await viem.getPublicClient();
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const logs = parseEventLogs({
+    abi: contract.abi,
+    eventName,
+    logs: receipt.logs.filter((l) =>
+      isAddressEqual(l.address, contract.address),
+    ),
+  });
+  assert.equal(logs.length, 0, `Expected ${eventName} not to be emitted`);
 }

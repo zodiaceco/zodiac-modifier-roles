@@ -1,10 +1,9 @@
 import { Interface } from "ethers"
-import { flattenCondition } from "zodiac-roles-sdk"
+import { flattenCondition, rolesAbi } from "zodiac-roles-sdk"
 
 import { Call } from "./Call"
-import { Roles__factory } from "zodiac-roles-sdk/typechain"
 
-const rolesInterface = Roles__factory.createInterface()
+const rolesInterface = new Interface(rolesAbi)
 const posterInterface = Interface.from([
   "function post(string content,string tag)",
 ])

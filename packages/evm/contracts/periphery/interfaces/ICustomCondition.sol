@@ -12,6 +12,12 @@ struct AllowanceConsumption {
 }
 
 interface ICustomCondition {
+    /**
+     * @param pluckedValues Values plucked so far, indexed by slot. Rely only
+     *        on slots written on every path to this check: failed `Or` and
+     *        `ArraySome` paths are not cleared, and iterators leave the last
+     *        visited element (or skip an empty `ArrayEvery`).
+     */
     function check(
         address to,
         uint256 value,
@@ -20,7 +26,8 @@ interface ICustomCondition {
         uint256 location,
         uint256 size,
         bytes calldata extra,
-        bytes32[] calldata pluckedValues
+        bytes32[] calldata pluckedValues,
+        address roles
     )
         external
         view

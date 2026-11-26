@@ -117,15 +117,3 @@ await push({ rolesMod });
 ```
 
 `push()` sends the desired state to the Zodiac API, which diffs against the current on-chain configuration and applies the necessary calls. Mentioned roles are replaced; omitted roles are left untouched; pass `null` for a role key to clear it.
-
-## Using `eth-sdk` instead
-
-The legacy [eth-sdk](https://github.com/gnosisguild/eth-sdk) workflow is still supported. If you already have an `eth-sdk/config.ts` and prefer to keep using `yarn eth-sdk` to generate ABIs, you can import the kit from `"zodiac-roles-sdk/kit"` and pass the resulting permissions to `push()` exactly the same way:
-
-```typescript
-import { allow } from "zodiac-roles-sdk/kit";
-
-const permissions = [allow.mainnet.dai.approve(CURVE_3POOL)];
-```
-
-See the [eth-sdk docs](https://github.com/gnosisguild/eth-sdk#configuration) for setup details. New projects should prefer the Zodiac SDK workflow above.

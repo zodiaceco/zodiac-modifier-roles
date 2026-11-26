@@ -4,7 +4,6 @@ export const compiler = {
   version: "0.8.38",
   settings: {
     evmVersion: "cancun",
-    viaIR: true,
     optimizer: {
       enabled: true,
       runs: 10,

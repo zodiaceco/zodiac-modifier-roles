@@ -1,9 +1,10 @@
+import { after, describe, it } from "node:test"
 import { network } from "hardhat"
 
-import { createCompareToEthersHashing } from "./compareToEthersHashing.js"
+import { createCompareToViemHashing } from "./compareToEthersHashing.js"
 
 const connection = await network.create()
-const compareToEthersHashing = createCompareToEthersHashing(connection)
+const compareToViemHashing = createCompareToViemHashing(connection)
 
 describe("EIP712Encoder", () => {
   after(async () => {
@@ -16,13 +17,13 @@ describe("EIP712Encoder", () => {
     it("should handle boolean values", async () => {
       const types = { Person: [{ name: "adult", type: "bool" }] }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: { adult: true },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: { adult: false },
@@ -32,13 +33,13 @@ describe("EIP712Encoder", () => {
     it("should handle address values", async () => {
       const types = { Person: [{ name: "address", type: "address" }] }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: { address: "0x0000000000000000000000000000000000000000" },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types,
         message: { address: "0x0000000000000000000000000000000000000123" },
@@ -50,31 +51,31 @@ describe("EIP712Encoder", () => {
       const typesBytes16 = { Person: [{ name: "meta", type: "bytes16" }] }
       const typesBytes32 = { Person: [{ name: "meta", type: "bytes32" }] }
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes1,
         message: { meta: "0x00" },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes1,
         message: { meta: "0xff" },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes16,
         message: { meta: "0x00000000000000000000000000000000" },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes16,
         message: { meta: "0xf000000000000000000000000000000f" },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes32,
         message: {
@@ -82,7 +83,7 @@ describe("EIP712Encoder", () => {
         },
       })
 
-      await compareToEthersHashing({
+      await compareToViemHashing({
         domain,
         types: typesBytes32,
         message: {

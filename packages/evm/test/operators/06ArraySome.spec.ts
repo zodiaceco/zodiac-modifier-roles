@@ -1,8 +1,8 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-import { AbiCoder, hexlify, randomBytes } from "ethers";
-
+import assert from "node:assert/strict";
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import { encodeAbiParameters, parseAbiParameters } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -13,12 +13,11 @@ import {
   flattenCondition,
 } from "../utils.js";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
-const { setupTestContract, setupArrayParam } = createSetup(connection);
+const { setupFn } = createSetup(connection);
+const setupArrayParam = setupFn("function fn(uint256[])");
 
 describe("Operator - ArraySome", () => {
   after(async () => {
@@ -42,7 +41,10 @@ describe("Operator - ArraySome", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -52,10 +54,10 @@ describe("Operator - ArraySome", () => {
       );
 
       // Array with matching element passes
-      await expect(invoke([1, 2, 42, 4])).to.not.be.revert(ethers);
+      await invoke([1, 2, 42, 4]);
 
       // Array with only matching element passes
-      await expect(invoke([42])).to.not.be.revert(ethers);
+      await invoke([42]);
     });
 
     it("fails when no element matches", async () => {
@@ -75,7 +77,10 @@ describe("Operator - ArraySome", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -85,13 +90,16 @@ describe("Operator - ArraySome", () => {
       );
 
       // Array with no matching element fails
-      await expect(invoke([1, 2, 3, 4]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1, 2, 3, 4]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NoArrayElementPasses,
-          1, // ArraySome node
+          1n, // ArraySome node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("fails when array is empty", async () => {
@@ -111,7 +119,10 @@ describe("Operator - ArraySome", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -121,13 +132,16 @@ describe("Operator - ArraySome", () => {
       );
 
       // Empty array fails - no element can match
-      await expect(invoke([]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NoArrayElementPasses,
-          1, // ArraySome node
+          1n, // ArraySome node
           anyValue,
-        );
+        ],
+      );
     });
 
     it("returns on first match (short-circuit)", async () => {
@@ -135,10 +149,10 @@ describe("Operator - ArraySome", () => {
         await loadFixture(setupArrayParam);
 
       const allowanceKey =
-        "0x000000000000000000000000000000000000000000000000000000000000abcd";
+        "0x000000000000000000000000000000000000000000000000000000000000abcd" as const;
 
       // Set up allowance of 100
-      await roles.setAllowance(allowanceKey, 100, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 100n, 0n, 0n, 0n, 0n]);
 
       // ArraySome with WithinAllowance - consumes value of matching element
       await allowFunction(
@@ -164,11 +178,11 @@ describe("Operator - ArraySome", () => {
 
       // Array [10, 20, 30] - first element (10) matches and is consumed
       // If not short-circuiting, all would be consumed (60 total)
-      await expect(invoke([10, 20, 30])).to.not.be.revert(ethers);
+      await invoke([10, 20, 30]);
 
       // Only 10 was consumed (first match), not 60 - remaining is 90
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(90);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 90n);
     });
   });
 
@@ -178,10 +192,10 @@ describe("Operator - ArraySome", () => {
         await loadFixture(setupArrayParam);
 
       const allowanceKey =
-        "0x000000000000000000000000000000000000000000000000000000000000abcd";
+        "0x000000000000000000000000000000000000000000000000000000000000abcd" as const;
 
       // Set up allowance of 50
-      await roles.setAllowance(allowanceKey, 50, 0, 0, 0, 0);
+      await roles.write.setAllowance([allowanceKey, 50n, 0n, 0n, 0n, 0n]);
 
       // ArraySome with And(GreaterThan(15), WithinAllowance)
       // Only elements > 15 can match, and matching consumes their value
@@ -201,7 +215,10 @@ describe("Operator - ArraySome", () => {
                     {
                       paramType: Encoding.Static,
                       operator: Operator.GreaterThan,
-                      compValue: abiCoder.encode(["uint256"], [15]),
+                      compValue: encodeAbiParameters(
+                        parseAbiParameters("uint256"),
+                        [15n],
+                      ),
                     },
                     {
                       paramType: Encoding.Static,
@@ -219,11 +236,11 @@ describe("Operator - ArraySome", () => {
 
       // Array [5, 10, 20, 30] - elements 5, 10 fail (<=15), element 20 matches
       // Only 20 is consumed (first matching element)
-      await expect(invoke([5, 10, 20, 30])).to.not.be.revert(ethers);
+      await invoke([5, 10, 20, 30]);
 
       // Only 20 consumed from matching element - remaining is 30
-      const { balance } = await roles.accruedAllowance(allowanceKey);
-      expect(balance).to.equal(30);
+      const [balance] = await roles.read.accruedAllowance([allowanceKey]);
+      assert.equal(balance, 30n);
     });
   });
 
@@ -244,7 +261,10 @@ describe("Operator - ArraySome", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -252,13 +272,16 @@ describe("Operator - ArraySome", () => {
         }),
       );
 
-      await expect(invoke([1, 2, 3]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1, 2, 3]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NoArrayElementPasses,
-          1, // ArraySome node at BFS index 1
+          1n, // ArraySome node at BFS index 1
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -277,7 +300,10 @@ describe("Operator - ArraySome", () => {
                 {
                   paramType: Encoding.Static,
                   operator: Operator.EqualTo,
-                  compValue: abiCoder.encode(["uint256"], [42]),
+                  compValue: encodeAbiParameters(
+                    parseAbiParameters("uint256"),
+                    [42n],
+                  ),
                 },
               ],
             },
@@ -285,175 +311,16 @@ describe("Operator - ArraySome", () => {
         }),
       );
 
-      await expect(invoke([1, 2, 3]))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke([1, 2, 3]),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.NoArrayElementPasses,
           anyValue,
-          36, // payloadLocation: array data starts at byte 36
-        );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.AbiEncoded,
-        Encoding.Dynamic,
-        Encoding.EtherValue,
-        Encoding.None,
-        Encoding.Static,
-        Encoding.Tuple,
-      ]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Array,
-            operator: Operator.ArraySome,
-            compValue: "0x01",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
-
-    describe("children", () => {
-      it("reverts UnsuitableChildCount when ArraySome has zero children", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-      });
-
-      it("reverts UnsuitableChildCount when ArraySome has more than one child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        // ArraySome requires exactly 1 structural child
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-
-        // ArraySome requires exactly 1 structural child
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-      });
-
-      it("reverts UnsuitableChildCount when ArraySome has non-structural child", async () => {
-        const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-        const allowanceKey = hexlify(randomBytes(32));
-
-        // Valid: ArraySome with one structural child - should succeed
-        await allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.Array,
-            operator: Operator.ArraySome,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]);
-
-        // Invalid: Adding a non-structural child should fail
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.Array,
-              operator: Operator.ArraySome,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.Static,
-              operator: Operator.Pass,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.CallWithinAllowance,
-              compValue: allowanceKey,
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableChildCount");
-      });
+          36n, // calldataOffset: array data starts at byte 36
+        ],
+      );
     });
   });
 });

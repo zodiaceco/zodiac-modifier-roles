@@ -1,3 +1,5 @@
+import { describe, it } from "node:test"
+
 describe("EIP712Encoder", () => {
   describe("Edge Cases", () => {
     describe("validation", () => {

@@ -8,18 +8,6 @@ yarn test      # Run tests
 yarn coverage  # Run coverage
 ```
 
-## Claude Agent
-
-Run Claude Code in a sandboxed Docker container with its own git worktree:
-
-```bash
-yarn agent:launch <id>   # Create worktree + start agent
-yarn agent:attach <id>   # Shell into running container
-yarn agent:stop <id>     # Stop container + remove worktree
-```
-
-Requires Docker. The agent runs with `--dangerously-skip-permissions` in an isolated environment.
-
 ## Concepts
 
 ### PermissionChecker

@@ -57,7 +57,7 @@ export const canReorderOr = (children: readonly Condition[]) =>
 
 /**
  * The node reads a parameter: Matches children that are not structural do
- * not consume a parameter position. Same rule as the contract's TypeTree:
+ * not consume a parameter position. Same rule as the contract's Integrity:
  * And/Or are structural if any child is, other nodes unless their encoding
  * is None or EtherValue.
  */

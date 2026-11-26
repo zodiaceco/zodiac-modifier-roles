@@ -6,6 +6,7 @@
   "scripts": {
     "build": "echo noop",
     "check": "prettier \"test/**/*.ts\" --list-different",
+    "check:types": "tsc --noEmit",
     "fix": "prettier \"test/**/*.ts\" --write",
     "test": "hardhat test",
     "pre-commit": "yarn fix"
@@ -13,22 +14,16 @@
   "devDependencies": {
     "@gnosis-guild/zodiac-core": "4.3.1",
     "@gnosis-guild/zodiac-core-modifier-roles": "workspace:*",
-    "@nomicfoundation/hardhat-ethers": "^4.0.0",
-    "@nomicfoundation/hardhat-ethers-chai-matchers": "^3.0.0",
-    "@nomicfoundation/hardhat-mocha": "^4.0.1",
     "@nomicfoundation/hardhat-network-helpers": "^3.0.0",
-    "@nomicfoundation/hardhat-typechain": "^3.0.0",
-    "@safe-global/safe-contracts": "^1.4.1",
-    "@types/mocha": "10.0.10",
+    "@nomicfoundation/hardhat-node-test-runner": "^3.0.0",
+    "@nomicfoundation/hardhat-viem": "^3.0.0",
+    "@nomicfoundation/hardhat-viem-assertions": "^3.0.0",
     "@types/node": "^24.19.2",
     "abitype": "^1.0.8",
-    "chai": "^6.3.0",
-    "ethers": "6.16.0",
     "hardhat": "^3.22.0",
-    "mocha": "^12.0.3",
     "prettier": "^3.7.4",
     "typescript": "7.0.2",
-    "viem": "^2.46.3",
+    "viem": "^2.47.6",
     "zodiac-roles-sdk": "workspace:*"
   },
   "installConfig": {

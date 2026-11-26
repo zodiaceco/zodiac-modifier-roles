@@ -1,7 +1,7 @@
-import { expect } from "chai";
-import { anyValue } from "@nomicfoundation/hardhat-ethers-chai-matchers/withArgs";
-
+import { after, describe, it } from "node:test";
+import { anyValue } from "@nomicfoundation/hardhat-viem-assertions/predicates";
 import { network } from "hardhat";
+import type { Hex } from "viem";
 
 import { createSetup } from "../setup.js";
 import {
@@ -10,11 +10,11 @@ import {
   ExecutionOptions,
   ConditionViolationStatus,
   flattenCondition,
+  type ConditionFlat,
 } from "../utils.js";
-import type { ConditionFlatStruct } from "../../typechain-types/contracts/Roles.js";
 
 const connection = await network.create();
-const { ethers, networkHelpers } = connection;
+const { viem, networkHelpers } = connection;
 const { loadFixture } = networkHelpers;
 const { setupTestContract } = createSetup(connection);
 
@@ -28,22 +28,29 @@ describe("Operator - Empty", () => {
       await setupTestContract();
 
     const allowTarget = async (
-      conditions: ConditionFlatStruct[],
+      conditions: ConditionFlat[],
       options = ExecutionOptions.None,
-    ) => roles.allowTarget(roleKey, testContractAddress, conditions, options);
+    ) =>
+      roles.write.allowTarget([
+        roleKey,
+        testContractAddress,
+        conditions,
+        options,
+      ]);
 
     const invoke = (
-      data: string,
+      data: Hex,
       options?: { value?: bigint | number; operation?: number },
     ) =>
-      roles
-        .connect(member)
-        .execTransactionFromModule(
+      roles.write.execTransactionFromModule(
+        [
           testContractAddress,
-          options?.value ?? 0,
+          BigInt(options?.value ?? 0),
           data,
           options?.operation ?? 0,
-        );
+        ],
+        { account: member.account },
+      );
 
     return { roles, allowTarget, invoke };
   }
@@ -60,7 +67,7 @@ describe("Operator - Empty", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke("0x")).to.not.be.revert(ethers);
+      await invoke("0x");
     });
 
     it("fails when calldata is not empty", async () => {
@@ -74,13 +81,16 @@ describe("Operator - Empty", () => {
         ExecutionOptions.Both,
       );
 
-      await expect(invoke("0xdeadbeef"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xdeadbeef"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CalldataNotEmpty,
-          0, // Empty node
+          0n, // Empty node
           anyValue,
-        );
+        ],
+      );
     });
   });
 
@@ -95,13 +105,16 @@ describe("Operator - Empty", () => {
         }),
       );
 
-      await expect(invoke("0xdeadbeef"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xdeadbeef"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CalldataNotEmpty,
-          0, // Empty node at BFS index 0
+          0n, // Empty node at BFS index 0
           anyValue,
-        );
+        ],
+      );
     });
 
     it("reports the calldata range of the violation", async () => {
@@ -114,93 +127,16 @@ describe("Operator - Empty", () => {
         }),
       );
 
-      await expect(invoke("0xdeadbeef"))
-        .to.be.revertedWithCustomError(roles, "ConditionViolation")
-        .withArgs(
+      await viem.assertions.revertWithCustomErrorWithArgs(
+        invoke("0xdeadbeef"),
+        roles,
+        "ConditionViolation",
+        [
           ConditionViolationStatus.CalldataNotEmpty,
           anyValue,
-          0, // payloadLocation: Empty checks entire calldata
-        );
-    });
-  });
-
-  describe("integrity", () => {
-    it("reverts UnsuitableParameterType for invalid encodings", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      for (const encoding of [
-        Encoding.Static,
-        Encoding.Dynamic,
-        Encoding.Tuple,
-        Encoding.Array,
-        Encoding.AbiEncoded,
-        Encoding.EtherValue,
-      ]) {
-        await expect(
-          allowTarget([
-            {
-              parent: 0,
-              paramType: Encoding.None,
-              operator: Operator.Or,
-              compValue: "0x",
-            },
-            {
-              parent: 0,
-              paramType: encoding,
-              operator: Operator.Empty,
-              compValue: "0x",
-            },
-          ]),
-        ).to.be.revertedWithCustomError(roles, "UnsuitableParameterType");
-      }
-    });
-
-    it("reverts UnsuitableCompValue when compValue is not empty", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.Or,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.Empty,
-            compValue: "0x01",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "UnsuitableCompValue");
-    });
-
-    it("reverts LeafNodeCannotHaveChildren when Empty has children", async () => {
-      const { roles, allowTarget } = await loadFixture(setupTestContract);
-
-      await expect(
-        allowTarget([
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.Or,
-            compValue: "0x",
-          },
-          {
-            parent: 0,
-            paramType: Encoding.None,
-            operator: Operator.Empty,
-            compValue: "0x",
-          },
-          {
-            parent: 1,
-            paramType: Encoding.Static,
-            operator: Operator.Pass,
-            compValue: "0x",
-          },
-        ]),
-      ).to.be.revertedWithCustomError(roles, "LeafNodeCannotHaveChildren");
+          0n, // calldataOffset: Empty checks entire calldata
+        ],
+      );
     });
   });
 });
