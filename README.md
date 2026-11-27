@@ -59,9 +59,13 @@ This monorepo uses [yarn workspaces](https://yarnpkg.com/features/workspaces) an
 
 - **evm**: the Roles v3 smart contracts, with tests and the formal verification (`packages/evm/formal`)
 - **sdk**: a TypeScript SDK for managing roles, `zodiac-roles-sdk` (the v3 version is unreleased; the published 4.x releases come from [zodiac-modifier-roles-v2](https://github.com/zodiaceco/zodiac-modifier-roles-v2))
-- **app**: a webapp for viewing roles, https://roles.gnosisguild.org (uses the published `zodiac-roles-sdk` 4.x)
-- **docs**: the documentation page, https://docs.roles.gnosisguild.org
 - **integration-tests**: tests of the contracts together with the SDK, currently for message signing (`personal_sign`, EIP-712)
+
+### Docs
+
+- [Roles v3 preview](https://docs.zodiac.eco/developers/roles/v3) in the Zodiac docs
+- [Condition tree integrity](packages/evm/specs/integrity.md): the rules a condition tree must follow to be stored
+- [SDK architecture](packages/sdk/ARCHITECTURE.md) and [condition size and gas](packages/sdk/CONDITION_GAS.md)
 
 ### Audits
 

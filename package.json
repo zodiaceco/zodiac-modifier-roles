@@ -11,8 +11,6 @@
     "build": "turbo build",
     "build:evm": "turbo build --filter=@gnosis-guild/zodiac-core-modifier-roles",
     "build:sdk": "turbo build --filter=zodiac-roles-sdk",
-    "build:app": "turbo build --filter=zodiac-roles-app",
-    "build:docs": "turbo build --filter=zodiac-roles-docs",
     "coverage": "yarn workspace @gnosis-guild/zodiac-core-modifier-roles run coverage",
     "dev": "turbo run dev"
   },

@@ -1,11 +1,7 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalPassThroughEnv": [
-    "HARDHAT_DISABLE_TELEMETRY",
-    "KV_URL",
-    "KV_REST_API_URL",
-    "KV_REST_API_TOKEN",
-    "KV_REST_API_READ_ONLY_TOKEN"
+    "HARDHAT_DISABLE_TELEMETRY"
   ],
   "tasks": {
     "test": { "cache": false, "dependsOn": ["build"] },

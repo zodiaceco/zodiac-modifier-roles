@@ -1,7 +1,0 @@
-.divider {
-  width: 2px;
-  height: 42px;
-  margin: 0 8px;
-  background-color: var(--border-color);
-  transform: rotate(20deg);
-}
