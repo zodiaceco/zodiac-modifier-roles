@@ -18,7 +18,6 @@ jobs:
           key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock', '.yarnrc.yml') }}
       - run: yarn
 
-      - run: yarn workspace zodiac-roles-app prettier:check
       - run: yarn test
       - run: yarn coverage
       - name: Coveralls

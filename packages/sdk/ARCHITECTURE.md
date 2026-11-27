@@ -16,11 +16,11 @@ This layer provides the core types and structural operations on role configurati
     {
       selector: "0x84e9bd7e",
       condition: {
-        paramType: AbiType.AbiEncoded,
+        paramType: Encoding.AbiEncoded,
         operator: Operator.Matches,
         children: [
           {
-            paramType: AbiType.Static,
+            paramType: Encoding.Static,
             operator: Operator.EqualTo,
             compValue: defaultAbiCoder.encode(["address"], ["0x4F2083f5fBede34C2714aFfb3105539775f7FE64"]),
           }
@@ -36,14 +36,14 @@ This layer provides the core types and structural operations on role configurati
 - integrity checks, minimizations, and normalizations for conditions
 - subtracting and comparing target configurations
 
-Reading current role configurations and applying configuration changes are handled by the [Zodiac SDK](https://github.com/gnosisguild/zodiac-sdk).
+Reading current role configurations and applying configuration changes are handled by the [Zodiac SDK](https://github.com/zodiaceco/zodiac-sdk).
 
 ## Layer 2: Permissions
 
 For authoring purposes it is useful to capture permissions in a slightly different structure:
 Rather than the list of targets with nested functions as exposed by the subgraph, permissions are defined by a flat array of entries that grant call right to an address or a specific function at an address.
 
-This layer also provides [condition helper functions](/sdk/conditions#condition-functions) for a more convenient way of expressing conditions.
+This layer also provides condition helper functions (`c`, in `src/main/target/authoring`) for a more convenient way of expressing conditions.
 
 **Example:**
 
@@ -60,17 +60,17 @@ This layer also provides [condition helper functions](/sdk/conditions#condition-
 - support for condition authoring
 - joining permissions addressing the same function
 
-## <a name="kits"></a>Layer 3: Kits
+## Layer 3: Kits
 
 On the highest layer of abstraction, users can generate _kits_ for contracts they want to define permission for.
 A kit is a typed SDK tailored to a specific set of contracts that allows defining permissions on these in a convenient syntax and fully supported by the type system.
 
-Users just provide the addresses of contracts. The [Zodiac SDK](https://github.com/gnosisguild/zodiac-sdk) generates the kit: `zodiac pull` downloads the ABIs of the contracts listed in `zodiac.config.ts` and generates type-safe functions for granting permissions.
+Users just provide the addresses of contracts. The [Zodiac SDK](https://github.com/zodiaceco/zodiac-sdk) generates the kit: `zodiac pull` downloads the ABIs of the contracts listed in `zodiac.config.ts` and generates type-safe functions for granting permissions.
 
 **Example:**
 
 ```typescript
-allow.curve.stETH_ETH_gauge["claim_rewards(address)"](c.avatar);
+allow.curve.stETH_ETH_gauge["claim_rewards(address)"](c.avatar)
 ```
 
 **Functions implemented on this layer:**

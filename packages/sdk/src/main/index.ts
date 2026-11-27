@@ -93,7 +93,6 @@ export {
   MAX_ALLOWANCE_DECIMALS,
   type AllowanceConversion,
 } from "./target/authoring/c/allowance"
-export { postRole } from "./postRole"
 export { fetchLicense, License, LicenseError } from "./licensing"
 
 /*

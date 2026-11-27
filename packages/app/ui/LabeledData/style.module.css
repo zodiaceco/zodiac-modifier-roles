@@ -1,9 +1,0 @@
-.container label {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
-  background-color: var(--bg-color);
-  width: fit-content;
-  padding: 0px 5px;
-  margin-left: -2px;
-  display: block;
-}
